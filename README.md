@@ -6,6 +6,25 @@ High-performance duplicate file, image, and video finder engineered and optimize
 
 ---
 
+## ⚡ Why DupeClean? (DupeClean vs. Traditional Tools)
+
+Most popular deduplicators (Czkawka, dupeGuru, Duplicate Cleaner, etc.) were built for a previous computing era: they run all image hashing, vector calculations, and video decoding on the **CPU**. 
+
+When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools spike CPU usage to 100%, trigger thermal throttling, spin fans at maximum speed, and take **hours or days** — while your multi-thousand-dollar GPU sits completely idle.
+
+**DupeClean changes the paradigm by moving the entire workload into dedicated NVIDIA silicon:**
+
+| Feature | 🐢 Traditional Tools (Czkawka, dupeGuru, etc.) | ⚡ DupeClean (GPU-Accelerated) |
+| :--- | :--- | :--- |
+| **Compute Engine** | CPU-bound (Software loop, high thermal load) | **GPU Tensor Cores & CUDA** (Batches executed in VRAM) |
+| **Image Hashing Speed** | ~20–50 images/second (CPU bottlenecked) | **600+ images/second** (Parallel decoding + 2D DCT on GPU) |
+| **Video Frame Extraction** | Software CPU decoding (Slow, heavy lag) | **Hardware NVDEC** via dedicated NVIDIA silicon decoders |
+| **Master Backup Safety** | Risky (Heuristic rules based only on date or path) | **Architectural Reference Protection (`Ref`)** (Master files 🔒 locked) |
+| **UI Design Philosophy** | Crowded interfaces with dozens of technical options | **KISS Principle**: Clean dark mode, zero fluff, instant feedback |
+| **Caching Pipeline** | In-memory or fragile cache | **SQLite WAL Engine**: Resumable, crash-safe, instant rescans |
+
+---
+
 ## 🚀 Engineering Highlights
 
 * **Zero CPU Bottlenecks:** Image processing, discrete cosine transforms (2D DCT), and vector similarity comparisons execute directly in GPU **VRAM** and **Tensor Cores** via PyTorch CUDA.
