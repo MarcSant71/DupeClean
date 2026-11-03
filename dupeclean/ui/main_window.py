@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
         self.ui_timer.timeout.connect(self._update_telemetry_tick)
 
         self.setWindowIcon(self._create_app_icon())
-        self.setWindowTitle(f"DupeClean - Deduplicação de Arquivos por GPU ({gpu_info.get('name', 'NVIDIA RTX')})")
+        self.setWindowTitle("DupeClean - Deduplicação de Arquivos por GPU")
         self.resize(1280, 820)
         self._init_ui()
 
