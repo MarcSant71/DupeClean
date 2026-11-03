@@ -45,6 +45,28 @@ When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools 
 
 ---
 
+## 📦 Package Size & Architecture Transparency
+
+Users often ask: **"Traditional tools like Czkawka are only ~15 MB — why is DupeClean's portable download ~1.7 GB (extracting to ~4.7 GB)?"**
+
+Traditional deduplicators are lightweight single-binary executables because they run basic CPU-only pixel arithmetic using standard OS routines.
+
+**DupeClean is a full-stack, GPU-accelerated AI vision workstation.** To deliver maximum throughput with **zero setup hassle**, the standalone package embeds everything out of the box:
+
+1. **Complete NVIDIA CUDA 12 Runtimes (~3.5 GB uncompressed):**  
+   Bundles compiled C++ hardware libraries (`torch_cuda.dll`, `cublas`, `cudnn`, `cusolver`, `cufft`) with pre-compiled kernel microcode engineered for NVIDIA RTX Ampere, Ada Lovelace, and Blackwell Tensor Cores.
+2. **Deep Learning Vision Engine (PyTorch & Torchvision):**  
+   Pre-trained MobileNetV3 neural network architectures and tensor processing pipelines that extract semantic perceptual embeddings directly in GPU VRAM.
+3. **Hardware NVDEC Video Pipeline (FFmpeg GPU Binaries):**  
+   Bundles custom `ffmpeg` and `ffprobe` binaries built with NVIDIA NVDEC/CUDA hardware acceleration for direct silicon video frame extraction.
+4. **Self-Contained Python & PySide6 Environment:**  
+   You do **not** need Python installed, no pip packages, no MSVC runtimes, and no 3+ GB NVIDIA CUDA Toolkit. Everything runs out of the box.
+
+> [!NOTE]
+> Thanks to **7-Zip LZMA2 Solid compression**, repeated patterns across all CUDA binaries compress down to **~1.7 GB**. Once extracted, DupeClean runs 100% locally with zero internet access, complete data privacy, and raw GPU performance.
+
+---
+
 ## 💻 Hardware & Software Requirements
 
 ### Hardware
