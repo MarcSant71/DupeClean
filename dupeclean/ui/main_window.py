@@ -306,20 +306,29 @@ class MainWindow(QMainWindow):
         splitter.setSizes([520, 240])
         right_layout.addWidget(splitter)
 
-        # 2.3 Status Bar, Telemetry and Progress (Elastic & Responsive)
-        status_bar_layout = QHBoxLayout()
-        status_bar_layout.setSpacing(12)
+        # 2.3 Status Bar, Telemetry and Progress (2 Linhas Estáveis - Espaçamento Fixo)
+        status_container = QVBoxLayout()
+        status_container.setSpacing(6)
+        status_container.setContentsMargins(0, 4, 0, 0)
 
-        self.lbl_status = QLabel("Ready to scan. Add folders below.")
-        self.lbl_status.setStyleSheet("color: #a1a1aa;")
-        self.lbl_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-
+        # Linha 1: Barra de Progresso de ponta a ponta na janela (Limites 100% fixos)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.progress_bar.setMinimumWidth(120)
+        sp_prog = self.progress_bar.sizePolicy()
+        sp_prog.setRetainSizeWhenHidden(True)
+        self.progress_bar.setSizePolicy(sp_prog)
         self.progress_bar.setVisible(False)
+
+        # Linha 2: Informações de status e telemetria/cronômetro
+        status_info_layout = QHBoxLayout()
+        status_info_layout.setSpacing(12)
+
+        self.lbl_status = QLabel("Ready to scan. Add folders below.")
+        self.lbl_status.setStyleSheet("color: #a1a1aa;")
+        self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.lbl_status.setMinimumWidth(0)
 
         # Telemetry Badge (Elapsed Time / ETA / Iteration Rate)
         self.lbl_timer = QLabel("⏱️ 00:00")
@@ -328,13 +337,18 @@ class MainWindow(QMainWindow):
             "background-color: #202024; border: 1px solid #2e2e33; border-radius: 4px; padding: 2px 8px;"
         )
         self.lbl_timer.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        sp_timer = self.lbl_timer.sizePolicy()
+        sp_timer.setRetainSizeWhenHidden(True)
+        self.lbl_timer.setSizePolicy(sp_timer)
         self.lbl_timer.setVisible(False)
 
-        status_bar_layout.addWidget(self.lbl_status, stretch=0)
-        status_bar_layout.addWidget(self.progress_bar, stretch=1)
-        status_bar_layout.addWidget(self.lbl_timer, stretch=0)
+        status_info_layout.addWidget(self.lbl_status, stretch=1)
+        status_info_layout.addWidget(self.lbl_timer, stretch=0)
 
-        right_layout.addLayout(status_bar_layout)
+        status_container.addWidget(self.progress_bar)
+        status_container.addLayout(status_info_layout)
+
+        right_layout.addLayout(status_container)
 
         main_h_layout.addWidget(right_panel)
 

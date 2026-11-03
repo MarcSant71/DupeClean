@@ -1,5 +1,10 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.0.5
+- **Zero-Layout-Shift Persistent Status Bar:** Engineered permanent two-row telemetry footer with retained geometry (`setRetainSizeWhenHidden(True)`). Eliminates horizontal dancing and vertical layout shifts when starting or completing scans. The full-width progress bar dynamically scales to window dimensions and full-screen maximization without shifting content or tables.
+- **Instant Application Startup (<100ms):** PyTorch and CUDA 12 runtimes are lazily imported and verified exclusively within the background `HardwareInitWorker` thread, cutting cold-start launch latency from 12 seconds to under 100 milliseconds and instantly displaying the splash screen.
+- **Organic Splash Animation:** Re-architected splash screen progress indicator with dynamic asymptotic acceleration, smoothly advancing while the GPU Gatekeeper validates Ampere/Ada Lovelace/Blackwell hardware.
+
 ### What's New in v1.0.4
 - **Block GEMM Memory Architecture (~40 GB to ~500 MB):** Replaced dense $N \times N$ matrix similarity calculation with chunked Block GEMM (2048-row blocks) on GPU. Reduced memory footprint from ~40 GB to ~500 MB for 140k+ files, eliminating OS memory swap freezes and checking `stop_check` every 5ms.
 - **Deterministic Progress & Instant Estimations:** SQLite-backed file count estimation (`estimate_file_count`) querying recent crawl history and persistent metadata in <1ms without redundant disk I/O, replacing bouncing marquee animations with smooth 0–100% progress bars.
@@ -25,7 +30,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 - **KISS Dark UI:** Clean PySide6 interface with non-blocking real-time telemetry.
 
 ### Quick Start (Portable)
-1. Download **`DupeClean-v1.0.4-windows-cuda.7z`** below.
+1. Download **`DupeClean-v1.0.5-windows-cuda.7z`** below.
 2. Extract with [7-Zip](https://www.7-zip.org/) or WinRAR to any folder.
 3. Launch **`DupeClean.exe`**.
 
