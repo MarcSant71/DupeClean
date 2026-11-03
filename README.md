@@ -24,9 +24,9 @@ When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools 
 | Feature | 🐢 Traditional Tools (Czkawka, dupeGuru, etc.) | ⚡ DupeClean (GPU-Accelerated) |
 | :--- | :--- | :--- |
 | **Compute Engine** | CPU-bound (Software loop, high thermal load) | **GPU Tensor Cores & CUDA** (Batches executed in VRAM) |
-| **Image Hashing Speed** | ~20–50 images/second (CPU bottlenecked) | **600+ images/second** (Parallel decoding + 2D DCT on GPU) |
+| **Similarity Intelligence** | Basic low-res pixel hashes (Gradient/Blockhash) | **Deep Neural Embeddings (MobileNetV3)** via PyTorch |
+| **Throughput & Speed** | ~20–50 images/second (CPU bottlenecked) | **600+ images/second** (Parallel decoding + GPU compute) |
 | **Video Frame Extraction** | Software CPU decoding (Slow, heavy lag) | **Hardware NVDEC** via dedicated NVIDIA silicon decoders |
-| **Master Backup Safety** | Risky (Heuristic rules based only on date or path) | **Architectural Reference Protection (`Ref`)** (Master files 🔒 locked) |
 | **UI Design Philosophy** | Crowded interfaces with dozens of technical options | **KISS Principle**: Clean dark mode, zero fluff, instant feedback |
 | **Caching Pipeline** | In-memory or fragile cache | **SQLite WAL Engine**: Resumable, crash-safe, instant rescans |
 
@@ -34,9 +34,9 @@ When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools 
 
 ## 🚀 Engineering Highlights
 
-* **Zero CPU Bottlenecks:** Image processing, discrete cosine transforms (2D DCT), and vector similarity comparisons execute directly in GPU **VRAM** and **Tensor Cores** via PyTorch CUDA.
+* **Zero CPU Bottlenecks:** Image processing, neural feature extraction, and vector similarity comparisons execute directly in GPU **VRAM** and **Tensor Cores** via PyTorch CUDA.
 * **Parallel Decoding & NVDEC:** High-throughput multi-threaded image decoding feeds the GPU, while temporal video frame extraction utilizes dedicated NVIDIA silicon decoders via FFmpeg Hardware Acceleration (`-hwaccel cuda`).
-* **Strict Reference Folder Protection (`Ref`):** Mark any master/backup folder as a **Reference**. DupeClean matches duplicate files against it, but **never suggests or selects reference files for deletion**.
+* **Reference Folder Protection (`Ref`):** Designate any master/backup folder as a **Reference**. DupeClean matches duplicate files against it, while ensuring reference files are strictly locked and never marked for deletion (following industry best practices established by tools like Czkawka).
 * **Krokiet-Inspired Ergonomics:**
   * Clean, native Dark Theme (KISS principle).
   * Drag & Drop folder support from Windows Explorer.
