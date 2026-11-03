@@ -112,7 +112,7 @@ class FolderPanel(QWidget):
         # -------------------------------------------------------------
         # 1. Folders to Scan (with Ref button and Drag & Drop)
         # -------------------------------------------------------------
-        inc_group = QGroupBox("Folders to Scan (Drag & drop folders here)")
+        inc_group = QGroupBox("Folders to Scan (Drag && Drop folders here)")
         inc_layout = QVBoxLayout(inc_group)
 
         self.table_included = DropTableWidget(0, 2)
@@ -143,7 +143,7 @@ class FolderPanel(QWidget):
         # -------------------------------------------------------------
         # 2. Excluded Folders (with Drag & Drop support)
         # -------------------------------------------------------------
-        exc_group = QGroupBox("Excluded Folders (Drag & drop folders here)")
+        exc_group = QGroupBox("Excluded Folders (Drag && Drop folders here)")
         exc_layout = QVBoxLayout(exc_group)
 
         self.list_excluded = DeletableListWidget()
