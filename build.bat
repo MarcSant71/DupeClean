@@ -1,6 +1,7 @@
 @echo off
 title DupeClean - Build Standalone Portable Release
 cd /d "%~dp0"
+if "%1"=="--noif not defined NO_PAUSE pause" set "NO_PAUSE=1"
 
 echo =========================================================
 echo       DupeClean - Standalone Portable Release Builder
@@ -10,7 +11,7 @@ echo.
 if not exist ".venv\Scripts\python.exe" (
     echo [ERROR] Virtual environment .venv not found.
     echo Please set up your environment before building.
-    pause
+    if not defined NO_PAUSE pause
     exit /b 1
 )
 
@@ -33,13 +34,13 @@ echo [3/3] Freezing standalone distribution with PyInstaller...
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm dupeclean.spec
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] PyInstaller compilation failed!
-    pause
+    if not defined NO_PAUSE pause
     exit /b 1
 )
 
 if not exist "dist\DupeClean\DupeClean.exe" (
     echo [ERROR] DupeClean.exe was not found in dist\DupeClean.
-    pause
+    if not defined NO_PAUSE pause
     exit /b 1
 )
 
@@ -65,13 +66,13 @@ if defined SEVEN_ZIP (
     echo [WARNING] 7-Zip not found in Program Files.
     echo Standalone folder created at: dist\DupeClean
     echo Install 7-Zip from https://www.7-zip.org/ to generate compressed release archives.
-    pause
+    if not defined NO_PAUSE pause
     exit /b 0
 )
 
 if not exist "%OUTPUT_7Z%" (
     echo [ERROR] Failed to create portable .7z archive.
-    pause
+    if not defined NO_PAUSE pause
     exit /b 1
 )
 
@@ -81,4 +82,4 @@ echo [SUCCESS] Portable package created successfully!
 echo Archive: %CD%\%OUTPUT_7Z%
 echo =========================================================
 echo.
-pause
+if not defined NO_PAUSE pause
