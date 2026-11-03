@@ -116,17 +116,18 @@ class SplashScreen(QWidget):
 
     def start_animation(self):
         """Inicia animação fluida e contínua da barra de progresso durante a carga."""
-        self._current_val = 5
-        self.progress.setValue(self._current_val)
+        self._current_float_val = 5.0
+        self.progress.setValue(5)
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._step_animation)
-        self._anim_timer.start(25)  # 40 fps suaves
+        self._anim_timer.start(40)  # 25 fps suaves
 
     def _step_animation(self):
-        if self._current_val < 92:
-            step = 3 if self._current_val < 45 else (2 if self._current_val < 75 else 1)
-            self._current_val += step
-            self.progress.setValue(self._current_val)
+        if self._current_float_val < 94.0:
+            remaining = 95.0 - self._current_float_val
+            step = max(0.12, remaining * 0.025)
+            self._current_float_val += step
+            self.progress.setValue(int(self._current_float_val))
 
     def set_progress(self, value: int, message: Optional[str] = None):
         """Define o valor exato da barra de progresso e repinta imediatamente."""

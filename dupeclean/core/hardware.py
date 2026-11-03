@@ -7,30 +7,27 @@ em tempo de execução (in-process) o PyTorch diretamente ao dispositivo CUDA 0.
 
 import os
 from typing import Tuple, Dict, Any
-import torch
 
 
 def enforce_high_performance_gpu():
     """
     Configura em tempo de execução (apenas no escopo do processo atual, sem tocar no registro do Windows)
-    as variáveis e dispositivos para que todo o processamento de tensores e IA ocorra na NVIDIA RTX.
+    as variáveis de ambiente para que todo o processamento de tensores e IA ocorra na NVIDIA RTX (Device 0).
+    Execução ultrarrápida (<1ms) para que a Splash Screen apareça instantaneamente ao clicar no aplicativo.
     """
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-
-    if torch.cuda.is_available():
-        try:
-            torch.cuda.set_device(0)
-        except Exception:
-            pass
 
 
 def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     """
     Verifica se o sistema possui uma GPU NVIDIA compatível.
+    Executado em segundo plano pelo HardwareInitWorker enquanto a Splash Screen anima.
     Retorna (compativel, mensagem_erro, info_hardware).
     """
     enforce_high_performance_gpu()
+
+    import torch
 
     if not torch.cuda.is_available():
         return (

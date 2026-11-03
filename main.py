@@ -63,6 +63,7 @@ def main():
     splash = SplashScreen()
     splash.show()
     splash.start_animation()
+    app.processEvents()
 
     # 2. Hardware Gatekeeper: Validação em background sem congelar o loop de eventos
     worker = HardwareInitWorker()
