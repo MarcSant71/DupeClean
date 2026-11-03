@@ -6,7 +6,7 @@ Displays immediately (< 50ms) while PyTorch and GPU run hardware initialization.
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar,
+    QWidget, QVBoxLayout, QLabel, QProgressBar,
     QGraphicsDropShadowEffect, QApplication
 )
 from PySide6.QtGui import QColor, QFont
@@ -23,12 +23,12 @@ class SplashScreen(QWidget):
             Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(460, 215)
+        self.setFixedSize(490, 250)
         self._init_ui()
 
     def _init_ui(self):
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(15, 15, 15, 15)
+        root_layout.setContentsMargins(20, 20, 20, 20)
 
         # Container Principal
         container = QWidget()
@@ -37,69 +37,61 @@ class SplashScreen(QWidget):
             QWidget#splashContainer {
                 background-color: #18181b;
                 border: 1px solid #27272a;
-                border-radius: 12px;
+                border-radius: 16px;
             }
         """)
 
         # Sombra suave
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(30)
+        shadow.setBlurRadius(40)
         shadow.setColor(QColor(0, 0, 0, 180))
-        shadow.setOffset(0, 8)
+        shadow.setOffset(0, 10)
         container.setGraphicsEffect(shadow)
 
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(28, 22, 28, 22)
-        layout.setSpacing(8)
+        # Margens calculadas para simetria exata (35px topo ao título, 35px barra à base)
+        layout.setContentsMargins(34, 14, 34, 28)
+        layout.setSpacing(6)
 
-        # 1. Título e Ícone (Altura fixa de 42px garante que a haste do 'p' nunca seja comprimida pelo layout)
-        title_layout = QHBoxLayout()
-        title_layout.setSpacing(10)
-
-        lbl_icon = QLabel("⚡")
-        lbl_icon.setStyleSheet("font-size: 26px;")
-        lbl_icon.setFixedHeight(42)
-
+        # 1. Título Centralizado (Escalado em 50%: 36px font, altura 56px, background transparente)
         lbl_title = QLabel("DupeClean")
-        lbl_title.setStyleSheet("font-size: 24px; font-weight: 800; color: #38bdf8;")
-        lbl_title.setFixedHeight(42)
+        lbl_title.setStyleSheet("font-size: 36px; font-weight: 800; color: #38bdf8; background: transparent;")
+        lbl_title.setFixedHeight(56)
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl_title)
 
-        title_layout.addWidget(lbl_icon)
-        title_layout.addWidget(lbl_title)
-        title_layout.addStretch()
-        layout.addLayout(title_layout)
-
-        # 2. Subtítulo Conciso
+        # 2. Subtítulo Conciso Centralizado (Escalado em 50%: 18px font, altura 28px)
         lbl_sub = QLabel("GPU-Accelerated Duplicate File Finder")
-        lbl_sub.setStyleSheet("font-size: 12px; color: #a1a1aa; font-weight: 500;")
-        lbl_sub.setFixedHeight(22)
+        lbl_sub.setStyleSheet("font-size: 18px; color: #a1a1aa; font-weight: 500; background: transparent;")
+        lbl_sub.setFixedHeight(28)
+        lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_sub)
 
-        layout.addSpacing(10)
-
-        # 3. Status de Carregamento
+        # 3. Status de Carregamento Centralizado (Escalado em 50%: 18px font, altura 28px)
         self.lbl_status = QLabel("Initializing...")
-        self.lbl_status.setStyleSheet("color: #e4e4e7; font-size: 12px;")
-        self.lbl_status.setFixedHeight(20)
+        self.lbl_status.setStyleSheet("color: #e4e4e7; font-size: 18px; background: transparent;")
+        self.lbl_status.setFixedHeight(28)
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.lbl_status)
 
-        # 4. Barra de Carregamento Ativa (Fluida e Responsiva)
+        # 4. Barra de Carregamento Ativa (Escalada em 50%: altura 9px)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(6)
+        self.progress.setFixedHeight(9)
         self.progress.setStyleSheet("""
             QProgressBar {
                 border: 1px solid #27272a;
-                border-radius: 3px;
+                border-radius: 4px;
                 background-color: #202024;
-                height: 6px;
-                max-height: 6px;
+                height: 9px;
+                min-height: 9px;
+                max-height: 9px;
             }
             QProgressBar::chunk {
                 background-color: #38bdf8;
-                border-radius: 3px;
+                border-radius: 4px;
             }
         """)
         layout.addWidget(self.progress)
