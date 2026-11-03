@@ -163,6 +163,9 @@ QSlider::sub-page:horizontal {
     background: #0284c7;
     border-radius: 3px;
 }
+QSlider::sub-page:horizontal:disabled {
+    background: #27272a;
+}
 QSlider::handle:horizontal {
     background: #38bdf8;
     border: 1px solid #0284c7;
@@ -170,6 +173,10 @@ QSlider::handle:horizontal {
     margin-top: -5px;
     margin-bottom: -5px;
     border-radius: 8px;
+}
+QSlider::handle:horizontal:disabled {
+    background: #52525b;
+    border: 1px solid #3f3f46;
 }
 
 /* Barra de Progresso */
@@ -204,6 +211,10 @@ QListWidget#sidebarModes {
     font-size: 13px;
     font-weight: 500;
 }
+QListWidget#sidebarModes:disabled {
+    background-color: #18181b;
+    border: 1px solid #222226;
+}
 QListWidget#sidebarModes:focus {
     border: 1px solid #2e2e33;
     outline: none;
@@ -225,6 +236,15 @@ QListWidget#sidebarModes::item:selected {
     color: #38bdf8;
     border: none;
     font-weight: bold;
+}
+QListWidget#sidebarModes::item:disabled {
+    color: #52525b;
+}
+QListWidget#sidebarModes::item:selected:disabled {
+    background-color: #1c1c20;
+    color: #71717a;
+    border: none;
+    font-weight: 500;
 }
 QListWidget#sidebarModes::item:focus {
     outline: none;

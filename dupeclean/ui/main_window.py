@@ -36,7 +36,8 @@ class ModeItemDelegate(QStyledItemDelegate):
         # Se não for o último elemento da lista, desenha a linha divisória sutil
         if index.row() < index.model().rowCount() - 1:
             painter.save()
-            painter.setPen(QPen(QColor("#2e2e33"), 1))
+            divider_color = QColor("#222226") if (option.widget and not option.widget.isEnabled()) else QColor("#2e2e33")
+            painter.setPen(QPen(divider_color, 1))
             y = option.rect.bottom()
             painter.drawLine(option.rect.left() + 6, y, option.rect.right() - 6, y)
             painter.restore()
@@ -182,6 +183,7 @@ class MainWindow(QMainWindow):
         self.container_slider = QFrame()
         self.container_slider.setStyleSheet(
             "QFrame { background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 6px; }"
+            "QFrame:disabled { background-color: #18181b; border: 1px solid #222226; }"
         )
         slider_box_layout = QVBoxLayout(self.container_slider)
         slider_box_layout.setContentsMargins(6, 6, 6, 6)
@@ -189,9 +191,9 @@ class MainWindow(QMainWindow):
 
         slider_header = QHBoxLayout()
         lbl_sim = QLabel("Similarity Threshold:")
-        lbl_sim.setStyleSheet("font-size: 11px; color: #a1a1aa; font-weight: 500;")
+        lbl_sim.setStyleSheet("QLabel { font-size: 11px; color: #a1a1aa; font-weight: 500; } QLabel:disabled { color: #52525b; }")
         self.lbl_sim_val = QLabel("85%")
-        self.lbl_sim_val.setStyleSheet("font-size: 12px; font-weight: bold; color: #38bdf8;")
+        self.lbl_sim_val.setStyleSheet("QLabel { font-size: 12px; font-weight: bold; color: #38bdf8; } QLabel:disabled { color: #52525b; }")
         slider_header.addWidget(lbl_sim)
         slider_header.addStretch()
         slider_header.addWidget(self.lbl_sim_val)
@@ -213,6 +215,7 @@ class MainWindow(QMainWindow):
         self.btn_clear_cache.setStyleSheet(
             "QPushButton { background-color: #202024; border: 1px solid #2e2e33; color: #a1a1aa; font-size: 11px; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #27272a; color: #f43f5e; border-color: #f43f5e; }"
+            "QPushButton:disabled { background-color: #18181b; border: 1px solid #27272a; color: #52525b; }"
         )
         self.btn_clear_cache.setToolTip("Displays stats and clears the persistent hash and embedding cache.")
         self.btn_clear_cache.clicked.connect(self._clear_cache_prompt)
@@ -371,7 +374,24 @@ class MainWindow(QMainWindow):
             return f"{h:02d}:{m:02d}:{s:02d}"
         return f"{m:02d}:{s:02d}"
 
+    def _set_scanning_state(self, scanning: bool):
+        """Enables/disables UI controls based on scan execution state (KISS)."""
+        self.btn_scan.setEnabled(not scanning)
+        self.btn_stop.setEnabled(scanning)
+        self.btn_clear_cache.setEnabled(not scanning)
+        self.sidebar_modes.setEnabled(not scanning)
+        self.slider_sim.setEnabled(not scanning)
+        self.folder_panel.setEnabled(not scanning)
+        self.btn_select_menu.setEnabled(not scanning)
+        self.btn_move.setEnabled(not scanning)
+        self.btn_delete_trash.setEnabled(not scanning)
+        self.btn_delete_perm.setEnabled(not scanning)
+        self.btn_save.setEnabled(not scanning)
+
     def _clear_cache_prompt(self):
+        if self.worker and self.worker.isRunning():
+            return
+
         cache = CacheManager()
         stats = cache.get_stats()
         total_items = stats["exact_count"] + stats["images_count"] + stats["videos_count"]
@@ -393,9 +413,12 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.No
         )
         if confirm == QMessageBox.StandardButton.Yes:
-            cache.clear()
-            self.lbl_status.setText("Persistent cache cleared successfully.")
-            QMessageBox.information(self, "Cache Cleared", "All cached signatures have been removed.")
+            try:
+                cache.clear()
+                self.lbl_status.setText("Persistent cache cleared successfully.")
+                QMessageBox.information(self, "Cache Cleared", "All cached signatures have been removed.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error Clearing Cache", f"Could not clear cache:\n{e}")
 
     def _start_scan(self):
         scan_paths = self.folder_panel.get_scan_paths()
@@ -410,8 +433,7 @@ class MainWindow(QMainWindow):
         excluded_paths = self.folder_panel.get_excluded_paths()
         threshold = self.slider_sim.value() / 100.0
 
-        self.btn_scan.setEnabled(False)
-        self.btn_stop.setEnabled(True)
+        self._set_scanning_state(True)
         self._was_cancelled = False
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate at start
@@ -539,8 +561,7 @@ class MainWindow(QMainWindow):
 
     def _finalize_scan_ui(self):
         self.ui_timer.stop()
-        self.btn_scan.setEnabled(True)
-        self.btn_stop.setEnabled(False)
+        self._set_scanning_state(False)
         self.progress_bar.setVisible(False)
         if getattr(self, "_was_cancelled", False):
             self.lbl_status.setText("Scan cancelled by user.")
