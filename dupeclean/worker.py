@@ -39,18 +39,15 @@ class ScanWorker(QThread):
     def run(self):
         try:
             cache = CacheManager()
-            estimated_total = cache.estimate_file_count(self.scan_paths, self.mode)
 
-            init_msg = f"Indexing folders on disk (~{estimated_total:,} estimated)..." if estimated_total > 0 else "Indexing folders on disk..."
-            self.progress_status.emit(init_msg, 0, estimated_total)
+            self.progress_status.emit("Scanning folders...", 0, 0)
 
-            # 1. Rastreamento com estimativa determinística e telemetria contínua
+            # 1. Rastreamento recursivo de arquivos no disco (Modo Descoberta)
             records = crawl_directories(
                 scan_paths=self.scan_paths,
                 excluded_paths=self.excluded_paths,
                 mode=self.mode,
-                estimated_total=estimated_total,
-                progress_callback=lambda msg, count, tot: self.progress_status.emit(msg, count, tot),
+                progress_callback=lambda msg, count, tot: self.progress_status.emit(msg, count, 0),
                 stop_check=self.isInterruptionRequested
             )
 
@@ -60,9 +57,6 @@ class ScanWorker(QThread):
             if not records:
                 self.scan_finished.emit([])
                 return
-
-            # Persiste contagem real observada para que futuros scans sejam determinísticos desde o início
-            cache.save_folder_counts(self.scan_paths, len(records))
 
             self.progress_status.emit(f"{len(records):,} files found. Starting deduplication...", 0, len(records))
 

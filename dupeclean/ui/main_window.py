@@ -495,8 +495,8 @@ class MainWindow(QMainWindow):
         self.latest_total = total
 
         if total > 0:
-            self.progress_bar.setRange(0, max(total, current))
-            self.progress_bar.setValue(current)
+            self.progress_bar.setRange(0, total)
+            self.progress_bar.setValue(min(current, total))
         else:
             self.progress_bar.setRange(0, 0)
 

@@ -29,14 +29,13 @@ def crawl_directories(
     scan_paths: List[ScanPath],
     excluded_paths: List[Path],
     mode: ScanMode,
-    estimated_total: int = 0,
     progress_callback: Optional[Callable[[str, int, int], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None
 ) -> List[FileRecord]:
     """
     Rastreia todos os diretórios incluídos, marcando a flag 'is_reference'
     e respeitando os caminhos excluídos. Utiliza os.scandir de alto rendimento.
-    Emite telemetria contínua com estimativa determinística e nomes de pastas vivas.
+    Emite telemetria contínua com contagem real e nomes de pastas vivas.
     """
     records: List[FileRecord] = []
     seen_paths: Set[str] = set()
@@ -51,6 +50,12 @@ def crawl_directories(
         nonlocal total_scanned, last_reported_count, last_report_time
         if stop_check and stop_check():
             return
+
+        now = time.time()
+        if progress_callback and (now - last_report_time >= 0.25 or total_scanned - last_reported_count >= 1000):
+            last_reported_count = total_scanned
+            last_report_time = now
+            progress_callback(f"Scanning folders... ({total_scanned:,} files found)", total_scanned, 0)
 
         try:
             with os.scandir(folder_path) as it:
@@ -100,14 +105,10 @@ def crawl_directories(
                             total_scanned += 1
 
                             now = time.time()
-                            if progress_callback and (total_scanned - last_reported_count >= 500 or (now - last_report_time >= 0.15 and total_scanned > last_reported_count)):
+                            if progress_callback and (now - last_report_time >= 0.25 and total_scanned - last_reported_count >= 1000):
                                 last_reported_count = total_scanned
                                 last_report_time = now
-                                f_name = folder_path.name or str(folder_path)
-                                if estimated_total > 0:
-                                    progress_callback(f"Indexing: {f_name} ({total_scanned:,}/{estimated_total:,})...", total_scanned, estimated_total)
-                                else:
-                                    progress_callback(f"Indexing: {f_name} ({total_scanned:,} files)...", total_scanned, 0)
+                                progress_callback(f"Scanning folders... ({total_scanned:,} files found)", total_scanned, 0)
 
                     except (OSError, PermissionError):
                         continue
@@ -134,7 +135,6 @@ def crawl_directories(
         return records
 
     if progress_callback:
-        final_total = max(total_scanned, estimated_total) if estimated_total > 0 else total_scanned
-        progress_callback(f"Indexing completed: {total_scanned:,} files.", total_scanned, final_total)
+        progress_callback(f"Scanning folders... ({total_scanned:,} files found)", total_scanned, 0)
 
     return records

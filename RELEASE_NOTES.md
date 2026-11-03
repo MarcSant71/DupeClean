@@ -1,5 +1,10 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.0.6
+- **Clean Discovery Indexing Architecture:** Removed fragile crawler estimations that could cause premature 100% progress freezes when scanning folders of varying depths. The filesystem crawler operates in pure discovery mode (`Scanning folders... (X files found)`) with a continuous wave activity indicator.
+- **KISS Visual Conciseness:** Replaced rapidly flickering folder/file labels with a static, stable status message (`Scanning folders... (X files found)`), eliminating visual noise while maintaining live discovery counts and transfer speeds (`files/s`).
+- **Mathematical Multi-Phase Precision:** Once directory discovery finishes and exact file counts are known, the progress bar deterministically transitions to exact 0% to 100% processing for exact hashing, MobileNetV3 visual embeddings, and NVDEC hardware video decoding.
+
 ### What's New in v1.0.5
 - **Zero-Layout-Shift Persistent Status Bar:** Engineered permanent two-row telemetry footer with retained geometry (`setRetainSizeWhenHidden(True)`). Eliminates horizontal dancing and vertical layout shifts when starting or completing scans. The full-width progress bar dynamically scales to window dimensions and full-screen maximization without shifting content or tables.
 - **Instant Application Startup (<100ms):** PyTorch and CUDA 12 runtimes are lazily imported and verified exclusively within the background `HardwareInitWorker` thread, cutting cold-start launch latency from 12 seconds to under 100 milliseconds and instantly displaying the splash screen.
@@ -30,7 +35,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 - **KISS Dark UI:** Clean PySide6 interface with non-blocking real-time telemetry.
 
 ### Quick Start (Portable)
-1. Download **`DupeClean-v1.0.5-windows-cuda.7z`** below.
+1. Download **`DupeClean-v1.0.6-windows-cuda.7z`** below.
 2. Extract with [7-Zip](https://www.7-zip.org/) or WinRAR to any folder.
 3. Launch **`DupeClean.exe`**.
 
