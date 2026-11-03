@@ -48,8 +48,10 @@ if not exist "dist\DupeClean\DupeClean.exe" (
 echo.
 echo Compressing portable archive using 7-Zip LZMA2 solid mode...
 
-for /f "tokens=*" %%V in ('"%PYTHON_EXE%" -c "import dupeclean; print(dupeclean.__version__)"') do set "APP_VERSION=%%V"
-if not defined APP_VERSION set "APP_VERSION=1.0.0"
+".venv\Scripts\python.exe" -c "import dupeclean; open('__version__.tmp','w').write(dupeclean.__version__)"
+set /p APP_VERSION=<__version__.tmp
+if exist "__version__.tmp" del /f /q "__version__.tmp"
+if not defined APP_VERSION set "APP_VERSION=1.0.1"
 
 set "OUTPUT_7Z=dist\DupeClean-v%APP_VERSION%-windows-cuda.7z"
 if exist "%OUTPUT_7Z%" del /f /q "%OUTPUT_7Z%"

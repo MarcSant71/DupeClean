@@ -75,7 +75,7 @@ def find_exact_duplicates(
             except (OSError, PermissionError):
                 continue
 
-            if len(new_prefix_entries) >= 500:
+            if len(new_prefix_entries) >= 1000:
                 cache.save_exact_batch(new_prefix_entries)
                 new_prefix_entries = []
 
@@ -124,7 +124,7 @@ def find_exact_duplicates(
             except (OSError, PermissionError):
                 continue
 
-            if len(new_full_entries) >= 100:
+            if len(new_full_entries) >= 500:
                 cache.save_exact_batch(new_full_entries)
                 new_full_entries = []
 

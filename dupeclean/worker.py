@@ -108,3 +108,8 @@ class ScanWorker(QThread):
 
         except Exception as e:
             self.scan_error.emit(f"Error during scan: {str(e)}")
+        finally:
+            try:
+                cache.checkpoint()
+            except Exception:
+                pass

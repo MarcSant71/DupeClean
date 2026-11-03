@@ -8,6 +8,8 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
@@ -18,7 +20,11 @@ from dupeclean.core.models import FileRecord, ScanMode
 
 def get_default_cache_db_path() -> Path:
     """Retorna o caminho centralizado do banco de dados DupeClean.db (pasta data/), com migração automática."""
-    base_dir = Path(__file__).resolve().parent.parent.parent  # Raiz do DupeClean
+    if getattr(sys, "frozen", False):
+        base_dir = Path(sys.executable).parent
+    else:
+        base_dir = Path(__file__).resolve().parent.parent.parent  # Raiz do DupeClean
+
     data_dir = base_dir / "data"
     old_cache = base_dir / "cache" / "cache.db"
 
@@ -47,26 +53,42 @@ def get_default_cache_db_path() -> Path:
 
 class CacheManager:
     """
-    Gerenciador thread-safe de cache SQLite em modo WAL.
-    Suporta transações em lote e consultas rápidas por caminho, tamanho e data de modificação.
+    Gerenciador de cache SQLite de alta performance, thread-safe e resiliente a bibliotecas massivas.
+    Configurado com modo WAL, mmap I/O, commit/rollback transacional seguro e fechamento estrito de conexões.
     """
 
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or get_default_cache_db_path()
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Cria e configura conexão SQLite otimizada com WAL."""
-        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA cache_size=-64000;")  # 64 MB de cache em RAM
-        conn.execute("PRAGMA temp_store=MEMORY;")
-        return conn
+    @contextmanager
+    def _get_connection(self):
+        """
+        Gerenciador de contexto que garante commit em sucesso, rollback em erro
+        e fechamento obrigatório da conexão para eliminar leaks de locks no Windows.
+        """
+        conn = sqlite3.connect(str(self.db_path), timeout=60.0)
+        try:
+            conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA busy_timeout = 60000;")  # 60 segundos de espera para locks
+            conn.execute("PRAGMA mmap_size = 268435456;")  # 256 MB zero-copy memory mapping
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_db(self):
-        """Cria as tabelas e índices de cache se não existirem."""
-        with self._get_connection() as conn:
+        """Cria e configura o banco com parâmetros industriais de alta performance e resiliência."""
+        conn = sqlite3.connect(str(self.db_path), timeout=60.0)
+        try:
+            # Pragmas estruturais que devem ser configurados na inicialização do arquivo
+            conn.execute("PRAGMA page_size = 8192;")  # Páginas de 8 KB para alta eficiência em DBs gigantes
+            conn.execute("PRAGMA journal_mode = WAL;")  # Write-Ahead Logging
+            conn.execute("PRAGMA journal_size_limit = 67108864;")  # Limita arquivo WAL a 64 MB (evita inchaço)
+            conn.execute("PRAGMA wal_autocheckpoint = 2000;")  # Checkpoint regular a cada 2000 páginas
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS cache_exact (
                     path TEXT PRIMARY KEY,
@@ -95,11 +117,14 @@ class CacheManager:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-
-                CREATE INDEX IF NOT EXISTS idx_exact_lookup ON cache_exact(path, size, mtime);
-                CREATE INDEX IF NOT EXISTS idx_images_lookup ON cache_images(path, size, mtime);
-                CREATE INDEX IF NOT EXISTS idx_videos_lookup ON cache_videos(path, size, mtime);
             """)
+            # Remove índices secundários redundantes (PRIMARY KEY já provê índice B-Tree único ótimo)
+            conn.execute("DROP INDEX IF EXISTS idx_exact_lookup;")
+            conn.execute("DROP INDEX IF EXISTS idx_images_lookup;")
+            conn.execute("DROP INDEX IF EXISTS idx_videos_lookup;")
+            conn.commit()
+        finally:
+            conn.close()
 
     # -------------------------------------------------------------------------
     # 0. Gerenciamento de Configurações e Estado da Aplicação (app_settings)
@@ -277,6 +302,14 @@ class CacheManager:
             stats["db_size_mb"] = round(self.db_path.stat().st_size / (1024 * 1024), 2)
         return stats
 
+    def checkpoint(self):
+        """Executa checkpoint manual do WAL para truncar o arquivo de log."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
+        except Exception:
+            pass
+
     def clear(self, mode: Optional[ScanMode] = None):
         """Limpa dados do cache para um modo específico ou para todos."""
         with self._get_connection() as conn:
@@ -290,8 +323,9 @@ class CacheManager:
                 conn.execute("DELETE FROM cache_exact;")
                 conn.execute("DELETE FROM cache_images;")
                 conn.execute("DELETE FROM cache_videos;")
-        # VACUUM deve ser executado fora de transação
-        conn = self._get_connection()
+
+        # VACUUM deve ser executado fora de transação em conexão limpa
+        conn = sqlite3.connect(str(self.db_path), timeout=60.0)
         try:
             conn.isolation_level = None
             conn.execute("VACUUM;")

@@ -245,8 +245,8 @@ def extract_video_embeddings(
         emb_bytes = normalized.cpu().numpy().tobytes()
         new_cache_entries.append((str(rec.path), rec.size, rec.mtime, duration, emb_bytes))
 
-        # Salva periodicamente a cada 5 vídeos para retenção em cancelamento
-        if len(new_cache_entries) >= 5:
+        # Salva periodicamente a cada 25 vídeos para retenção em cancelamento
+        if len(new_cache_entries) >= 25:
             cache.save_video_batch(new_cache_entries)
             new_cache_entries = []
 
