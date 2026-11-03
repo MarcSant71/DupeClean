@@ -10,7 +10,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 - **KISS Dark UI:** Clean PySide6 interface with non-blocking real-time telemetry.
 
 ### Quick Start (Portable)
-1. Download **`DupeClean-v1.0.0-windows-cuda.7z`** below.
+1. Download **`DupeClean-v1.0.1-windows-cuda.7z`** below.
 2. Extract with [7-Zip](https://www.7-zip.org/) or WinRAR to any folder.
 3. Launch **`DupeClean.exe`**.
 

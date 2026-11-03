@@ -46,7 +46,11 @@ if not exist "dist\DupeClean\DupeClean.exe" (
 :: 4. Compress portable archive using 7-Zip LZMA2
 echo.
 echo Compressing portable archive using 7-Zip LZMA2 solid mode...
-set "OUTPUT_7Z=dist\DupeClean-v1.0.0-windows-cuda.7z"
+
+for /f "tokens=*" %%V in ('"%PYTHON_EXE%" -c "import dupeclean; print(dupeclean.__version__)"') do set "APP_VERSION=%%V"
+if not defined APP_VERSION set "APP_VERSION=1.0.0"
+
+set "OUTPUT_7Z=dist\DupeClean-v%APP_VERSION%-windows-cuda.7z"
 if exist "%OUTPUT_7Z%" del /f /q "%OUTPUT_7Z%"
 
 set "SEVEN_ZIP="
@@ -55,7 +59,7 @@ if exist "C:\Program Files (x86)\7-Zip\7z.exe" set "SEVEN_ZIP=C:\Program Files (
 
 if defined SEVEN_ZIP (
     cd dist
-    "%SEVEN_ZIP%" a -t7z -m0=lzma2 -mx=9 -ms=on "DupeClean-v1.0.0-windows-cuda.7z" "DupeClean"
+    "%SEVEN_ZIP%" a -t7z -m0=lzma2 -mx=9 -ms=on "DupeClean-v%APP_VERSION%-windows-cuda.7z" "DupeClean"
     cd ..
 ) else (
     echo [WARNING] 7-Zip not found in Program Files.

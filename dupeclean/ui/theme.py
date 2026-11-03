@@ -194,41 +194,40 @@ QWidget#sidebarContainer {
     border-right: 1px solid #2e2e33;
 }
 
-/* Barra Lateral de Modos */
+/* Barra Lateral de Modos (Caixa Única Envolvendo os 3 Modos) */
 QListWidget#sidebarModes {
-    background-color: transparent;
-    border: none;
+    background-color: #202024;
+    border: 1px solid #2e2e33;
+    border-radius: 6px;
+    padding: 2px;
     outline: none;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
 }
 QListWidget#sidebarModes:focus {
-    border: none;
+    border: 1px solid #2e2e33;
     outline: none;
 }
 QListWidget#sidebarModes::item {
-    padding: 12px 14px;
+    padding: 9px 12px;
+    background-color: transparent;
     border: none;
-    border-radius: 6px;
-    border-left: 3px solid transparent;
-    outline: none;
-    margin-bottom: 2px;
+    border-radius: 4px;
+    color: #e4e4e7;
+    margin: 1px;
 }
 QListWidget#sidebarModes::item:hover {
-    background-color: #222226;
+    background-color: #27272a;
+    color: #ffffff;
 }
 QListWidget#sidebarModes::item:selected {
-    background-color: #27272a;
+    background-color: #2c2c34;
     color: #38bdf8;
     border: none;
-    border-left: 3px solid #38bdf8;
     font-weight: bold;
-    outline: none;
 }
 QListWidget#sidebarModes::item:focus {
     outline: none;
-    border: none;
-    border-left: 3px solid #38bdf8;
 }
 
 /* Menus de Seleção e Contexto (Estilo Krokiet) */

@@ -11,20 +11,35 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import send2trash
 
-from PySide6.QtCore import Qt, Slot, QTimer
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont
+from PySide6.QtCore import Qt, Slot, QTimer, QSize
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont, QPen, QColor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QListWidget,
     QListWidgetItem, QPushButton, QLabel, QSlider, QProgressBar,
     QMessageBox, QFileDialog, QSplitter, QFrame, QSizePolicy, QMenu,
-    QApplication
+    QApplication, QStyledItemDelegate
 )
 
+from dupeclean import __version__
 from dupeclean.core.models import ScanMode, DuplicateGroup
 from dupeclean.core.cache import CacheManager
 from dupeclean.ui.folder_panel import FolderPanel
 from dupeclean.ui.results_table import ResultsWidget
 from dupeclean.worker import ScanWorker
+
+
+class ModeItemDelegate(QStyledItemDelegate):
+    """Desenha divisores sutis entre os modos de escaneamento, exceto no último item."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        # Se não for o último elemento da lista, desenha a linha divisória sutil
+        if index.row() < index.model().rowCount() - 1:
+            painter.save()
+            painter.setPen(QPen(QColor("#2e2e33"), 1))
+            y = option.rect.bottom()
+            painter.drawLine(option.rect.left() + 6, y, option.rect.right() - 6, y)
+            painter.restore()
 
 
 class MainWindow(QMainWindow):
@@ -62,7 +77,7 @@ class MainWindow(QMainWindow):
         self.ui_timer.timeout.connect(self._update_telemetry_tick)
 
         self.setWindowIcon(self._create_app_icon())
-        self.setWindowTitle("DupeClean - GPU-Accelerated Duplicate File Finder")
+        self.setWindowTitle(f"DupeClean v{__version__} - GPU-Accelerated Duplicate File Finder")
         self.resize(1280, 820)
         self.setMinimumSize(960, 600)
         self._init_ui()
@@ -129,28 +144,36 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addSpacing(10)
 
-        # Mode List
+        # Mode List (Caixa única comportando os 3 modos)
         self.sidebar_modes = QListWidget()
         self.sidebar_modes.setObjectName("sidebarModes")
+        self.sidebar_modes.setItemDelegate(ModeItemDelegate(self.sidebar_modes))
         self.sidebar_modes.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.sidebar_modes.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar_modes.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar_modes.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         item_exact = QListWidgetItem("📁 Duplicate Files")
         item_exact.setData(Qt.ItemDataRole.UserRole, ScanMode.EXACT)
         item_exact.setToolTip("Finds 100% identical files using accelerated xxHash.")
+        item_exact.setSizeHint(QSize(230, 40))
 
         item_images = QListWidgetItem("🖼️ Similar Images")
         item_images.setData(Qt.ItemDataRole.UserRole, ScanMode.IMAGES)
         item_images.setToolTip("Finds identical or similar photos using GPU Tensor Cores.")
+        item_images.setSizeHint(QSize(230, 40))
 
         item_videos = QListWidgetItem("🎬 Similar Videos")
         item_videos.setData(Qt.ItemDataRole.UserRole, ScanMode.VIDEOS)
         item_videos.setToolTip("Finds similar videos using dedicated NVDEC hardware decoding.")
+        item_videos.setSizeHint(QSize(230, 40))
 
         self.sidebar_modes.addItem(item_exact)
         self.sidebar_modes.addItem(item_images)
         self.sidebar_modes.addItem(item_videos)
         self.sidebar_modes.setCurrentRow(0)
         self.sidebar_modes.currentRowChanged.connect(self._on_mode_changed)
+        self.sidebar_modes.setFixedHeight(128)
 
         sidebar_layout.addWidget(self.sidebar_modes)
 
