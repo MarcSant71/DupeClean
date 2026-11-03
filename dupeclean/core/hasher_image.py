@@ -53,7 +53,7 @@ def extract_image_embeddings(
     cache_manager: Optional[CacheManager] = None
 ) -> Tuple[List[FileRecord], torch.Tensor]:
     """
-    Carrega imagens em paralelo saturando todos os núcleos de CPU e I/O de rede,
+    Carrega imagens em paralelo maximizando a eficiência de CPU e throughput de I/O,
     alimenta a RTX 5090 em lotes de alto rendimento e calcula embeddings normalizados.
     Utiliza cache SQLite persistente (WAL) para carregar instantaneamente imagens já analisadas.
     Retorna (registros_validos, tensor_embeddings_gpu).

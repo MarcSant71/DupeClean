@@ -1,6 +1,6 @@
 """
 Deduplicador Exato (Bit-a-bit) de Altíssimo Desempenho com xxHash64 e I/O Paralelo.
-Algoritmo de 3 estágios otimizado para saturação de link Gigabit (100 MB/s+) e cancelamento instantâneo:
+Algoritmo de 3 estágios otimizado para alta vazão em rede Gigabit (100 MB/s+) e cancelamento instantâneo:
 1. Agrupamento por tamanho (tamanhos únicos são descartados em memória sem tocar no disco).
 2. Hash paralelo dos primeiros 4 KB com descarte imediato via ThreadPool e stop_check.
 3. Hash completo em streaming paralelo com buffers de 4 MB e cancelamento atômico em tempo real.
