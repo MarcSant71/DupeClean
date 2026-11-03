@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 import send2trash
 
 from PySide6.QtCore import Qt, Slot, QTimer
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QListWidget,
     QListWidgetItem, QPushButton, QLabel, QSlider, QProgressBar,
@@ -29,6 +30,23 @@ from dupeclean.worker import ScanWorker
 class MainWindow(QMainWindow):
     """Janela principal do aplicativo DupeClean."""
 
+    @staticmethod
+    def _create_app_icon() -> QIcon:
+        """Gera o ícone com o raio de energia para a barra de títulos e barra de tarefas do Windows."""
+        icon = QIcon()
+        for size in (16, 24, 32, 48, 64, 128):
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            font_size = int(size * 0.72)
+            font = QFont("Segoe UI Emoji", max(10, font_size))
+            painter.setFont(font)
+            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "⚡")
+            painter.end()
+            icon.addPixmap(pixmap)
+        return icon
+
     def __init__(self, gpu_info: Dict[str, Any]):
         super().__init__()
         self.gpu_info = gpu_info
@@ -43,7 +61,8 @@ class MainWindow(QMainWindow):
         self.ui_timer.setInterval(250)
         self.ui_timer.timeout.connect(self._update_telemetry_tick)
 
-        self.setWindowTitle(f"DupeClean — Deduplicação de Arquivos por GPU ({gpu_info.get('name', 'NVIDIA RTX')})")
+        self.setWindowIcon(self._create_app_icon())
+        self.setWindowTitle(f"DupeClean - Deduplicação de Arquivos por GPU ({gpu_info.get('name', 'NVIDIA RTX')})")
         self.resize(1280, 820)
         self._init_ui()
 
@@ -65,11 +84,24 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(10)
 
         # Logo / Título
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(8)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+
+        lbl_icon = QLabel("⚡")
+        lbl_icon.setStyleSheet("font-size: 22px;")
+
         lbl_title = QLabel("DupeClean")
         lbl_title.setStyleSheet("font-size: 20px; font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;")
+
+        title_layout.addWidget(lbl_icon)
+        title_layout.addWidget(lbl_title)
+        title_layout.addStretch()
+
+        sidebar_layout.addLayout(title_layout)
+
         lbl_subtitle = QLabel("Deduplicação de Arquivos por GPU")
         lbl_subtitle.setStyleSheet("font-size: 11px; color: #71717a;")
-        sidebar_layout.addWidget(lbl_title)
         sidebar_layout.addWidget(lbl_subtitle)
 
         # Badge de GPU (KISS: Minimalista, linha única)
@@ -608,7 +640,7 @@ class MainWindow(QMainWindow):
 
         try:
             with open(file_path, "w", encoding="utf-8") as f:
-                f.write("=== RELATÓRIO DE DUPLICATAS — DUPECLEAN ===\n")
+                f.write("=== RELATÓRIO DE DUPLICATAS - DUPECLEAN ===\n")
                 f.write(f"Gerado em: {time.strftime('%d/%m/%Y %H:%M:%S')}\n")
                 f.write(f"Modo: {self.current_mode.value.upper()}\n")
                 f.write(f"Total de Grupos: {len(self.results_widget.groups)}\n\n")

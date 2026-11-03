@@ -36,7 +36,7 @@ def excepthook(exc_type, exc_value, exc_tb):
     try:
         QMessageBox.critical(
             None,
-            "Erro Inesperado — DupeClean",
+            "Erro Inesperado - DupeClean",
             f"Ocorreu um erro ao executar a aplicação:\n\n{exc_value}\n\nDetalhes gravados em crash.log"
         )
     except Exception:
@@ -69,7 +69,7 @@ def main():
             splash.close()
             QMessageBox.critical(
                 None,
-                "Hardware Incompatível — DupeClean",
+                "Hardware Incompatível - DupeClean",
                 error_msg
             )
             app.exit(1)
