@@ -16,6 +16,8 @@ dist/
 bin/
 *.exe
 *.dll
+*.zip
+*.7z
 
 # Databases & local caches
 cache/
