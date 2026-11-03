@@ -1,17 +1,18 @@
 @echo off
-title DupeClean (Modo Debug / Console)
+title DupeClean (Debug / Console Mode)
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [ERRO] Ambiente virtual .venv nao encontrado!
+    echo [ERROR] Virtual environment .venv not found in %~dp0
+    echo Please create the virtual environment and install dependencies.
     pause
     exit /b 1
 )
 
-echo Iniciando DupeClean em modo de console...
+echo Starting DupeClean in console mode...
 ".venv\Scripts\python.exe" main.py
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo A aplicacao encerrou com erro %ERRORLEVEL%.
+    echo Application exited with error code %ERRORLEVEL%.
     pause
 )

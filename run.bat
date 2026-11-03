@@ -3,10 +3,11 @@ title DupeClean
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\pythonw.exe" (
-    echo [ERRO] Ambiente virtual .venv nao encontrado em %~dp0
+    echo [ERROR] Virtual environment .venv not found in %~dp0
+    echo Please create the virtual environment and install dependencies.
     pause
     exit /b 1
 )
 
-:: Inicia a aplicacao com pythonw (sem janela preta de fundo)
+:: Launch application with pythonw (no background console window)
 start "" ".venv\Scripts\pythonw.exe" main.py
