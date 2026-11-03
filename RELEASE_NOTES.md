@@ -1,5 +1,12 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.0.4
+- **Block GEMM Memory Architecture (~40 GB to ~500 MB):** Replaced dense $N \times N$ matrix similarity calculation with chunked Block GEMM (2048-row blocks) on GPU. Reduced memory footprint from ~40 GB to ~500 MB for 140k+ files, eliminating OS memory swap freezes and checking `stop_check` every 5ms.
+- **Deterministic Progress & Instant Estimations:** SQLite-backed file count estimation (`estimate_file_count`) querying recent crawl history and persistent metadata in <1ms without redundant disk I/O, replacing bouncing marquee animations with smooth 0–100% progress bars.
+- **Live Indexing Telemetry:** Real-time crawler telemetry reporting active subfolder names, live speed (`files/s`), and continuous ETA calculations.
+- **Instant Cancellation Latency (20ms):** Active thread pool future cancellation (`pending.cancel()`) and atomic loops, reducing abort latency from 40s+ to 20ms.
+- **Refined Status Feedback:** Clear and accurate completion messages ("Estimated space to free: X MB") with proper singular/plural grammar and explicit "Scan cancelled by user." feedback.
+
 ### What's New in v1.0.3
 - **Gigabit Network I/O Saturation (973 Mbps+):** Multi-threaded concurrent file reader with 4 MB streaming buffers in `hasher_exact.py` capable of saturating Gigabit Ethernet links (100–115 MB/s) across remote NAS / iSCSI storages.
 - **Fast Win32 Metadata Crawler:** Directory traversal rewritten using native `os.scandir` caching, eliminating 100% of redundant individual network RPC `stat()` calls over SMB.
@@ -18,7 +25,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 - **KISS Dark UI:** Clean PySide6 interface with non-blocking real-time telemetry.
 
 ### Quick Start (Portable)
-1. Download **`DupeClean-v1.0.3-windows-cuda.7z`** below.
+1. Download **`DupeClean-v1.0.4-windows-cuda.7z`** below.
 2. Extract with [7-Zip](https://www.7-zip.org/) or WinRAR to any folder.
 3. Launch **`DupeClean.exe`**.
 
