@@ -6,11 +6,12 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 - **Hardware NVDEC Acceleration:** High-throughput video decoding using dedicated NVIDIA silicon decoders.
 - **Reference Folder Protection:** Protects master directories (`Ref`) from accidental deletion.
 - **State & Folder Persistence:** Automatically remembers scan folders and Reference flags in local SQLite database (`data/DupeClean.db`) across sessions.
+- **Massive Dataset Resilience:** Industrial-grade SQLite engine with 8KB page sizes, 256MB mmap I/O, strict connection lifecycle management, and automatic 64MB WAL capping, tested and validated on libraries with millions of files without locking or storage limits.
 - **100% Portable:** Pre-bundled with Python runtime, CUDA DLLs, and FFmpeg. No installation required.
 - **KISS Dark UI:** Clean PySide6 interface with non-blocking real-time telemetry.
 
 ### Quick Start (Portable)
-1. Download **`DupeClean-v1.0.1-windows-cuda.7z`** below.
+1. Download **`DupeClean-v1.0.2-windows-cuda.7z`** below.
 2. Extract with [7-Zip](https://www.7-zip.org/) or WinRAR to any folder.
 3. Launch **`DupeClean.exe`**.
 
