@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(self._create_app_icon())
         self.setWindowTitle("DupeClean - GPU-Accelerated Duplicate File Finder")
         self.resize(1280, 820)
+        self.setMinimumSize(960, 600)
         self._init_ui()
 
     def _init_ui(self):
@@ -141,6 +142,35 @@ class MainWindow(QMainWindow):
         self.sidebar_modes.currentRowChanged.connect(self._on_mode_changed)
 
         sidebar_layout.addWidget(self.sidebar_modes)
+
+        # Similarity Parameter Box (for Images & Videos)
+        self.container_slider = QFrame()
+        self.container_slider.setStyleSheet(
+            "QFrame { background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 6px; }"
+        )
+        slider_box_layout = QVBoxLayout(self.container_slider)
+        slider_box_layout.setContentsMargins(6, 6, 6, 6)
+        slider_box_layout.setSpacing(6)
+
+        slider_header = QHBoxLayout()
+        lbl_sim = QLabel("Similarity Threshold:")
+        lbl_sim.setStyleSheet("font-size: 11px; color: #a1a1aa; font-weight: 500;")
+        self.lbl_sim_val = QLabel("85%")
+        self.lbl_sim_val.setStyleSheet("font-size: 12px; font-weight: bold; color: #38bdf8;")
+        slider_header.addWidget(lbl_sim)
+        slider_header.addStretch()
+        slider_header.addWidget(self.lbl_sim_val)
+        slider_box_layout.addLayout(slider_header)
+
+        self.slider_sim = QSlider(Qt.Orientation.Horizontal)
+        self.slider_sim.setRange(70, 100)
+        self.slider_sim.setValue(85)
+        self.slider_sim.valueChanged.connect(lambda v: self.lbl_sim_val.setText(f"{v}%"))
+        slider_box_layout.addWidget(self.slider_sim)
+
+        self.container_slider.setVisible(False)
+        sidebar_layout.addWidget(self.container_slider)
+
         sidebar_layout.addStretch()
 
         # Cache Management Button
@@ -223,31 +253,6 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.btn_delete_trash)
         top_bar.addWidget(self.btn_delete_perm)
         top_bar.addWidget(self.btn_save)
-
-        top_bar.addSpacing(10)
-
-        # Similarity Slider
-        self.container_slider = QWidget()
-        slider_layout = QHBoxLayout(self.container_slider)
-        slider_layout.setContentsMargins(0, 0, 0, 0)
-
-        lbl_sim = QLabel("Similarity:")
-        self.lbl_sim_val = QLabel("85%")
-        self.lbl_sim_val.setStyleSheet("font-weight: bold; color: #38bdf8; min-width: 35px;")
-
-        self.slider_sim = QSlider(Qt.Orientation.Horizontal)
-        self.slider_sim.setRange(70, 100)
-        self.slider_sim.setValue(85)
-        self.slider_sim.setFixedWidth(120)
-        self.slider_sim.valueChanged.connect(lambda v: self.lbl_sim_val.setText(f"{v}%"))
-
-        slider_layout.addWidget(lbl_sim)
-        slider_layout.addWidget(self.slider_sim)
-        slider_layout.addWidget(self.lbl_sim_val)
-
-        self.container_slider.setVisible(False)
-        top_bar.addWidget(self.container_slider)
-
         top_bar.addStretch()
 
         right_layout.addLayout(top_bar)
