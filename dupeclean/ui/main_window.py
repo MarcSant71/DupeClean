@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import send2trash
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QListWidget,
     QListWidgetItem, QPushButton, QLabel, QSlider, QProgressBar,
@@ -35,6 +35,13 @@ class MainWindow(QMainWindow):
         self.worker: ScanWorker = None
         self.current_mode = ScanMode.EXACT
         self.start_time: Optional[float] = None
+        self.latest_current: int = 0
+        self.latest_total: int = 0
+
+        # Temporizador independente da UI para contagem contínua e cálculo de ETA
+        self.ui_timer = QTimer(self)
+        self.ui_timer.setInterval(250)
+        self.ui_timer.timeout.connect(self._update_telemetry_tick)
 
         self.setWindowTitle(f"DupeClean — Deduplicação de Arquivos por GPU ({gpu_info.get('name', 'NVIDIA RTX')})")
         self.resize(1280, 820)
@@ -271,7 +278,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _format_duration(seconds: float) -> str:
-        s = int(round(seconds))
+        s = int(seconds)
         m, s = divmod(s, 60)
         h, m = divmod(m, 60)
         if h > 0:
@@ -325,8 +332,11 @@ class MainWindow(QMainWindow):
 
         # Inicializa o temporizador
         self.start_time = time.time()
+        self.latest_current = 0
+        self.latest_total = 0
         self.lbl_timer.setText("⏱️ 00:00")
         self.lbl_timer.setVisible(True)
+        self.ui_timer.start(250)
 
         self.worker = ScanWorker(
             scan_paths=scan_paths,
@@ -348,6 +358,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Garante encerramento imediato de todos os processos e threads em segundo plano ao fechar a janela."""
+        self.ui_timer.stop()
         if self.worker and self.worker.isRunning():
             self.lbl_status.setText("Encerrando...")
             self.worker.requestInterruption()
@@ -360,30 +371,40 @@ class MainWindow(QMainWindow):
         if app:
             app.quit()
 
+    @Slot()
+    def _update_telemetry_tick(self):
+        """Atualização autônoma de telemetria a cada 250ms, desacoplada do I/O de disco."""
+        if not self.start_time:
+            return
+        elapsed = time.time() - self.start_time
+        elapsed_str = self._format_duration(elapsed)
+
+        if self.latest_total > 0 and self.latest_current > 1 and elapsed > 0.5:
+            rate = self.latest_current / max(elapsed, 0.001)
+            remaining = max(0, self.latest_total - self.latest_current)
+            eta_sec = remaining / max(rate, 0.001)
+            eta_str = self._format_duration(eta_sec)
+            self.lbl_timer.setText(f"⏱️ {elapsed_str} | ETA: ~{eta_str} ({rate:.1f} it/s)")
+        else:
+            self.lbl_timer.setText(f"⏱️ {elapsed_str}")
+
     @Slot(str, int, int)
     def _on_worker_progress(self, msg: str, current: int, total: int):
         self.lbl_status.setText(msg)
-        elapsed = (time.time() - self.start_time) if self.start_time else 0.0
-        elapsed_str = self._format_duration(elapsed)
+        self.latest_current = current
+        self.latest_total = total
 
         if total > 0:
             self.progress_bar.setRange(0, total)
             self.progress_bar.setValue(current)
-
-            if current > 1 and elapsed > 0.5:
-                rate = current / max(elapsed, 0.001)
-                remaining = max(0, total - current)
-                eta_sec = remaining / max(rate, 0.001)
-                eta_str = self._format_duration(eta_sec)
-                self.lbl_timer.setText(f"⏱️ {elapsed_str} | ETA: ~{eta_str} ({rate:.1f} it/s)")
-            else:
-                self.lbl_timer.setText(f"⏱️ {elapsed_str}")
         else:
             self.progress_bar.setRange(0, 0)
-            self.lbl_timer.setText(f"⏱️ {elapsed_str}")
+
+        self._update_telemetry_tick()
 
     @Slot(list)
     def _on_scan_finished(self, groups: List[DuplicateGroup]):
+        self.ui_timer.stop()
         total_time_str = ""
         if self.start_time:
             total_elapsed = time.time() - self.start_time
@@ -414,6 +435,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Erro de Execução", err_msg)
 
     def _finalize_scan_ui(self):
+        self.ui_timer.stop()
         self.btn_scan.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.progress_bar.setVisible(False)
