@@ -88,10 +88,11 @@ def extract_video_frames(
 
     for t in sample_times:
         try:
-            # -hwaccel cuda ativa decodificação direta via NVDEC na RTX 5090
+            # -hwaccel cuda ativa decodificação direta via NVDEC na RTX 5090 (device 0)
             cmd = [
                 ffmpeg_path,
                 "-hwaccel", "cuda",
+                "-hwaccel_device", "0",
                 "-ss", f"{t:.2f}",
                 "-i", str(path),
                 "-vframes", "1",

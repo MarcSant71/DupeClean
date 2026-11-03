@@ -1,9 +1,9 @@
 @echo off
 title DupeClean
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 if not exist ".venv\Scripts\pythonw.exe" (
-    echo [ERROR] Virtual environment .venv not found in %~dp0
+    echo [ERROR] Virtual environment .venv not found in %CD%
     echo Please create the virtual environment and install dependencies.
     pause
     exit /b 1

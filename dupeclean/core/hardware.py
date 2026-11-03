@@ -1,11 +1,28 @@
 """
 Hardware Gatekeeper para o DupeClean.
 Garante que a execução ocorra exclusivamente em GPUs NVIDIA RTX Séries 30, 40 ou 50
-(Compute Capability >= 8.6 - Ampere, Ada Lovelace, Blackwell).
+(Compute Capability >= 8.6 - Ampere, Ada Lovelace, Blackwell) e vincula
+em tempo de execução (in-process) o PyTorch diretamente ao dispositivo CUDA 0.
 """
 
+import os
 from typing import Tuple, Dict, Any
 import torch
+
+
+def enforce_high_performance_gpu():
+    """
+    Configura em tempo de execução (apenas no escopo do processo atual, sem tocar no registro do Windows)
+    as variáveis e dispositivos para que todo o processamento de tensores e IA ocorra na NVIDIA RTX.
+    """
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.set_device(0)
+        except Exception:
+            pass
 
 
 def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
@@ -13,6 +30,8 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     Verifica se o sistema possui uma GPU NVIDIA compatível.
     Retorna (compativel, mensagem_erro, info_hardware).
     """
+    enforce_high_performance_gpu()
+
     if not torch.cuda.is_available():
         return (
             False,
@@ -26,8 +45,13 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     if device_count == 0:
         return False, "No accessible CUDA devices found.", {}
 
-    # Get primary device
+    # Fixa o dispositivo primário explicitamente
     device_id = 0
+    try:
+        torch.cuda.set_device(device_id)
+    except Exception:
+        pass
+
     device_name = torch.cuda.get_device_name(device_id)
     capability = torch.cuda.get_device_capability(device_id)
     vram_bytes = torch.cuda.get_device_properties(device_id).total_memory

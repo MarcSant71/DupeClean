@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QThread, Signal
 
+from dupeclean.core.hardware import enforce_high_performance_gpu
 from dupeclean.ui.theme import DARK_THEME_QSS
 from dupeclean.ui.splash import SplashScreen
 
@@ -47,6 +48,9 @@ sys.excepthook = excepthook
 
 
 def main():
+    # 0. Força a GPU dedicada de alta performance (NVIDIA RTX)
+    enforce_high_performance_gpu()
+
     # Suporte a High DPI no Windows
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

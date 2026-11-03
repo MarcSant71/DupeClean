@@ -71,7 +71,9 @@ class CacheManager:
         try:
             conn.execute("PRAGMA synchronous = NORMAL;")
             conn.execute("PRAGMA busy_timeout = 60000;")  # 60 segundos de espera para locks
-            conn.execute("PRAGMA mmap_size = 268435456;")  # 256 MB zero-copy memory mapping
+            conn.execute("PRAGMA cache_size = -64000;")   # 64 MB de cache de páginas em RAM (elimina I/O repetido)
+            conn.execute("PRAGMA temp_store = MEMORY;")   # Estruturas temporárias em memória RAM
+            conn.execute("PRAGMA mmap_size = 268435456;") # 256 MB zero-copy memory mapping
             yield conn
             conn.commit()
         except Exception:

@@ -9,7 +9,7 @@
 High-performance duplicate file, image, and video finder engineered and optimized exclusively for **NVIDIA GeForce RTX (30, 40, and 50 Series)** GPUs with Ampere, Ada Lovelace, and Blackwell architectures.
 
 > 📦 **Portable Release (No Python Installation Required):**  
-> Download the pre-built standalone package [**`DupeClean-v1.0.2-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
+> Download the pre-built standalone package [**`DupeClean-v1.0.3-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
 
 ---
 
@@ -116,7 +116,13 @@ pip install -r requirements.txt
 ```
 
 ### 5. Run the Application
-Double-click `run.bat` or run via terminal:
+Double-click `scripts\run.bat` or run via terminal:
 ```powershell
 python main.py
+```
+
+### 6. Build Standalone Portable Distribution (Optional)
+To freeze the application into a standalone package with PyInstaller:
+```powershell
+.\scripts\build.bat
 ```

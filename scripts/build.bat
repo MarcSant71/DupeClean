@@ -1,7 +1,7 @@
 @echo off
 title DupeClean - Build Standalone Portable Release
-cd /d "%~dp0"
-if "%1"=="--noif not defined NO_PAUSE pause" set "NO_PAUSE=1"
+cd /d "%~dp0.."
+if "%1"=="--nopause" set "NO_PAUSE=1"
 
 echo =========================================================
 echo       DupeClean - Standalone Portable Release Builder
@@ -51,7 +51,7 @@ echo Compressing portable archive using 7-Zip LZMA2 solid mode...
 ".venv\Scripts\python.exe" -c "import dupeclean; open('__version__.tmp','w').write(dupeclean.__version__)"
 set /p APP_VERSION=<__version__.tmp
 if exist "__version__.tmp" del /f /q "__version__.tmp"
-if not defined APP_VERSION set "APP_VERSION=1.0.1"
+if not defined APP_VERSION set "APP_VERSION=1.0.3"
 
 set "OUTPUT_7Z=dist\DupeClean-v%APP_VERSION%-windows-cuda.7z"
 if exist "%OUTPUT_7Z%" del /f /q "%OUTPUT_7Z%"

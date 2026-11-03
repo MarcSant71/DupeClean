@@ -1,6 +1,7 @@
 """
 Rastreador de arquivos de alto desempenho (Filesystem Crawler).
-Varre diretórios de forma recursiva e aplica filtros de exclusão e extensão.
+Varre diretórios de forma recursiva utilizando os.scandir com cache de metadados
+nativos do Win32 (WIN32_FIND_DATA), eliminando roundtrips de rede via SMB/iSCSI.
 """
 
 import os
@@ -32,77 +33,90 @@ def crawl_directories(
 ) -> List[FileRecord]:
     """
     Rastreia todos os diretórios incluídos, marcando a flag 'is_reference'
-    e respeitando os caminhos excluídos.
+    e respeitando os caminhos excluídos. Utiliza os.scandir de alto rendimento.
     """
     records: List[FileRecord] = []
     seen_paths: Set[str] = set()
 
     # Normalizar exclusões
     resolved_exclusions = [p.resolve() for p in excluded_paths if p.exists()]
-
     total_scanned = 0
+
+    def _crawl_folder(folder_path: Path, is_ref: bool):
+        nonlocal total_scanned
+        if stop_check and stop_check():
+            return
+
+        try:
+            with os.scandir(folder_path) as it:
+                subdirs: List[Path] = []
+                for entry in it:
+                    if stop_check and stop_check():
+                        return
+
+                    try:
+                        # is_dir e is_file no Windows usam atributos em cache do WIN32_FIND_DATA
+                        if entry.is_dir(follow_symlinks=False):
+                            sub_p = Path(entry.path)
+                            # Checa exclusões
+                            if not any(sub_p == exc or exc in sub_p.parents for exc in resolved_exclusions):
+                                subdirs.append(sub_p)
+
+                        elif entry.is_file(follow_symlinks=False):
+                            path_str = entry.path.lower()
+                            if path_str in seen_paths:
+                                continue
+
+                            ext = os.path.splitext(entry.name)[1].lower()
+
+                            # Filtrar pelo modo
+                            if mode == ScanMode.IMAGES and ext not in IMAGE_EXTENSIONS:
+                                continue
+                            elif mode == ScanMode.VIDEOS and ext not in VIDEO_EXTENSIONS:
+                                continue
+
+                            # entry.stat(follow_symlinks=False) não faz RPC de rede adicional no Windows
+                            st = entry.stat(follow_symlinks=False)
+                            size = st.st_size
+
+                            # Ignora arquivos de 0 bytes
+                            if size == 0:
+                                continue
+
+                            records.append(FileRecord(
+                                path=Path(entry.path),
+                                size=size,
+                                mtime=st.st_mtime,
+                                is_reference=is_ref,
+                                name=entry.name,
+                                ext=ext
+                            ))
+                            seen_paths.add(path_str)
+                            total_scanned += 1
+
+                            if progress_callback and total_scanned % 1000 == 0:
+                                progress_callback(f"Indexing files ({total_scanned})...", total_scanned)
+
+                    except (OSError, PermissionError):
+                        continue
+
+            # Desce recursivamente nas subpastas
+            for sub_p in subdirs:
+                if stop_check and stop_check():
+                    return
+                _crawl_folder(sub_p, is_ref)
+
+        except (OSError, PermissionError):
+            return
 
     for sp in scan_paths:
         root_dir = sp.path.resolve()
         if not root_dir.exists():
             continue
 
-        is_ref = sp.is_reference
+        _crawl_folder(root_dir, sp.is_reference)
 
-        # os.walk é altamente otimizado no Windows
-        for root, dirs, files in os.walk(root_dir, topdown=True):
-            if stop_check and stop_check():
-                break
-
-            current_dir_path = Path(root).resolve()
-
-            # Pular se estiver em pasta excluída
-            if any(current_dir_path == exc or exc in current_dir_path.parents for exc in resolved_exclusions):
-                dirs.clear()  # Não desce nas subpastas
-                continue
-
-            for file_name in files:
-                if stop_check and stop_check():
-                    break
-
-                full_path = current_dir_path / file_name
-                path_str = str(full_path).lower()
-
-                if path_str in seen_paths:
-                    continue
-
-                ext = full_path.suffix.lower()
-
-                # Filtrar pelo modo
-                if mode == ScanMode.IMAGES and ext not in IMAGE_EXTENSIONS:
-                    continue
-                elif mode == ScanMode.VIDEOS and ext not in VIDEO_EXTENSIONS:
-                    continue
-
-                try:
-                    stat = full_path.stat()
-                    size = stat.st_size
-
-                    # Ignora arquivos de 0 bytes
-                    if size == 0:
-                        continue
-
-                    records.append(FileRecord(
-                        path=full_path,
-                        size=size,
-                        mtime=stat.st_mtime,
-                        is_reference=is_ref,
-                        name=file_name,
-                        ext=ext
-                    ))
-                    seen_paths.add(path_str)
-                    total_scanned += 1
-
-                    if progress_callback and total_scanned % 500 == 0:
-                        progress_callback(f"Crawling files ({total_scanned} found)...", total_scanned)
-
-                except (OSError, PermissionError):
-                    # Arquivo inacessível ou sem permissão
-                    continue
+    if progress_callback:
+        progress_callback(f"Indexing completed: {total_scanned} files.", total_scanned)
 
     return records
