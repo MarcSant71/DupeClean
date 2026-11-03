@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
         self.start_time: Optional[float] = None
         self.latest_current: int = 0
         self.latest_total: int = 0
+        self._was_cancelled: bool = False
 
         # Temporizador independente da UI para contagem contínua e cálculo de ETA
         self.ui_timer = QTimer(self)
@@ -397,6 +398,7 @@ class MainWindow(QMainWindow):
 
         self.btn_scan.setEnabled(False)
         self.btn_stop.setEnabled(True)
+        self._was_cancelled = False
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate at start
         self.lbl_status.setText("Starting scan...")
@@ -423,6 +425,7 @@ class MainWindow(QMainWindow):
 
     def _stop_scan(self):
         if self.worker and self.worker.isRunning():
+            self._was_cancelled = True
             self.lbl_status.setText("Stopping scan...")
             self.btn_stop.setEnabled(False)
             self.worker.requestInterruption()
@@ -464,7 +467,10 @@ class MainWindow(QMainWindow):
             remaining = max(0, self.latest_total - self.latest_current)
             eta_sec = remaining / max(rate, 0.001)
             eta_str = self._format_duration(eta_sec)
-            self.lbl_timer.setText(f"⏱️ {elapsed_str} | ETA: ~{eta_str} ({rate:.1f} it/s)")
+            self.lbl_timer.setText(f"⏱️ {elapsed_str} | ETA: ~{eta_str} ({rate:,.0f} it/s)")
+        elif self.latest_current > 1 and elapsed > 0.5:
+            rate = self.latest_current / max(elapsed, 0.001)
+            self.lbl_timer.setText(f"⏱️ {elapsed_str} | {rate:,.0f} files/s")
         else:
             self.lbl_timer.setText(f"⏱️ {elapsed_str}")
 
@@ -475,7 +481,7 @@ class MainWindow(QMainWindow):
         self.latest_total = total
 
         if total > 0:
-            self.progress_bar.setRange(0, total)
+            self.progress_bar.setRange(0, max(total, current))
             self.progress_bar.setValue(current)
         else:
             self.progress_bar.setRange(0, 0)
@@ -484,6 +490,7 @@ class MainWindow(QMainWindow):
 
     @Slot(list)
     def _on_scan_finished(self, groups: List[DuplicateGroup]):
+        self._was_cancelled = False
         self.ui_timer.stop()
         total_time_str = ""
         if self.start_time:
@@ -499,9 +506,11 @@ class MainWindow(QMainWindow):
 
         time_suffix = f" in {total_time_str}" if total_time_str else ""
         if groups:
+            group_word = "group" if len(groups) == 1 else "groups"
+            file_word = "file" if total_files == 1 else "files"
             self.lbl_status.setText(
-                f"Scan completed{time_suffix}! Found {len(groups)} groups "
-                f"({total_files} files). Reclaimable space: {reclaim_mb} MB."
+                f"Scan completed{time_suffix}! Found {len(groups)} duplicate {group_word} "
+                f"({total_files} {file_word}). Estimated space to free: {reclaim_mb} MB."
             )
             # Automatically apply smart selection (protecting reference folders)
             self.results_widget.select_smart_duplicates()
@@ -519,6 +528,12 @@ class MainWindow(QMainWindow):
         self.btn_scan.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.progress_bar.setVisible(False)
+        if getattr(self, "_was_cancelled", False):
+            self.lbl_status.setText("Scan cancelled by user.")
+            if self.start_time:
+                elapsed = time.time() - self.start_time
+                self.lbl_timer.setText(f"⏱️ Cancelled in {self._format_duration(elapsed)}")
+            self._was_cancelled = False
 
     def _delete_selected_to_trash(self):
         selected = self.results_widget.get_selected_files()

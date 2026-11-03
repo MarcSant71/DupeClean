@@ -38,14 +38,19 @@ class ScanWorker(QThread):
 
     def run(self):
         try:
-            self.progress_status.emit("Crawling folders on disk...", 0, 0)
+            cache = CacheManager()
+            estimated_total = cache.estimate_file_count(self.scan_paths, self.mode)
 
-            # 1. Rastreamento
+            init_msg = f"Indexing folders on disk (~{estimated_total:,} estimated)..." if estimated_total > 0 else "Indexing folders on disk..."
+            self.progress_status.emit(init_msg, 0, estimated_total)
+
+            # 1. Rastreamento com estimativa determinística e telemetria contínua
             records = crawl_directories(
                 scan_paths=self.scan_paths,
                 excluded_paths=self.excluded_paths,
                 mode=self.mode,
-                progress_callback=lambda msg, count: self.progress_status.emit(msg, count, 0),
+                estimated_total=estimated_total,
+                progress_callback=lambda msg, count, tot: self.progress_status.emit(msg, count, tot),
                 stop_check=self.isInterruptionRequested
             )
 
@@ -56,11 +61,13 @@ class ScanWorker(QThread):
                 self.scan_finished.emit([])
                 return
 
-            self.progress_status.emit(f"{len(records)} files found. Starting deduplication...", 0, len(records))
+            # Persiste contagem real observada para que futuros scans sejam determinísticos desde o início
+            cache.save_folder_counts(self.scan_paths, len(records))
+
+            self.progress_status.emit(f"{len(records):,} files found. Starting deduplication...", 0, len(records))
 
             # 2. Execução conforme o Modo Selecionado com Cache Persistente
             groups: List[DuplicateGroup] = []
-            cache = CacheManager()
 
             if self.mode == ScanMode.EXACT:
                 groups = find_exact_duplicates(
@@ -73,7 +80,7 @@ class ScanWorker(QThread):
             elif self.mode == ScanMode.IMAGES:
                 valid_records, embeddings = extract_image_embeddings(
                     records=records,
-                    batch_size=512,
+                    batch_size=256,
                     progress_callback=lambda msg, curr, tot: self.progress_status.emit(msg, curr, tot),
                     stop_check=self.isInterruptionRequested,
                     cache_manager=cache
@@ -84,7 +91,8 @@ class ScanWorker(QThread):
                         records=valid_records,
                         embeddings=embeddings,
                         similarity_threshold=self.similarity_threshold,
-                        mode=ScanMode.IMAGES
+                        mode=ScanMode.IMAGES,
+                        stop_check=self.isInterruptionRequested
                     )
 
             elif self.mode == ScanMode.VIDEOS:
@@ -100,7 +108,8 @@ class ScanWorker(QThread):
                         records=valid_records,
                         embeddings=embeddings,
                         similarity_threshold=self.similarity_threshold,
-                        mode=ScanMode.VIDEOS
+                        mode=ScanMode.VIDEOS,
+                        stop_check=self.isInterruptionRequested
                     )
 
             if not self.isInterruptionRequested():

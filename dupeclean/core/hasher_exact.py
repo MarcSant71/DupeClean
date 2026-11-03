@@ -88,7 +88,9 @@ def find_exact_duplicates(
     # Estágio 2: Hash do cabeçalho (primeiros 4 KB) com ThreadPool concorrente
     # -------------------------------------------------------------------------
     flat_candidates = [f for grp in candidates_by_size for f in grp]
-    cached_exact = cache.get_exact_cache(flat_candidates)
+    cached_exact = cache.get_exact_cache(flat_candidates, stop_check=stop_check)
+    if stop_check and stop_check():
+        return []
     cache_hits_prefix = sum(1 for f in flat_candidates if str(f.path) in cached_exact and cached_exact[str(f.path)][0])
 
     if progress_callback and cache_hits_prefix > 0:
@@ -121,7 +123,17 @@ def find_exact_duplicates(
 
                 chunk = to_header_check[chunk_start : chunk_start + header_chunk_size]
                 task_args = [(r, stop_check) for r in chunk]
-                results = list(executor.map(_read_header_hash, task_args))
+                futures = [executor.submit(_read_header_hash, arg) for arg in task_args]
+                results = []
+                for f in futures:
+                    if stop_check and stop_check():
+                        for pending in futures:
+                            pending.cancel()
+                        break
+                    try:
+                        results.append(f.result())
+                    except Exception:
+                        results.append(None)
 
                 if stop_check and stop_check():
                     break
@@ -192,7 +204,17 @@ def find_exact_duplicates(
 
                 chunk = to_deep_check[chunk_start : chunk_start + deep_chunk_size]
                 task_args = [(r, stop_check) for r in chunk]
-                results = list(executor.map(_compute_full_hash, task_args))
+                futures = [executor.submit(_compute_full_hash, arg) for arg in task_args]
+                results = []
+                for f in futures:
+                    if stop_check and stop_check():
+                        for pending in futures:
+                            pending.cancel()
+                        break
+                    try:
+                        results.append(f.result())
+                    except Exception:
+                        results.append(None)
 
                 if stop_check and stop_check():
                     break

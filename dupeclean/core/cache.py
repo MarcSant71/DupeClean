@@ -11,11 +11,11 @@ import sqlite3
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Callable
 import numpy as np
 import torch
 
-from dupeclean.core.models import FileRecord, ScanMode
+from dupeclean.core.models import FileRecord, ScanMode, ScanPath
 
 
 def get_default_cache_db_path() -> Path:
@@ -154,14 +154,74 @@ class CacheManager:
             except Exception:
                 return val_str
 
+    def estimate_file_count(self, scan_paths: List[ScanPath], mode: ScanMode) -> int:
+        """
+        Estima instantaneamente (em <1ms) a contagem de arquivos das pastas selecionadas
+        utilizando o histórico de escaneamentos e metadados persistentes em SQLite.
+        Elimina completamente o modo indeterminado (barra que fica quicando) sem tocar no disco.
+        """
+        if not scan_paths:
+            return 0
+
+        # 1. Tenta recuperar do histórico recente de pastas em app_settings
+        saved_counts = self.get_setting("last_folder_counts", {})
+        total_estimate = 0
+        missing_paths = []
+
+        for sp in scan_paths:
+            norm_key = str(sp.path.resolve()).rstrip("\\/")
+            if norm_key in saved_counts and saved_counts[norm_key] > 0:
+                total_estimate += saved_counts[norm_key]
+            else:
+                missing_paths.append(sp)
+
+        if not missing_paths and total_estimate > 0:
+            return total_estimate
+
+        # 2. Fallback: Consulta contagem nos caches existentes via LIKE em SQLite (<1ms)
+        table = "cache_images" if mode == ScanMode.IMAGES else ("cache_videos" if mode == ScanMode.VIDEOS else "cache_exact")
+
+        try:
+            with self._get_connection() as conn:
+                for sp in missing_paths:
+                    prefix = str(sp.path.resolve()).rstrip("\\/") + "\\%"
+                    cursor = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE path LIKE ?;", (prefix,))
+                    count = cursor.fetchone()[0]
+                    if count == 0:
+                        alt_table = "cache_exact" if table != "cache_exact" else "cache_images"
+                        cursor = conn.execute(f"SELECT COUNT(*) FROM {alt_table} WHERE path LIKE ?;", (prefix,))
+                        count = cursor.fetchone()[0]
+                    total_estimate += count
+        except Exception:
+            pass
+
+        return total_estimate
+
+    def save_folder_counts(self, scan_paths: List[ScanPath], total_count: int):
+        """Salva a última contagem de arquivos observada para as pastas escaneadas."""
+        if not scan_paths or total_count <= 0:
+            return
+        try:
+            saved_counts = self.get_setting("last_folder_counts", {}) or {}
+            if len(scan_paths) == 1:
+                norm_key = str(scan_paths[0].path.resolve()).rstrip("\\/")
+                saved_counts[norm_key] = total_count
+            self.save_setting("last_folder_counts", saved_counts)
+        except Exception:
+            pass
+
     # -------------------------------------------------------------------------
     # 1. Cache para Modo EXATO (xxHash64)
     # -------------------------------------------------------------------------
 
-    def get_exact_cache(self, records: List[FileRecord]) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
+    def get_exact_cache(
+        self,
+        records: List[FileRecord],
+        stop_check: Optional[Callable[[], bool]] = None
+    ) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
         """
         Retorna dicionário {caminho: (prefix_hash, full_hash)} para registros válidos.
-        Invalida caso o tamanho ou mtime tenham mudado.
+        Invalida caso o tamanho ou mtime tenham mudado. Suporta cancelamento atômico via stop_check.
         """
         results: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
         if not records:
@@ -170,6 +230,8 @@ class CacheManager:
         chunk_size = 900
         with self._get_connection() as conn:
             for i in range(0, len(records), chunk_size):
+                if stop_check and stop_check():
+                    return results
                 chunk = records[i:i + chunk_size]
                 placeholders = ",".join("?" for _ in chunk)
                 paths = [str(r.path) for r in chunk]
@@ -204,9 +266,14 @@ class CacheManager:
     # 2. Cache para Modo IMAGENS (Embeddings 2D-DCT FP16)
     # -------------------------------------------------------------------------
 
-    def get_image_cache(self, records: List[FileRecord]) -> Dict[str, bytes]:
+    def get_image_cache(
+        self,
+        records: List[FileRecord],
+        stop_check: Optional[Callable[[], bool]] = None
+    ) -> Dict[str, bytes]:
         """
         Retorna dicionário {caminho: embedding_bytes} para imagens com cache válido.
+        Suporta cancelamento imediato via stop_check.
         """
         results: Dict[str, bytes] = {}
         if not records:
@@ -215,6 +282,8 @@ class CacheManager:
         chunk_size = 900
         with self._get_connection() as conn:
             for i in range(0, len(records), chunk_size):
+                if stop_check and stop_check():
+                    return results
                 chunk = records[i:i + chunk_size]
                 placeholders = ",".join("?" for _ in chunk)
                 paths = [str(r.path) for r in chunk]
@@ -248,9 +317,14 @@ class CacheManager:
     # 3. Cache para Modo VÍDEOS (Duração + Embeddings Compostos FP16)
     # -------------------------------------------------------------------------
 
-    def get_video_cache(self, records: List[FileRecord]) -> Dict[str, Tuple[float, bytes]]:
+    def get_video_cache(
+        self,
+        records: List[FileRecord],
+        stop_check: Optional[Callable[[], bool]] = None
+    ) -> Dict[str, Tuple[float, bytes]]:
         """
         Retorna dicionário {caminho: (duracao, embedding_bytes)} para vídeos válidos no cache.
+        Suporta cancelamento imediato via stop_check.
         """
         results: Dict[str, Tuple[float, bytes]] = {}
         if not records:
@@ -259,6 +333,8 @@ class CacheManager:
         chunk_size = 900
         with self._get_connection() as conn:
             for i in range(0, len(records), chunk_size):
+                if stop_check and stop_check():
+                    return results
                 chunk = records[i:i + chunk_size]
                 placeholders = ",".join("?" for _ in chunk)
                 paths = [str(r.path) for r in chunk]

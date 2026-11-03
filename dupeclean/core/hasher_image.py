@@ -67,23 +67,33 @@ def extract_image_embeddings(
         return [], torch.empty((0, LOW_FREQ_SIZE * LOW_FREQ_SIZE), device=device, dtype=dtype)
 
     # 1. Consulta em lote ao cache persistente
-    cached_map = cache.get_image_cache(records)
+    cached_map = cache.get_image_cache(records, stop_check=stop_check)
+    if stop_check and stop_check():
+        return [], torch.empty((0, LOW_FREQ_SIZE * LOW_FREQ_SIZE), device=device, dtype=dtype)
     cached_count = len(cached_map)
 
     valid_records: List[FileRecord] = []
-    all_embeddings_list: List[torch.Tensor] = []
+    cached_arrays: List[np.ndarray] = []
 
     # Separa imagens já cacheadas das que precisam de processamento
     to_process: List[FileRecord] = []
     for rec in records:
+        if stop_check and stop_check():
+            return [], torch.empty((0, LOW_FREQ_SIZE * LOW_FREQ_SIZE), device=device, dtype=dtype)
         p_key = str(rec.path)
         if p_key in cached_map:
             valid_records.append(rec)
             # Reconstrói array a partir do BLOB binário FP16 [64 floats]
             arr = np.frombuffer(cached_map[p_key], dtype=np.float16).reshape(1, LOW_FREQ_SIZE * LOW_FREQ_SIZE)
-            all_embeddings_list.append(torch.tensor(arr, device=device, dtype=dtype))
+            cached_arrays.append(arr)
         else:
             to_process.append(rec)
+
+    all_embeddings_list: List[torch.Tensor] = []
+    if cached_arrays:
+        # Vetorização em lote único na GPU: elimina overhead de milhares de CUDA mallocs individuais
+        stacked_cached = np.concatenate(cached_arrays, axis=0)
+        all_embeddings_list.append(torch.tensor(stacked_cached, device=device, dtype=dtype))
 
     if progress_callback and cached_count > 0:
         progress_callback(f"Loading cached photos ({cached_count}/{total})...", cached_count, total)
@@ -100,18 +110,29 @@ def extract_image_embeddings(
 
     num_workers = min(32, max(4, os.cpu_count() or 4))
     uncached_total = len(to_process)
+    effective_batch = min(batch_size, 256)
 
     executor = ThreadPoolExecutor(max_workers=num_workers)
     try:
-        for chunk_start in range(0, uncached_total, batch_size):
+        for chunk_start in range(0, uncached_total, effective_batch):
             if stop_check and stop_check():
                 break
 
-            chunk_records = to_process[chunk_start : chunk_start + batch_size]
+            chunk_records = to_process[chunk_start : chunk_start + effective_batch]
             task_args = [(rec, stop_check) for rec in chunk_records]
 
-            # Decodifica e redimensiona em paralelo usando todos os núcleos da CPU
-            loaded_items = list(executor.map(_load_single_image, task_args))
+            # Decodifica e redimensiona em paralelo com cancelamento responsivo em tempo real
+            futures = [executor.submit(_load_single_image, arg) for arg in task_args]
+            loaded_items = []
+            for f in futures:
+                if stop_check and stop_check():
+                    for pending in futures:
+                        pending.cancel()
+                    break
+                try:
+                    loaded_items.append(f.result())
+                except Exception:
+                    loaded_items.append(None)
 
             if stop_check and stop_check():
                 break

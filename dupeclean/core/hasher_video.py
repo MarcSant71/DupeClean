@@ -170,7 +170,9 @@ def extract_video_embeddings(
         return [], torch.empty((0, LOW_FREQ_SIZE * LOW_FREQ_SIZE * 5), device=device, dtype=dtype)
 
     # 1. Consulta em lote ao cache persistente
-    cached_map = cache.get_video_cache(records)
+    cached_map = cache.get_video_cache(records, stop_check=stop_check)
+    if stop_check and stop_check():
+        return [], torch.empty((0, LOW_FREQ_SIZE * LOW_FREQ_SIZE * 5), device=device, dtype=dtype)
     cached_count = len(cached_map)
 
     valid_records: List[FileRecord] = []
