@@ -30,7 +30,7 @@ if exist "dist\DupeClean" rd /s /q "dist\DupeClean"
 :: 3. Freeze Python into standalone distribution via PyInstaller
 echo.
 echo [3/3] Freezing Python runtime and bundling CUDA dependencies...
-".venv\Scripts\pyinstaller.exe" --noconfirm dupeclean.spec
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm dupeclean.spec
 
 if not exist "dist\DupeClean\DupeClean.exe" (
     echo.
@@ -66,7 +66,7 @@ if defined ISCC_PATH (
     echo 2. Run this script again, or right-click 'installer.iss' and select 'Compile'.
     echo.
     echo In the meantime, you can distribute the standalone folder:
-    echo 'dist\DupeClean' (or zip it as DupeClean-Portable.zip).
+    echo 'dist\DupeClean' (or package it using build_portable.bat).
 )
 
 echo.

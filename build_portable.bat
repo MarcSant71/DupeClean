@@ -1,5 +1,5 @@
 @echo off
-title DupeClean - Build Portable ZIP
+title DupeClean - Build Portable 7z Package
 cd /d "%~dp0"
 
 echo =========================================================
