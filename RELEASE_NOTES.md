@@ -5,6 +5,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 - **Multi-Tier Pipeline:** Size grouping, xxHash64 exact hashing, and perceptual similarity.
 - **Hardware NVDEC Acceleration:** High-throughput video decoding using dedicated NVIDIA silicon decoders.
 - **Reference Folder Protection:** Protects master directories (`Ref`) from accidental deletion.
+- **State & Folder Persistence:** Automatically remembers scan folders and Reference flags in local SQLite database (`data/DupeClean.db`) across sessions.
 - **100% Portable:** Pre-bundled with Python runtime, CUDA DLLs, and FFmpeg. No installation required.
 - **KISS Dark UI:** Clean PySide6 interface with non-blocking real-time telemetry.
 
