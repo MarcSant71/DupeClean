@@ -1,0 +1,50 @@
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache & compiled bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+build/
+dist/
+*.egg-info/
+
+# Heavy binaries & external tools
+bin/
+*.exe
+*.dll
+
+# Databases & local caches
+cache/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs & crash reports
+*.log
+crash.log
+
+# Temporary test / media outputs
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.mkv
+*.tmp
+
+# Operating system artifacts
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# IDE configs
+.idea/
+.vscode/
+*.swp
+*.swo

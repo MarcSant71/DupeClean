@@ -1,0 +1,256 @@
+"""
+Tema Dark Moderno inspirado na estética do Krokiet / Czkawka.
+"""
+
+DARK_THEME_QSS = """
+QMainWindow, QWidget {
+    background-color: #18181b;
+    color: #f4f4f5;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    font-size: 13px;
+}
+
+/* Painéis e Caixas de Grupo */
+QGroupBox {
+    border: 1px solid #3f3f46;
+    border-radius: 6px;
+    margin-top: 10px;
+    font-weight: bold;
+    padding-top: 15px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    color: #38bdf8;
+    padding: 0 4px;
+}
+
+/* Botões */
+QPushButton {
+    background-color: #27272a;
+    color: #fafafa;
+    border: 1px solid #3f3f46;
+    border-radius: 5px;
+    padding: 6px 14px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #3f3f46;
+    border-color: #71717a;
+}
+QPushButton:pressed {
+    background-color: #18181b;
+}
+QPushButton:disabled {
+    background-color: #27272a;
+    color: #71717a;
+    border-color: #27272a;
+}
+
+/* Botão de Ação Primária (Escanear) */
+QPushButton#primaryButton {
+    background-color: #0284c7;
+    color: #ffffff;
+    border: none;
+    font-weight: bold;
+}
+QPushButton#primaryButton:hover {
+    background-color: #0369a1;
+}
+QPushButton#primaryButton:disabled {
+    background-color: #3f3f46;
+    color: #71717a;
+    border: 1px solid #27272a;
+}
+
+/* Botão de Parar */
+QPushButton#stopButton {
+    background-color: #3f3f46;
+    color: #f4f4f5;
+    border: 1px solid #52525b;
+    font-weight: bold;
+}
+QPushButton#stopButton:hover {
+    background-color: #52525b;
+}
+QPushButton#stopButton:disabled {
+    background-color: #27272a;
+    color: #52525b;
+    border: 1px solid #27272a;
+}
+
+/* Botão de Exclusão (Lixeira) */
+QPushButton#dangerButton {
+    background-color: #b91c1c;
+    color: #ffffff;
+    border: none;
+    font-weight: bold;
+}
+QPushButton#dangerButton:hover {
+    background-color: #991b1b;
+}
+
+/* Botão Quadradinho com Checkmark da Pasta de Referência (Estilo Krokiet) */
+QPushButton#refSquare {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
+    border: 1px solid #52525b;
+    border-radius: 3px;
+    background-color: #202024;
+    color: transparent;
+    font-size: 12px;
+    font-weight: 900;
+    padding: 0px;
+    text-align: center;
+}
+QPushButton#refSquare:hover {
+    border-color: #38bdf8;
+}
+QPushButton#refSquare:checked {
+    background-color: #38bdf8;
+    border-color: #38bdf8;
+    color: #0f172a;
+}
+
+/* Tabelas e Árvores */
+QTreeWidget, QTableWidget {
+    background-color: #27272a;
+    alternate-background-color: #202023;
+    border: 1px solid #3f3f46;
+    border-radius: 6px;
+    gridline-color: #3f3f46;
+    color: #f4f4f5;
+    outline: none;
+}
+QTreeWidget::item, QTableWidget::item {
+    padding: 4px;
+    border-bottom: 1px solid #2e2e33;
+}
+QTreeWidget::item:selected, QTableWidget::item:selected {
+    background-color: #0369a1;
+    color: #ffffff;
+}
+
+/* Cabeçalhos de Tabela */
+QHeaderView::section {
+    background-color: #1f1f23;
+    color: #a1a1aa;
+    padding: 6px 8px;
+    border: none;
+    border-right: 1px solid #3f3f46;
+    border-bottom: 1px solid #3f3f46;
+    font-weight: bold;
+}
+QHeaderView::section:hover {
+    background-color: #27272a;
+    color: #38bdf8;
+    cursor: pointer;
+}
+
+/* Sliders */
+QSlider::groove:horizontal {
+    border: 1px solid #3f3f46;
+    height: 6px;
+    background: #27272a;
+    border-radius: 3px;
+}
+QSlider::sub-page:horizontal {
+    background: #0284c7;
+    border-radius: 3px;
+}
+QSlider::handle:horizontal {
+    background: #38bdf8;
+    border: 1px solid #0284c7;
+    width: 16px;
+    margin-top: -5px;
+    margin-bottom: -5px;
+    border-radius: 8px;
+}
+
+/* Barra de Progresso */
+QProgressBar {
+    border: 1px solid #3f3f46;
+    border-radius: 4px;
+    text-align: center;
+    background-color: #27272a;
+    color: #fafafa;
+    font-weight: bold;
+    min-height: 18px;
+    max-height: 18px;
+}
+QProgressBar::chunk {
+    background-color: #0284c7;
+    border-radius: 3px;
+}
+
+/* Container da Barra Lateral (Divisão Contínua e Elegante de Cima a Baixo) */
+QWidget#sidebarContainer {
+    background-color: #151518;
+    border-right: 1px solid #2e2e33;
+}
+
+/* Barra Lateral de Modos */
+QListWidget#sidebarModes {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    font-size: 14px;
+    font-weight: 500;
+}
+QListWidget#sidebarModes:focus {
+    border: none;
+    outline: none;
+}
+QListWidget#sidebarModes::item {
+    padding: 12px 14px;
+    border: none;
+    border-radius: 6px;
+    border-left: 3px solid transparent;
+    outline: none;
+    margin-bottom: 2px;
+}
+QListWidget#sidebarModes::item:hover {
+    background-color: #222226;
+}
+QListWidget#sidebarModes::item:selected {
+    background-color: #27272a;
+    color: #38bdf8;
+    border: none;
+    border-left: 3px solid #38bdf8;
+    font-weight: bold;
+    outline: none;
+}
+QListWidget#sidebarModes::item:focus {
+    outline: none;
+    border: none;
+    border-left: 3px solid #38bdf8;
+}
+
+/* Menus de Seleção e Contexto (Estilo Krokiet) */
+QMenu {
+    background-color: #202024;
+    color: #f4f4f5;
+    border: 1px solid #3f3f46;
+    border-radius: 6px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 18px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+QMenu::item:selected {
+    background-color: #0284c7;
+    color: #ffffff;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #3f3f46;
+    margin: 4px 6px;
+}
+"""
