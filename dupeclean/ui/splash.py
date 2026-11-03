@@ -1,6 +1,6 @@
 """
-Tela de Splash Screen de Inicialização Instantânea do DupeClean.
-Aparece imediatamente (< 100ms) ao clicar no app enquanto o PyTorch e a GPU são inicializados.
+Instant splash screen for DupeClean startup.
+Displays immediately (< 50ms) while PyTorch and GPU run hardware initialization.
 """
 
 from typing import Optional
@@ -70,7 +70,7 @@ class SplashScreen(QWidget):
         layout.addLayout(title_layout)
 
         # 2. Subtítulo Conciso
-        lbl_sub = QLabel("Deduplicação de Arquivos por GPU")
+        lbl_sub = QLabel("GPU-Accelerated Duplicate File Finder")
         lbl_sub.setStyleSheet("font-size: 12px; color: #a1a1aa; font-weight: 500;")
         lbl_sub.setFixedHeight(22)
         layout.addWidget(lbl_sub)
@@ -78,7 +78,7 @@ class SplashScreen(QWidget):
         layout.addSpacing(10)
 
         # 3. Status de Carregamento
-        self.lbl_status = QLabel("Inicializando...")
+        self.lbl_status = QLabel("Initializing...")
         self.lbl_status.setStyleSheet("color: #e4e4e7; font-size: 12px;")
         self.lbl_status.setFixedHeight(20)
         layout.addWidget(self.lbl_status)

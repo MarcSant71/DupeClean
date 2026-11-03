@@ -1,6 +1,6 @@
 """
-Painel de Pastas Incluídas e Excluídas com suporte completo a Drag & Drop do Windows
-e botão toggle da Pasta de Referência (Ref).
+Folder panel for included and excluded directories with Windows Drag & Drop support
+and Reference Folder (Ref) toggle button.
 """
 
 from pathlib import Path
@@ -110,27 +110,27 @@ class FolderPanel(QWidget):
         main_layout.setSpacing(10)
 
         # -------------------------------------------------------------
-        # 1. Pastas Incluídas (com botão Ref e Drag & Drop)
+        # 1. Folders to Scan (with Ref button and Drag & Drop)
         # -------------------------------------------------------------
-        inc_group = QGroupBox("Pastas a Escanear (Arraste e solte pastas aqui)")
+        inc_group = QGroupBox("Folders to Scan (Drag & drop folders here)")
         inc_layout = QVBoxLayout(inc_group)
 
         self.table_included = DropTableWidget(0, 2)
-        self.table_included.setHorizontalHeaderLabels(["Ref", "Caminho da Pasta"])
-        self.table_included.verticalHeader().setVisible(False)  # Remove o numerador lateral
+        self.table_included.setHorizontalHeaderLabels(["Ref", "Folder Path"])
+        self.table_included.verticalHeader().setVisible(False)
         self.table_included.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.table_included.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table_included.setColumnWidth(0, 50)
         self.table_included.paths_dropped.connect(self._add_multiple_included_paths)
         inc_layout.addWidget(self.table_included)
 
-        # Botões de ação para pastas incluídas
+        # Action buttons for included folders
         btn_layout_inc = QHBoxLayout()
-        self.btn_add_inc = QPushButton("+ Adicionar Pasta")
+        self.btn_add_inc = QPushButton("+ Add Folder")
         self.btn_add_inc.clicked.connect(self._browse_included_folder)
-        self.btn_remove_inc = QPushButton("- Remover Selecionada")
+        self.btn_remove_inc = QPushButton("- Remove Selected")
         self.btn_remove_inc.clicked.connect(self._remove_selected_included)
-        self.btn_clear_inc = QPushButton("Limpar Tudo")
+        self.btn_clear_inc = QPushButton("Clear All")
         self.btn_clear_inc.clicked.connect(self._clear_all_included)
 
         btn_layout_inc.addWidget(self.btn_add_inc)
@@ -141,9 +141,9 @@ class FolderPanel(QWidget):
         main_layout.addWidget(inc_group, stretch=1)
 
         # -------------------------------------------------------------
-        # 2. Pastas Excluídas (com suporte a Drag & Drop)
+        # 2. Excluded Folders (with Drag & Drop support)
         # -------------------------------------------------------------
-        exc_group = QGroupBox("Pastas Excluídas (Arraste e solte pastas aqui)")
+        exc_group = QGroupBox("Excluded Folders (Drag & drop folders here)")
         exc_layout = QVBoxLayout(exc_group)
 
         self.list_excluded = DeletableListWidget()
@@ -151,9 +151,9 @@ class FolderPanel(QWidget):
         exc_layout.addWidget(self.list_excluded)
 
         btn_layout_exc = QHBoxLayout()
-        self.btn_add_exc = QPushButton("+ Adicionar Exclusão")
+        self.btn_add_exc = QPushButton("+ Add Exclusion")
         self.btn_add_exc.clicked.connect(self._browse_excluded_folder)
-        self.btn_remove_exc = QPushButton("- Remover")
+        self.btn_remove_exc = QPushButton("- Remove")
         self.btn_remove_exc.clicked.connect(self._remove_selected_excluded)
 
         btn_layout_exc.addWidget(self.btn_add_exc)
@@ -163,7 +163,7 @@ class FolderPanel(QWidget):
         main_layout.addWidget(exc_group, stretch=1)
 
     def _browse_included_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta para Escaneamento")
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder to Scan")
         if folder:
             self.add_included_path(Path(folder), is_reference=False)
 
@@ -178,7 +178,7 @@ class FolderPanel(QWidget):
     def add_included_path(self, path: Path, is_reference: bool = False):
         path_str = str(path.resolve())
 
-        # Evita duplicatas na lista de pastas
+        # Avoid duplicates in folder list
         for row in range(self.table_included.rowCount()):
             item = self.table_included.item(row, 1)
             if item and item.text().lower() == path_str.lower():
@@ -187,7 +187,7 @@ class FolderPanel(QWidget):
         row = self.table_included.rowCount()
         self.table_included.insertRow(row)
 
-        # Botão quadradinho com Checkmark toggle (Estilo Krokiet)
+        # Checkmark toggle button (Krokiet style)
         cell_widget = QWidget()
         cell_layout = QHBoxLayout(cell_widget)
         cell_layout.setContentsMargins(0, 0, 0, 0)
@@ -197,13 +197,13 @@ class FolderPanel(QWidget):
         ref_btn.setObjectName("refSquare")
         ref_btn.setCheckable(True)
         ref_btn.setChecked(is_reference)
-        ref_btn.setToolTip("Marcar como Pasta de Referência.\nArquivos nesta pasta NUNCA serão sugeridos para exclusão.")
+        ref_btn.setToolTip("Mark as Reference Folder.\nFiles in this folder will NEVER be suggested for deletion.")
         ref_btn.toggled.connect(lambda checked, b=ref_btn: b.setText("✓" if checked else ""))
 
         cell_layout.addWidget(ref_btn)
         self.table_included.setCellWidget(row, 0, cell_widget)
 
-        # Caminho
+        # Path item
         path_item = QTableWidgetItem(path_str)
         path_item.setFlags(path_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.table_included.setItem(row, 1, path_item)
@@ -217,7 +217,7 @@ class FolderPanel(QWidget):
         self.table_included.setRowCount(0)
 
     def _browse_excluded_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta a Ignorar")
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder to Exclude")
         if folder:
             self.add_excluded_path(Path(folder))
 

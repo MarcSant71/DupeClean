@@ -99,7 +99,7 @@ def crawl_directories(
                     total_scanned += 1
 
                     if progress_callback and total_scanned % 500 == 0:
-                        progress_callback(f"Rastreando arquivos ({total_scanned} encontrados)...", total_scanned)
+                        progress_callback(f"Crawling files ({total_scanned} found)...", total_scanned)
 
                 except (OSError, PermissionError):
                     # Arquivo inacessível ou sem permissão

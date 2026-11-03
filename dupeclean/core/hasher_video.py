@@ -188,7 +188,7 @@ def extract_video_embeddings(
             to_process.append(rec)
 
     if progress_callback and cached_count > 0:
-        progress_callback(f"Carregando vídeos ({cached_count}/{total})...", cached_count, total)
+        progress_callback(f"Loading cached videos ({cached_count}/{total})...", cached_count, total)
 
     # 2. Se todos os vídeos já estavam em cache, retorna de imediato
     if not to_process or (stop_check and stop_check()):
@@ -217,7 +217,7 @@ def extract_video_embeddings(
 
         current_total_done = cached_count + idx + 1
         if progress_callback:
-            progress_callback(f"Processando vídeos ({current_total_done}/{total})...", current_total_done, total)
+            progress_callback(f"Processing videos ({current_total_done}/{total})...", current_total_done, total)
 
         duration = get_video_duration(rec.path, ffprobe_path)
         if not duration or duration <= 0:

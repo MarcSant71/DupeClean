@@ -42,11 +42,11 @@ def test_exact_duplicates():
         assert len(groups) == 1, f"Esperado 1 grupo, obtido {len(groups)}"
         assert len(groups[0].files) == 2, f"Esperado 2 arquivos no grupo, obtido {len(groups[0].files)}"
 
-        # Valida regra de pasta de referência (arquivo de referência NÃO pode ser marcado)
+        # Validate reference folder rule (reference files CANNOT be selected)
         to_remove = apply_reference_rules(groups[0])
-        assert file_a not in to_remove, "ERRO: Arquivo de referência foi marcado para exclusão!"
-        assert file_b in to_remove, "Arquivo duplicado normal deveria ser marcado para exclusão!"
-        print("[OK] Teste de Duplicatas Exatas e Protecao de Referencia passou com sucesso!")
+        assert file_a not in to_remove, "ERROR: Reference file was marked for deletion!"
+        assert file_b in to_remove, "Duplicate file should be marked for deletion!"
+        print("[OK] Exact Duplicates & Reference Protection test passed successfully!")
 
 
 def test_image_gpu_embeddings():
@@ -88,12 +88,12 @@ def test_image_gpu_embeddings():
         assert groups[0].similarity >= 0.95, f"Similaridade esperada >= 95%, obtida: {groups[0].similarity}"
 
         to_remove = apply_reference_rules(groups[0])
-        assert img_a not in to_remove, "ERRO: Imagem de referência foi marcada!"
-        assert img_b in to_remove, "Cópia da imagem deveria ser marcada!"
-        print(f"[OK] Teste de Imagens Similares na RTX 5090 (Similaridade: {groups[0].similarity*100:.1f}%) passou com sucesso!")
+        assert img_a not in to_remove, "ERROR: Reference image was marked for deletion!"
+        assert img_b in to_remove, "Image copy should be marked for deletion!"
+        print(f"[OK] Similar Images GPU Tensor Core test (Similarity: {groups[0].similarity*100:.1f}%) passed successfully!")
 
 
 if __name__ == "__main__":
     test_exact_duplicates()
     test_image_gpu_embeddings()
-    print("\nTODOS OS TESTES DE INTEGRAÇÃO PASSARAM!")
+    print("\nALL INTEGRATION TESTS PASSED SUCCESSFULLY!")

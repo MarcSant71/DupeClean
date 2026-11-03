@@ -16,17 +16,17 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     if not torch.cuda.is_available():
         return (
             False,
-            "Nenhuma GPU NVIDIA com suporte a CUDA foi detectada no sistema.\n\n"
-            "O DupeClean foi desenhado exclusivamente para aceleração por hardware\n"
-            "em placas NVIDIA GeForce RTX (Séries 30, 40 ou 50).",
+            "No CUDA-capable NVIDIA GPU was detected on this system.\n\n"
+            "DupeClean is engineered specifically for hardware acceleration\n"
+            "on NVIDIA GeForce RTX GPUs (30, 40, or 50 Series).",
             {}
         )
 
     device_count = torch.cuda.device_count()
     if device_count == 0:
-        return False, "Nenhum dispositivo CUDA acessível.", {}
+        return False, "No accessible CUDA devices found.", {}
 
-    # Obter dispositivo primário
+    # Get primary device
     device_id = 0
     device_name = torch.cuda.get_device_name(device_id)
     capability = torch.cuda.get_device_capability(device_id)
@@ -35,27 +35,27 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
 
     major, minor = capability
 
-    # Arquiteturas aceitas:
-    # 8.6 / 8.9: Ampere / Ada Lovelace (RTX 30 e 40)
+    # Supported architectures:
+    # 8.6 / 8.9: Ampere / Ada Lovelace (RTX 30 and 40)
     # 9.0: Hopper
     # 10.0 / 12.0: Blackwell (RTX 50)
     if (major < 8) or (major == 8 and minor < 6):
         return (
             False,
-            f"GPU incompatível detectada: {device_name}\n\n"
-            f"Capacidade de Computação: {major}.{minor}\n"
-            "O DupeClean exige uma GPU NVIDIA RTX Séries 30, 40 ou 50\n"
-            "(Compute Capability 8.6 ou superior).",
+            f"Incompatible GPU detected: {device_name}\n\n"
+            f"Compute Capability: {major}.{minor}\n"
+            "DupeClean requires an NVIDIA RTX 30, 40, or 50 Series GPU\n"
+            "(Compute Capability 8.6 or higher).",
             {}
         )
 
-    # Identificar família da arquitetura
+    # Architecture family identification
     if major >= 12 or major == 10:
-        arch_name = "Blackwell (RTX Série 50)"
+        arch_name = "Blackwell (RTX 50 Series)"
     elif major == 8 and minor == 9:
-        arch_name = "Ada Lovelace (RTX Série 40)"
+        arch_name = "Ada Lovelace (RTX 40 Series)"
     elif major == 8 and minor == 6:
-        arch_name = "Ampere (RTX Série 30)"
+        arch_name = "Ampere (RTX 30 Series)"
     else:
         arch_name = f"NVIDIA Architecture ({major}.{minor})"
 

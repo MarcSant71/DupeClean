@@ -1,6 +1,6 @@
 """
-Tabela/Árvore de Resultados de Duplicatas com suporte a agrupamento,
-marcações de seleção e proteção visual de Pastas de Referência.
+Duplicate results tree widget with group headers,
+selection rules, and visual Reference Folder protection.
 """
 
 from pathlib import Path
@@ -113,8 +113,8 @@ class ResultsWidget(QWidget):
         self.tree = QTreeWidget()
         self.tree.setColumnCount(7)
         self.tree.setHeaderLabels([
-            "Seleção", "Nome do Arquivo", "Tamanho", "Data de Modificação",
-            "Similaridade", "Origem", "Caminho Completo"
+            "Selection", "File Name", "Size", "Date Modified",
+            "Similarity", "Origin", "Full Path"
         ])
 
         header = self.tree.header()
@@ -150,8 +150,8 @@ class ResultsWidget(QWidget):
             reclaim_str = _format_size(group.reclaimable_bytes)
             sim_pct = f"{group.similarity * 100:.1f}%"
             group_header = (
-                f"Grupo #{group.group_id}  •  {len(group.files)} Arquivos  •  "
-                f"Similaridade: {sim_pct}  •  Recuperável: {reclaim_str}"
+                f"Group #{group.group_id}  •  {len(group.files)} Files  •  "
+                f"Similarity: {sim_pct}  •  Reclaimable: {reclaim_str}"
             )
 
             parent_item = SortableGroupItem(group, self.tree)
@@ -164,40 +164,40 @@ class ResultsWidget(QWidget):
             parent_item.setBackground(0, QBrush(QColor("#27272a")))
             parent_item.setForeground(1, QBrush(QColor("#38bdf8")))
 
-            # Itens Filhos: Arquivos do Grupo
+            # Child items: Files in group
             for file_rec in group.files:
                 child_item = SortableFileItem(file_rec, group.similarity, parent_item)
 
-                # Controle de Seleção (Arquivos de Referência são 100% protegidos e não checáveis)
+                # Selection control (Reference files are 100% protected and uncheckable)
                 if file_rec.is_reference:
                     child_item.setFlags(child_item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                     child_item.setText(0, "🔒")
                     child_item.setTextAlignment(0, Qt.AlignmentFlag.AlignCenter)
-                    child_item.setToolTip(0, "Arquivo protegido (Pasta de Referência). Não pode ser selecionado nem excluído.")
+                    child_item.setToolTip(0, "Protected file (Reference Folder). Cannot be selected or deleted.")
                 else:
                     child_item.setFlags(child_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     child_item.setCheckState(0, Qt.CheckState.Unchecked)
 
-                # Nome
+                # Name
                 child_item.setText(1, file_rec.name)
 
-                # Tamanho
+                # Size
                 child_item.setText(2, _format_size(file_rec.size))
 
-                # Data de Modificação
-                mtime_str = datetime.fromtimestamp(file_rec.mtime).strftime("%d/%m/%Y %H:%M:%S")
+                # Date Modified
+                mtime_str = datetime.fromtimestamp(file_rec.mtime).strftime("%m/%d/%Y %H:%M:%S")
                 child_item.setText(3, mtime_str)
 
-                # Similaridade
+                # Similarity
                 child_item.setText(4, sim_pct)
 
-                # Origem (Destaca se for Referência)
+                # Origin (Highlight reference files)
                 if file_rec.is_reference:
-                    child_item.setText(5, "[REFERÊNCIA]")
+                    child_item.setText(5, "[REFERENCE]")
                     child_item.setForeground(5, QBrush(QColor("#f59e0b")))
-                    child_item.setToolTip(5, "Arquivo protegido em Pasta de Referência.\nNão será sugerido para exclusão.")
+                    child_item.setToolTip(5, "Protected file in Reference Folder.\nWill never be suggested for deletion.")
                 else:
-                    child_item.setText(5, "Duplicata")
+                    child_item.setText(5, "Duplicate")
                     child_item.setForeground(5, QBrush(QColor("#a1a1aa")))
 
                 # Caminho Completo
@@ -393,11 +393,11 @@ class ResultsWidget(QWidget):
 
         menu = QMenu(self)
 
-        act_open_folder = QAction("Abrir Pasta no Explorer", self)
+        act_open_folder = QAction("Open Containing Folder", self)
         act_open_folder.triggered.connect(lambda: self._open_in_explorer(file_rec.path))
         menu.addAction(act_open_folder)
 
-        act_open_file = QAction("Abrir Arquivo", self)
+        act_open_file = QAction("Open File", self)
         act_open_file.triggered.connect(lambda: os.startfile(str(file_rec.path)))
         menu.addAction(act_open_file)
 

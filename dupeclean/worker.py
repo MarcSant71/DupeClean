@@ -38,7 +38,7 @@ class ScanWorker(QThread):
 
     def run(self):
         try:
-            self.progress_status.emit("Rastreando pastas no disco...", 0, 0)
+            self.progress_status.emit("Crawling folders on disk...", 0, 0)
 
             # 1. Rastreamento
             records = crawl_directories(
@@ -56,7 +56,7 @@ class ScanWorker(QThread):
                 self.scan_finished.emit([])
                 return
 
-            self.progress_status.emit(f"{len(records)} arquivos encontrados. Iniciando deduplicação...", 0, len(records))
+            self.progress_status.emit(f"{len(records)} files found. Starting deduplication...", 0, len(records))
 
             # 2. Execução conforme o Modo Selecionado com Cache Persistente
             groups: List[DuplicateGroup] = []
@@ -79,7 +79,7 @@ class ScanWorker(QThread):
                     cache_manager=cache
                 )
                 if not self.isInterruptionRequested() and valid_records:
-                    self.progress_status.emit("Comparando fotos...", 0, len(valid_records))
+                    self.progress_status.emit("Clustering similar photos...", 0, len(valid_records))
                     groups = cluster_by_similarity(
                         records=valid_records,
                         embeddings=embeddings,
@@ -95,7 +95,7 @@ class ScanWorker(QThread):
                     cache_manager=cache
                 )
                 if not self.isInterruptionRequested() and valid_records:
-                    self.progress_status.emit("Comparando vídeos...", 0, len(valid_records))
+                    self.progress_status.emit("Clustering similar videos...", 0, len(valid_records))
                     groups = cluster_by_similarity(
                         records=valid_records,
                         embeddings=embeddings,
@@ -107,4 +107,4 @@ class ScanWorker(QThread):
                 self.scan_finished.emit(groups)
 
         except Exception as e:
-            self.scan_error.emit(f"Erro durante a execução: {str(e)}")
+            self.scan_error.emit(f"Error during scan: {str(e)}")

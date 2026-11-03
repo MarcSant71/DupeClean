@@ -86,7 +86,7 @@ def extract_image_embeddings(
             to_process.append(rec)
 
     if progress_callback and cached_count > 0:
-        progress_callback(f"Carregando fotos ({cached_count}/{total})...", cached_count, total)
+        progress_callback(f"Loading cached photos ({cached_count}/{total})...", cached_count, total)
 
     # 2. Se todas estavam no cache, finaliza imediatamente!
     if not to_process or (stop_check and stop_check()):
@@ -149,7 +149,7 @@ def extract_image_embeddings(
             done_count = cached_count + chunk_start + len(chunk_records)
             if progress_callback:
                 progress_callback(
-                    f"Processando fotos ({min(done_count, total)}/{total})...",
+                    f"Processing photos ({min(done_count, total)}/{total})...",
                     min(done_count, total),
                     total
                 )

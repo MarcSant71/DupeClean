@@ -42,9 +42,9 @@ def find_exact_duplicates(
     cache_hits_prefix = sum(1 for f in flat_candidates if str(f.path) in cached_exact and cached_exact[str(f.path)][0])
 
     if progress_callback and cache_hits_prefix > 0:
-        progress_callback(f"Carregando cabeçalhos ({cache_hits_prefix}/{total_candidates})...", cache_hits_prefix, total_candidates)
+        progress_callback(f"Loading cached headers ({cache_hits_prefix}/{total_candidates})...", cache_hits_prefix, total_candidates)
 
-    # Estágio 2: Hash do cabeçalho (primeiros 4 KB)
+    # Stage 2: Header hash (first 4 KB)
     by_header_hash = defaultdict(list)
     processed = 0
     new_prefix_entries: List[Tuple[str, int, float, Optional[str], Optional[str]]] = []
@@ -58,7 +58,7 @@ def find_exact_duplicates(
 
             processed += 1
             if progress_callback and processed % 200 == 0:
-                progress_callback("Comparando cabeçalhos...", processed, total_candidates)
+                progress_callback("Comparing headers...", processed, total_candidates)
 
             p_key = str(rec.path)
             cached_data = cached_exact.get(p_key)
@@ -101,7 +101,7 @@ def find_exact_duplicates(
 
             deep_processed += 1
             if progress_callback and deep_processed % 50 == 0:
-                progress_callback("Calculando hash completo...", deep_processed, total_deep_check)
+                progress_callback("Computing full hashes...", deep_processed, total_deep_check)
 
             p_key = str(rec.path)
             cached_data = cached_exact.get(p_key)

@@ -1,6 +1,6 @@
 """
-Ponto de Entrada Principal do DupeClean.
-Inicializa o Hardware Gatekeeper, valida a GPU NVIDIA RTX e carrega a interface.
+Main entry point for DupeClean.
+Initializes the Hardware Gatekeeper, validates the NVIDIA RTX GPU, and launches the UI.
 """
 
 import os
@@ -36,8 +36,8 @@ def excepthook(exc_type, exc_value, exc_tb):
     try:
         QMessageBox.critical(
             None,
-            "Erro Inesperado - DupeClean",
-            f"Ocorreu um erro ao executar a aplicação:\n\n{exc_value}\n\nDetalhes gravados em crash.log"
+            "Unexpected Error - DupeClean",
+            f"An error occurred while running the application:\n\n{exc_value}\n\nDetails saved to crash.log"
         )
     except Exception:
         pass
@@ -69,7 +69,7 @@ def main():
             splash.close()
             QMessageBox.critical(
                 None,
-                "Hardware Incompatível - DupeClean",
+                "Incompatible Hardware - DupeClean",
                 error_msg
             )
             app.exit(1)

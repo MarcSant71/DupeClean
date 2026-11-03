@@ -1,7 +1,7 @@
 """
-Janela Principal do DupeClean (PySide6).
-Reúne o painel lateral de ferramentas, tabela de resultados, controles de ação,
-slider de similaridade e o painel de pastas com suporte a Referência e Drag & Drop.
+DupeClean Main Window (PySide6).
+Combines tool sidebar, results tree, action controls,
+similarity slider, and folder panel with Reference protection and Drag & Drop.
 """
 
 import os
@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
         self.ui_timer.timeout.connect(self._update_telemetry_tick)
 
         self.setWindowIcon(self._create_app_icon())
-        self.setWindowTitle("DupeClean - Deduplicação de Arquivos por GPU")
+        self.setWindowTitle("DupeClean - GPU-Accelerated Duplicate File Finder")
         self.resize(1280, 820)
         self._init_ui()
 
@@ -74,7 +74,7 @@ class MainWindow(QMainWindow):
         main_h_layout.setSpacing(0)
 
         # -------------------------------------------------------------
-        # 1. Barra Lateral de Modos de Escaneamento
+        # 1. Sidebar - Scan Modes & Tools
         # -------------------------------------------------------------
         sidebar_widget = QWidget()
         sidebar_widget.setObjectName("sidebarContainer")
@@ -83,7 +83,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(10, 15, 10, 15)
         sidebar_layout.setSpacing(10)
 
-        # Logo / Título
+        # Logo / Title
         title_layout = QHBoxLayout()
         title_layout.setSpacing(8)
         title_layout.setContentsMargins(0, 0, 0, 0)
@@ -100,11 +100,11 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addLayout(title_layout)
 
-        lbl_subtitle = QLabel("Deduplicação de Arquivos por GPU")
+        lbl_subtitle = QLabel("GPU-Accelerated Duplicate File Finder")
         lbl_subtitle.setStyleSheet("font-size: 11px; color: #71717a;")
         sidebar_layout.addWidget(lbl_subtitle)
 
-        # Badge de GPU (KISS: Minimalista, linha única)
+        # GPU Badge (KISS: Minimalist, single line)
         gpu_box = QFrame()
         gpu_box.setStyleSheet("background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 4px 6px;")
         gpu_box.setToolTip(f"{self.gpu_info.get('arch', 'RTX')} • {self.gpu_info.get('vram_gb', 0)} GB VRAM")
@@ -117,22 +117,22 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addSpacing(10)
 
-        # Lista de Ferramentas
+        # Mode List
         self.sidebar_modes = QListWidget()
         self.sidebar_modes.setObjectName("sidebarModes")
         self.sidebar_modes.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        item_exact = QListWidgetItem("📁 Arquivos Duplicados")
+        item_exact = QListWidgetItem("📁 Duplicate Files")
         item_exact.setData(Qt.ItemDataRole.UserRole, ScanMode.EXACT)
-        item_exact.setToolTip("Encontra arquivos 100% idênticos usando xxHash acelerado.")
+        item_exact.setToolTip("Finds 100% identical files using accelerated xxHash.")
 
-        item_images = QListWidgetItem("🖼️ Imagens Similares")
+        item_images = QListWidgetItem("🖼️ Similar Images")
         item_images.setData(Qt.ItemDataRole.UserRole, ScanMode.IMAGES)
-        item_images.setToolTip("Encontra fotos idênticas ou similares usando Tensor Cores na GPU.")
+        item_images.setToolTip("Finds identical or similar photos using GPU Tensor Cores.")
 
-        item_videos = QListWidgetItem("🎬 Vídeos Similares")
+        item_videos = QListWidgetItem("🎬 Similar Videos")
         item_videos.setData(Qt.ItemDataRole.UserRole, ScanMode.VIDEOS)
-        item_videos.setToolTip("Encontra vídeos similares usando decodificação por hardware NVDEC.")
+        item_videos.setToolTip("Finds similar videos using dedicated NVDEC hardware decoding.")
 
         self.sidebar_modes.addItem(item_exact)
         self.sidebar_modes.addItem(item_images)
@@ -143,36 +143,36 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.sidebar_modes)
         sidebar_layout.addStretch()
 
-        # Botão de Gerenciamento e Limpeza de Cache
-        self.btn_clear_cache = QPushButton("🧹 Limpar Cache")
+        # Cache Management Button
+        self.btn_clear_cache = QPushButton("🧹 Clear Cache")
         self.btn_clear_cache.setStyleSheet(
             "QPushButton { background-color: #202024; border: 1px solid #2e2e33; color: #a1a1aa; font-size: 11px; padding: 6px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #27272a; color: #f43f5e; border-color: #f43f5e; }"
         )
-        self.btn_clear_cache.setToolTip("Exibe estatísticas e permite esvaziar o cache persistente de hashes e embeddings.")
+        self.btn_clear_cache.setToolTip("Displays stats and clears the persistent hash and embedding cache.")
         self.btn_clear_cache.clicked.connect(self._clear_cache_prompt)
         sidebar_layout.addWidget(self.btn_clear_cache)
 
         main_h_layout.addWidget(sidebar_widget)
 
         # -------------------------------------------------------------
-        # 2. Painel Central (Controles, Tabela e Pastas)
+        # 2. Main Panel (Controls, Results Table and Folders)
         # -------------------------------------------------------------
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(15, 15, 15, 15)
         right_layout.setSpacing(10)
 
-        # 2.1 Barra Superior de Ações (Estilo Krokiet)
+        # 2.1 Action Bar (Krokiet Style)
         top_bar = QHBoxLayout()
         top_bar.setSpacing(8)
 
-        self.btn_scan = QPushButton("🔍 Escanear")
+        self.btn_scan = QPushButton("🔍 Scan")
         self.btn_scan.setObjectName("primaryButton")
         self.btn_scan.setFixedWidth(110)
         self.btn_scan.clicked.connect(self._start_scan)
 
-        self.btn_stop = QPushButton("⏹ Parar")
+        self.btn_stop = QPushButton("⏹ Stop")
         self.btn_stop.setObjectName("stopButton")
         self.btn_stop.setFixedWidth(90)
         self.btn_stop.setEnabled(False)
@@ -181,41 +181,41 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.btn_scan)
         top_bar.addWidget(self.btn_stop)
 
-        # Botão com Menu Suspenso de Seleção (Direto e Enxuto)
-        self.btn_select_menu = QPushButton("📋 Selecionar ▾")
+        # Selection Dropdown Menu
+        self.btn_select_menu = QPushButton("📋 Select ▾")
         menu_select = QMenu(self)
-        menu_select.addAction("Selecionar Menores", lambda: self.results_widget.select_custom("except_biggest_size"))
-        menu_select.addAction("Selecionar Maiores", lambda: self.results_widget.select_custom("except_smallest_size"))
+        menu_select.addAction("Select Smaller Files", lambda: self.results_widget.select_custom("except_biggest_size"))
+        menu_select.addAction("Select Larger Files", lambda: self.results_widget.select_custom("except_smallest_size"))
         menu_select.addSeparator()
-        menu_select.addAction("Selecionar Mais Antigos", lambda: self.results_widget.select_custom("except_newest"))
-        menu_select.addAction("Selecionar Mais Recentes", lambda: self.results_widget.select_custom("except_oldest"))
+        menu_select.addAction("Select Oldest", lambda: self.results_widget.select_custom("except_newest"))
+        menu_select.addAction("Select Newest", lambda: self.results_widget.select_custom("except_oldest"))
         menu_select.addSeparator()
-        menu_select.addAction("Selecionar Caminho Mais Longo", lambda: self.results_widget.select_custom("except_shortest_path"))
-        menu_select.addAction("Selecionar Caminho Mais Curto", lambda: self.results_widget.select_custom("except_longest_path"))
+        menu_select.addAction("Select Longest Path", lambda: self.results_widget.select_custom("except_shortest_path"))
+        menu_select.addAction("Select Shortest Path", lambda: self.results_widget.select_custom("except_longest_path"))
         menu_select.addSeparator()
-        menu_select.addAction("Inverter Seleção no Grupo", lambda: self.results_widget.select_custom("invert_in_group"))
-        menu_select.addAction("Inverter Seleção Geral", lambda: self.results_widget.invert_all())
+        menu_select.addAction("Invert Selection in Group", lambda: self.results_widget.select_custom("invert_in_group"))
+        menu_select.addAction("Invert All", lambda: self.results_widget.invert_all())
         menu_select.addSeparator()
-        menu_select.addAction("Desmarcar Tudo", lambda: self.results_widget.unselect_all())
-        menu_select.addAction("Selecionar Tudo", lambda: self.results_widget.select_all())
+        menu_select.addAction("Unselect All", lambda: self.results_widget.unselect_all())
+        menu_select.addAction("Select All", lambda: self.results_widget.select_all())
         self.btn_select_menu.setMenu(menu_select)
 
-        # Botões de Ação Krokiet
-        self.btn_move = QPushButton("📁 Mover...")
-        self.btn_move.setToolTip("Move os arquivos selecionados para outra pasta.")
+        # Action Buttons
+        self.btn_move = QPushButton("📁 Move...")
+        self.btn_move.setToolTip("Moves selected files to another folder.")
         self.btn_move.clicked.connect(self._move_selected_files)
 
-        self.btn_delete_trash = QPushButton("🗑️ Lixeira")
-        self.btn_delete_trash.setToolTip("Envia os arquivos selecionados para a Lixeira do Windows.")
+        self.btn_delete_trash = QPushButton("🗑️ Recycle Bin")
+        self.btn_delete_trash.setToolTip("Sends selected files to the Windows Recycle Bin.")
         self.btn_delete_trash.clicked.connect(self._delete_selected_to_trash)
 
-        self.btn_delete_perm = QPushButton("❌ Excluir")
+        self.btn_delete_perm = QPushButton("❌ Delete")
         self.btn_delete_perm.setObjectName("dangerButton")
-        self.btn_delete_perm.setToolTip("Exclui permanentemente os arquivos selecionados do disco.")
+        self.btn_delete_perm.setToolTip("Permanently deletes selected files from disk.")
         self.btn_delete_perm.clicked.connect(self._delete_selected_permanently)
 
-        self.btn_save = QPushButton("💾 Salvar...")
-        self.btn_save.setToolTip("Exporta a lista de duplicatas para um arquivo de texto.")
+        self.btn_save = QPushButton("💾 Save...")
+        self.btn_save.setToolTip("Exports duplicate list to a text file.")
         self.btn_save.clicked.connect(self._export_results)
 
         top_bar.addWidget(self.btn_select_menu)
@@ -226,12 +226,12 @@ class MainWindow(QMainWindow):
 
         top_bar.addSpacing(10)
 
-        # Controle de Similaridade (Slider)
+        # Similarity Slider
         self.container_slider = QWidget()
         slider_layout = QHBoxLayout(self.container_slider)
         slider_layout.setContentsMargins(0, 0, 0, 0)
 
-        lbl_sim = QLabel("Similaridade:")
+        lbl_sim = QLabel("Similarity:")
         self.lbl_sim_val = QLabel("85%")
         self.lbl_sim_val.setStyleSheet("font-weight: bold; color: #38bdf8; min-width: 35px;")
 
@@ -266,11 +266,11 @@ class MainWindow(QMainWindow):
         splitter.setSizes([520, 240])
         right_layout.addWidget(splitter)
 
-        # 2.3 Barra de Status, Telemetria e Progresso (Elástica e Responsiva)
+        # 2.3 Status Bar, Telemetry and Progress (Elastic & Responsive)
         status_bar_layout = QHBoxLayout()
         status_bar_layout.setSpacing(12)
 
-        self.lbl_status = QLabel("Pronto para escanear. Adicione as pastas abaixo.")
+        self.lbl_status = QLabel("Ready to scan. Add folders below.")
         self.lbl_status.setStyleSheet("color: #a1a1aa;")
         self.lbl_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
@@ -281,7 +281,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMinimumWidth(120)
         self.progress_bar.setVisible(False)
 
-        # Badge de Telemetria (Tempo Decorrido / Estimado / Total)
+        # Telemetry Badge (Elapsed Time / ETA / Iteration Rate)
         self.lbl_timer = QLabel("⏱️ 00:00")
         self.lbl_timer.setStyleSheet(
             "font-weight: bold; font-family: 'Consolas', monospace; color: #38bdf8; "
@@ -303,10 +303,10 @@ class MainWindow(QMainWindow):
         item = self.sidebar_modes.item(row)
         if item:
             self.current_mode = item.data(Qt.ItemDataRole.UserRole)
-            # Mostra o slider apenas em modos visuais
+            # Show slider only in visual modes
             self.container_slider.setVisible(self.current_mode in (ScanMode.IMAGES, ScanMode.VIDEOS))
             self.results_widget.set_results([])
-            self.lbl_status.setText(f"Modo alterado para: {item.text()}.")
+            self.lbl_status.setText(f"Mode changed to: {item.text()}.")
 
     @staticmethod
     def _format_duration(seconds: float) -> str:
@@ -323,33 +323,33 @@ class MainWindow(QMainWindow):
         total_items = stats["exact_count"] + stats["images_count"] + stats["videos_count"]
         
         msg = (
-            f"O cache persistente acelera escaneamentos repetidos.\n\n"
-            f"Estatísticas atuais:\n"
-            f"• Hashes Exatos salvos: {stats['exact_count']}\n"
-            f"• Fotos em cache: {stats['images_count']}\n"
-            f"• Vídeos em cache: {stats['videos_count']}\n"
-            f"• Tamanho em disco: {stats['db_size_mb']} MB\n\n"
-            f"Deseja esvaziar o cache para forçar um recálculo completo do zero?"
+            f"The persistent cache speeds up repeated scans.\n\n"
+            f"Current cache statistics:\n"
+            f"• Exact hashes saved: {stats['exact_count']}\n"
+            f"• Photos cached: {stats['images_count']}\n"
+            f"• Videos cached: {stats['videos_count']}\n"
+            f"• Disk usage: {stats['db_size_mb']} MB\n\n"
+            f"Do you want to clear the persistent cache to force a full recomputation?"
         )
         confirm = QMessageBox.question(
             self,
-            "Limpar Cache Persistente",
+            "Clear Persistent Cache",
             msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
         if confirm == QMessageBox.StandardButton.Yes:
             cache.clear()
-            self.lbl_status.setText("Cache persistente esvaziado com sucesso.")
-            QMessageBox.information(self, "Cache Limpo", "Todas as assinaturas em cache foram removidas.")
+            self.lbl_status.setText("Persistent cache cleared successfully.")
+            QMessageBox.information(self, "Cache Cleared", "All cached signatures have been removed.")
 
     def _start_scan(self):
         scan_paths = self.folder_panel.get_scan_paths()
         if not scan_paths:
             QMessageBox.warning(
                 self,
-                "Nenhuma Pasta Selecionada",
-                "Por favor, adicione pelo menos uma pasta na lista de escaneamento antes de iniciar."
+                "No Folders Selected",
+                "Please add at least one folder to the scan list before starting."
             )
             return
 
@@ -359,8 +359,8 @@ class MainWindow(QMainWindow):
         self.btn_scan.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminado no início
-        self.lbl_status.setText("Iniciando escaneamento...")
+        self.progress_bar.setRange(0, 0)  # Indeterminate at start
+        self.lbl_status.setText("Starting scan...")
 
         # Inicializa o temporizador
         self.start_time = time.time()
@@ -384,15 +384,15 @@ class MainWindow(QMainWindow):
 
     def _stop_scan(self):
         if self.worker and self.worker.isRunning():
-            self.lbl_status.setText("Parando escaneamento...")
+            self.lbl_status.setText("Stopping scan...")
             self.btn_stop.setEnabled(False)
             self.worker.requestInterruption()
 
     def closeEvent(self, event):
-        """Garante encerramento imediato de todos os processos e threads em segundo plano ao fechar a janela."""
+        """Ensures immediate termination of all background processes and threads upon closing the window."""
         self.ui_timer.stop()
         if self.worker and self.worker.isRunning():
-            self.lbl_status.setText("Encerrando...")
+            self.lbl_status.setText("Shutting down...")
             self.worker.requestInterruption()
             if not self.worker.wait(400):
                 self.worker.terminate()
@@ -405,7 +405,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _update_telemetry_tick(self):
-        """Atualização autônoma de telemetria a cada 250ms, desacoplada do I/O de disco."""
+        """Autonomous telemetry update every 250ms, decoupled from disk I/O."""
         if not self.start_time:
             return
         elapsed = time.time() - self.start_time
@@ -441,7 +441,7 @@ class MainWindow(QMainWindow):
         if self.start_time:
             total_elapsed = time.time() - self.start_time
             total_time_str = self._format_duration(total_elapsed)
-            self.lbl_timer.setText(f"⏱️ Tempo Total: {total_time_str}")
+            self.lbl_timer.setText(f"⏱️ Total Time: {total_time_str}")
 
         self.results_widget.set_results(groups)
 
@@ -449,22 +449,22 @@ class MainWindow(QMainWindow):
         total_reclaim = sum(g.reclaimable_bytes for g in groups)
         reclaim_mb = round(total_reclaim / (1024 * 1024), 2)
 
-        time_suffix = f" em {total_time_str}" if total_time_str else ""
+        time_suffix = f" in {total_time_str}" if total_time_str else ""
         if groups:
             self.lbl_status.setText(
-                f"Escaneamento concluído{time_suffix}! Encontrados {len(groups)} grupos "
-                f"({total_files} arquivos). Espaço recuperável: {reclaim_mb} MB."
+                f"Scan completed{time_suffix}! Found {len(groups)} groups "
+                f"({total_files} files). Reclaimable space: {reclaim_mb} MB."
             )
-            # Aplica seleção inteligente automática (protegendo pastas de referência)
+            # Automatically apply smart selection (protecting reference folders)
             self.results_widget.select_smart_duplicates()
         else:
-            self.lbl_status.setText(f"Escaneamento concluído{time_suffix}. Nenhuma duplicata encontrada com os filtros atuais.")
+            self.lbl_status.setText(f"Scan completed{time_suffix}. No duplicates found with current filters.")
 
     @Slot(str)
     def _on_scan_error(self, err_msg: str):
         self._finalize_scan_ui()
-        self.lbl_status.setText("Erro no escaneamento.")
-        QMessageBox.critical(self, "Erro de Execução", err_msg)
+        self.lbl_status.setText("Scan error.")
+        QMessageBox.critical(self, "Execution Error", err_msg)
 
     def _finalize_scan_ui(self):
         self.ui_timer.stop()
@@ -477,16 +477,16 @@ class MainWindow(QMainWindow):
         if not selected:
             QMessageBox.information(
                 self,
-                "Nenhum Arquivo Selecionado",
-                "Marque pelo menos um arquivo na lista para mover para a Lixeira."
+                "No Files Selected",
+                "Please check at least one file in the list to move to the Recycle Bin."
             )
             return
 
         confirm = QMessageBox.question(
             self,
-            "Confirmar Envio para a Lixeira",
-            f"Deseja mover {len(selected)} arquivo(s) selecionado(s) para a Lixeira do Windows?\n\n"
-            "Arquivos em pastas de referência não são excluídos.",
+            "Confirm Move to Recycle Bin",
+            f"Move {len(selected)} selected file(s) to the Windows Recycle Bin?\n\n"
+            "Files in reference folders are never deleted.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -507,30 +507,30 @@ class MainWindow(QMainWindow):
             if errors:
                 QMessageBox.warning(
                     self,
-                    "Concluído com Avisos",
-                    f"{len(deleted_set)} arquivos movidos para a Lixeira.\n"
-                    f"{len(errors)} erros:\n" + "\n".join(errors[:5])
+                    "Completed with Warnings",
+                    f"{len(deleted_set)} files moved to the Recycle Bin.\n"
+                    f"{len(errors)} errors:\n" + "\n".join(errors[:5])
                 )
             else:
                 QMessageBox.information(
                     self,
-                    "Sucesso",
-                    f"{len(deleted_set)} arquivo(s) foram movidos com segurança para a Lixeira do Windows!"
+                    "Success",
+                    f"{len(deleted_set)} file(s) safely moved to the Windows Recycle Bin!"
                 )
-                self.lbl_status.setText(f"{len(deleted_set)} arquivo(s) enviados para a Lixeira.")
+                self.lbl_status.setText(f"{len(deleted_set)} file(s) moved to the Recycle Bin.")
 
     def _move_selected_files(self):
-        """Move os arquivos selecionados para outra pasta informada pelo usuário."""
+        """Moves selected files to another destination folder chosen by the user."""
         selected = self.results_widget.get_selected_files()
         if not selected:
             QMessageBox.information(
                 self,
-                "Nenhum Arquivo Selecionado",
-                "Marque pelo menos um arquivo na lista para mover."
+                "No Files Selected",
+                "Please check at least one file in the list to move."
             )
             return
 
-        dest_dir = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Destino para Mover Arquivos")
+        dest_dir = QFileDialog.getExistingDirectory(self, "Select Destination Folder to Move Files")
         if not dest_dir:
             return
 
@@ -553,40 +553,40 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 errors.append(f"{p.name}: {str(e)}")
 
-        self.results_widget.remove_deleted_files(moved_set)
+            self.results_widget.remove_deleted_files(moved_set)
 
         if errors:
             QMessageBox.warning(
                 self,
-                "Concluído com Avisos",
-                f"{len(moved_set)} arquivo(s) movidos para '{dest_path.name}'.\n"
-                f"{len(errors)} erros:\n" + "\n".join(errors[:5])
+                "Completed with Warnings",
+                f"{len(moved_set)} file(s) moved to '{dest_path.name}'.\n"
+                f"{len(errors)} errors:\n" + "\n".join(errors[:5])
             )
         else:
             QMessageBox.information(
                 self,
-                "Sucesso",
-                f"{len(moved_set)} arquivo(s) foram movidos com segurança para:\n{dest_path}"
+                "Success",
+                f"{len(moved_set)} file(s) safely moved to:\n{dest_path}"
             )
-            self.lbl_status.setText(f"{len(moved_set)} arquivo(s) movidos para {dest_path.name}.")
+            self.lbl_status.setText(f"{len(moved_set)} file(s) moved to {dest_path.name}.")
 
     def _delete_selected_permanently(self):
-        """Exclui permanentemente os arquivos selecionados do disco com confirmação rígida."""
+        """Permanently deletes selected files from disk with strict user confirmation."""
         selected = self.results_widget.get_selected_files()
         if not selected:
             QMessageBox.information(
                 self,
-                "Nenhum Arquivo Selecionado",
-                "Marque pelo menos um arquivo na lista para excluir."
+                "No Files Selected",
+                "Please check at least one file in the list to delete."
             )
             return
 
         confirm = QMessageBox.warning(
             self,
-            "Confirmar Exclusão Permanente",
-            f"ATENÇÃO: Deseja EXCLUIR DEFINITIVAMENTE {len(selected)} arquivo(s) selecionado(s)?\n\n"
-            "Esta ação NÃO envia para a lixeira e NÃO pode ser desfeita!\n"
-            "Arquivos em pastas de referência estão 100% protegidos e não serão tocados.",
+            "Confirm Permanent Deletion",
+            f"WARNING: PERMANENTLY DELETE {len(selected)} selected file(s)?\n\n"
+            "This action CANNOT be undone and will NOT use the Recycle Bin!\n"
+            "Files in reference folders are 100% protected and untouched.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -607,58 +607,58 @@ class MainWindow(QMainWindow):
             if errors:
                 QMessageBox.warning(
                     self,
-                    "Concluído com Avisos",
-                    f"{len(deleted_set)} arquivos excluídos permanentemente.\n"
-                    f"{len(errors)} erros:\n" + "\n".join(errors[:5])
+                    "Completed with Warnings",
+                    f"{len(deleted_set)} files permanently deleted.\n"
+                    f"{len(errors)} errors:\n" + "\n".join(errors[:5])
                 )
             else:
                 QMessageBox.information(
                     self,
-                    "Sucesso",
-                    f"{len(deleted_set)} arquivo(s) foram excluídos permanentemente do disco."
+                    "Success",
+                    f"{len(deleted_set)} file(s) permanently deleted from disk."
                 )
-                self.lbl_status.setText(f"{len(deleted_set)} arquivo(s) excluídos permanentemente.")
+                self.lbl_status.setText(f"{len(deleted_set)} file(s) permanently deleted.")
 
     def _export_results(self):
-        """Exporta os resultados de duplicatas para um arquivo de texto."""
+        """Exports duplicate results to a text report file."""
         if not self.results_widget.groups:
             QMessageBox.information(
                 self,
-                "Nenhum Resultado",
-                "Não há resultados de escaneamento para salvar."
+                "No Results",
+                "There are no scan results to save."
             )
             return
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Salvar Lista de Duplicatas",
-            str(Path.home() / "Desktop" / "duplicatas_dupeclean.txt"),
-            "Arquivo de Texto (*.txt);;Todos os Arquivos (*.*)"
+            "Save Duplicate List",
+            str(Path.home() / "Desktop" / "dupeclean_duplicates.txt"),
+            "Text Files (*.txt);;All Files (*.*)"
         )
         if not file_path:
             return
 
         try:
             with open(file_path, "w", encoding="utf-8") as f:
-                f.write("=== RELATÓRIO DE DUPLICATAS - DUPECLEAN ===\n")
-                f.write(f"Gerado em: {time.strftime('%d/%m/%Y %H:%M:%S')}\n")
-                f.write(f"Modo: {self.current_mode.value.upper()}\n")
-                f.write(f"Total de Grupos: {len(self.results_widget.groups)}\n\n")
+                f.write("=== DUPECLEAN - DUPLICATE REPORT ===\n")
+                f.write(f"Generated on: {time.strftime('%m/%d/%Y %H:%M:%S')}\n")
+                f.write(f"Mode: {self.current_mode.value.upper()}\n")
+                f.write(f"Total Groups: {len(self.results_widget.groups)}\n\n")
 
                 for grp in self.results_widget.groups:
                     f.write("--------------------------------------------------\n")
-                    f.write(f"Grupo #{grp.group_id} | Similaridade: {grp.similarity * 100:.1f}%\n")
+                    f.write(f"Group #{grp.group_id} | Similarity: {grp.similarity * 100:.1f}%\n")
                     for fl in grp.files:
-                        ref_tag = " [REFERÊNCIA]" if fl.is_reference else ""
+                        ref_tag = " [REFERENCE]" if fl.is_reference else ""
                         size_mb = fl.size / (1024 * 1024)
                         f.write(f"  • {fl.name} ({size_mb:.2f} MB){ref_tag}\n    {fl.path}\n")
                     f.write("\n")
 
             QMessageBox.information(
                 self,
-                "Sucesso",
-                f"Relatório exportado com sucesso para:\n{file_path}"
+                "Success",
+                f"Report successfully exported to:\n{file_path}"
             )
-            self.lbl_status.setText(f"Relatório salvo em: {Path(file_path).name}")
+            self.lbl_status.setText(f"Report saved to: {Path(file_path).name}")
         except Exception as e:
-            QMessageBox.critical(self, "Erro ao Salvar", f"Não foi possível salvar o arquivo:\n{str(e)}")
+            QMessageBox.critical(self, "Save Error", f"Could not save file:\n{str(e)}")
