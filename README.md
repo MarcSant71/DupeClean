@@ -65,6 +65,10 @@ Traditional deduplicators are lightweight single-binary executables because they
 > [!NOTE]
 > Thanks to **7-Zip LZMA2 Solid compression**, repeated patterns across all CUDA binaries compress down to **~1.7 GB**. Once extracted, DupeClean runs 100% locally with zero internet access, complete data privacy, and raw GPU performance.
 
+> [!TIP]
+> **Prefer a lightweight download? Run from source!**  
+> If you already have Python and PyTorch installed (e.g., for ComfyUI, Stable Diffusion, or development), you don't need to download the 1.7 GB standalone bundle. Simply clone the repository (`git clone`) and run locally — the entire source code is **under 1 MB**! See [Installation & Setup](#-installation--setup) below.
+
 ---
 
 ## 💻 Hardware & Software Requirements
