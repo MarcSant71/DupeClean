@@ -21,6 +21,7 @@ bin/
 
 # Databases & local caches
 cache/
+data/
 *.db
 *.db-wal
 *.db-shm

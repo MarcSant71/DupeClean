@@ -66,6 +66,17 @@ class MainWindow(QMainWindow):
         self.resize(1280, 820)
         self.setMinimumSize(960, 600)
         self._init_ui()
+        self._restore_app_state()
+
+    def _restore_app_state(self):
+        """Restaura pastas salvas e preferências anteriores a partir do DupeClean.db."""
+        try:
+            cache = CacheManager()
+            saved_folders = cache.get_setting("saved_folders")
+            if saved_folders:
+                self.folder_panel.import_state(saved_folders)
+        except Exception as e:
+            print(f"[WARN] Could not restore saved folders: {e}")
 
     def _init_ui(self):
         central_widget = QWidget()
@@ -396,6 +407,15 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Ensures immediate termination of all background processes and threads upon closing the window."""
         self.ui_timer.stop()
+
+        # Persiste pastas incluídas e excluídas no DupeClean.db antes de fechar
+        try:
+            cache = CacheManager()
+            state = self.folder_panel.export_state()
+            cache.save_setting("saved_folders", state)
+        except Exception as e:
+            print(f"[WARN] Failed to persist folders on close: {e}")
+
         if self.worker and self.worker.isRunning():
             self.lbl_status.setText("Shutting down...")
             self.worker.requestInterruption()

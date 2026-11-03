@@ -4,7 +4,9 @@ Armazena hashes e embeddings visuais para evitar reprocessamento desnecessário,
 permitindo escaneamentos quase instantâneos e retenção total de progresso em cancelamentos.
 """
 
+import json
 import os
+import shutil
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
@@ -15,16 +17,32 @@ from dupeclean.core.models import FileRecord, ScanMode
 
 
 def get_default_cache_db_path() -> Path:
-    """Retorna o caminho centralizado do banco de cache, criando a pasta se necessário."""
+    """Retorna o caminho centralizado do banco de dados DupeClean.db (pasta data/), com migração automática."""
     base_dir = Path(__file__).resolve().parent.parent.parent  # Raiz do DupeClean
-    cache_dir = base_dir / "cache"
+    data_dir = base_dir / "data"
+    old_cache = base_dir / "cache" / "cache.db"
+
     try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        return cache_dir / "cache.db"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        new_db = data_dir / "DupeClean.db"
+
+        # Migração transparente do cache antigo se existir
+        if old_cache.exists() and not new_db.exists():
+            shutil.move(str(old_cache), str(new_db))
+            for ext in ["-wal", "-shm"]:
+                old_aux = base_dir / "cache" / f"cache.db{ext}"
+                if old_aux.exists():
+                    shutil.move(str(old_aux), str(data_dir / f"DupeClean.db{ext}"))
+            try:
+                (base_dir / "cache").rmdir()
+            except Exception:
+                pass
+
+        return new_db
     except Exception:
-        appdata = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "DupeClean"
+        appdata = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "DupeClean" / "data"
         appdata.mkdir(parents=True, exist_ok=True)
-        return appdata / "cache.db"
+        return appdata / "DupeClean.db"
 
 
 class CacheManager:
@@ -73,10 +91,41 @@ class CacheManager:
                     embedding BLOB NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_exact_lookup ON cache_exact(path, size, mtime);
                 CREATE INDEX IF NOT EXISTS idx_images_lookup ON cache_images(path, size, mtime);
                 CREATE INDEX IF NOT EXISTS idx_videos_lookup ON cache_videos(path, size, mtime);
             """)
+
+    # -------------------------------------------------------------------------
+    # 0. Gerenciamento de Configurações e Estado da Aplicação (app_settings)
+    # -------------------------------------------------------------------------
+
+    def save_setting(self, key: str, value: Any):
+        """Salva uma configuração ou estado (serializado em JSON se complexo)."""
+        val_str = json.dumps(value) if not isinstance(value, str) else value
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?);",
+                (key, val_str)
+            )
+
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        """Recupera uma configuração da tabela app_settings, desserializando JSON se possível."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT value FROM app_settings WHERE key = ?;", (key,))
+            row = cursor.fetchone()
+            if not row:
+                return default
+            val_str = row[0]
+            try:
+                return json.loads(val_str)
+            except Exception:
+                return val_str
 
     # -------------------------------------------------------------------------
     # 1. Cache para Modo EXATO (xxHash64)

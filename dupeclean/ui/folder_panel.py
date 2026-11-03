@@ -254,3 +254,36 @@ class FolderPanel(QWidget):
         for idx in range(self.list_excluded.count()):
             excluded.append(Path(self.list_excluded.item(idx).text()))
         return excluded
+
+    def export_state(self) -> dict:
+        """Exporta o estado atual das pastas para persistência."""
+        return {
+            "included": [
+                {"path": str(sp.path), "is_reference": sp.is_reference}
+                for sp in self.get_scan_paths()
+            ],
+            "excluded": [str(p) for p in self.get_excluded_paths()]
+        }
+
+    def import_state(self, state: dict):
+        """Restaura as pastas salvas na interface, preservando flags de referência."""
+        if not isinstance(state, dict):
+            return
+
+        self.table_included.setRowCount(0)
+        for item in state.get("included", []):
+            if isinstance(item, dict):
+                p = Path(item.get("path", ""))
+                is_ref = bool(item.get("is_reference", False))
+            else:
+                p = Path(str(item))
+                is_ref = False
+
+            if p.exists() and p.is_dir():
+                self.add_included_path(p, is_reference=is_ref)
+
+        self.list_excluded.clear()
+        for item in state.get("excluded", []):
+            p = Path(str(item))
+            if p.exists() and p.is_dir():
+                self.add_excluded_path(p)
