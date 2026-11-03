@@ -233,7 +233,14 @@ class MainWindow(QMainWindow):
 
         self.lbl_status = QLabel("Pronto para escanear. Adicione as pastas abaixo.")
         self.lbl_status.setStyleSheet("color: #a1a1aa;")
-        self.lbl_status.setMinimumWidth(220)
+        self.lbl_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.progress_bar.setMinimumWidth(120)
+        self.progress_bar.setVisible(False)
 
         # Badge de Telemetria (Tempo Decorrido / Estimado / Total)
         self.lbl_timer = QLabel("⏱️ 00:00")
@@ -241,18 +248,12 @@ class MainWindow(QMainWindow):
             "font-weight: bold; font-family: 'Consolas', monospace; color: #38bdf8; "
             "background-color: #202024; border: 1px solid #2e2e33; border-radius: 4px; padding: 2px 8px;"
         )
+        self.lbl_timer.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.lbl_timer.setVisible(False)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.progress_bar.setMinimumWidth(200)
-        self.progress_bar.setVisible(False)
-
-        status_bar_layout.addWidget(self.lbl_status, stretch=2)
+        status_bar_layout.addWidget(self.lbl_status, stretch=0)
+        status_bar_layout.addWidget(self.progress_bar, stretch=1)
         status_bar_layout.addWidget(self.lbl_timer, stretch=0)
-        status_bar_layout.addWidget(self.progress_bar, stretch=3)
 
         right_layout.addLayout(status_bar_layout)
 
