@@ -14,9 +14,18 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-:: 1. Freeze Python runtime into dist\DupeClean
-echo [1/3] Building standalone distribution with PyInstaller...
-call ".venv\Scripts\pyinstaller.exe" --noconfirm dupeclean.spec
+:: 1. Check or install PyInstaller
+echo [1/4] Checking PyInstaller...
+".venv\Scripts\python.exe" -m pip show pyinstaller >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo PyInstaller not found. Installing in .venv...
+    ".venv\Scripts\python.exe" -m pip install pyinstaller
+)
+
+:: 2. Freeze Python runtime into dist\DupeClean
+echo.
+echo [2/4] Building standalone distribution with PyInstaller...
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm dupeclean.spec
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] PyInstaller compilation failed!
     pause
@@ -29,9 +38,9 @@ if not exist "dist\DupeClean\DupeClean.exe" (
     exit /b 1
 )
 
-:: 2. Check compression utility (7-Zip or PowerShell)
+:: 3. Check compression utility (7-Zip or PowerShell)
 echo.
-echo [2/3] Compressing portable archive...
+echo [3/4] Compressing portable archive...
 set "OUTPUT_ZIP=dist\DupeClean-v1.0.0-windows-cuda.zip"
 if exist "%OUTPUT_ZIP%" del /f /q "%OUTPUT_ZIP%"
 
@@ -55,7 +64,7 @@ if not exist "%OUTPUT_ZIP%" (
     exit /b 1
 )
 
-:: 3. Success telemetry
+:: 4. Success telemetry
 echo.
 echo =========================================================
 echo [SUCCESS] Portable package created!
