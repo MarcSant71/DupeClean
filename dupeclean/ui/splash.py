@@ -109,22 +109,33 @@ class SplashScreen(QWidget):
     def start_animation(self):
         """Inicia animação fluida e contínua da barra de progresso durante a carga."""
         self._current_float_val = 5.0
+        self._target_val = 20.0
         self.progress.setValue(5)
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._step_animation)
-        self._anim_timer.start(40)  # 25 fps suaves
+        self._anim_timer.start(25)  # 40 fps suaves
+
+    def set_target_progress(self, target: int, message: Optional[str] = None):
+        """Define um novo patamar de progresso para a interpolação suave da barra."""
+        self._target_val = max(self._target_val, float(target))
+        if message:
+            self.lbl_status.setText(message)
 
     def _step_animation(self):
-        if self._current_float_val < 94.0:
-            remaining = 95.0 - self._current_float_val
-            step = max(0.12, remaining * 0.025)
-            self._current_float_val += step
+        if self._current_float_val < self._target_val:
+            diff = self._target_val - self._current_float_val
+            step = max(0.25, diff * 0.15)
+            self._current_float_val = min(self._target_val, self._current_float_val + step)
+            self.progress.setValue(int(self._current_float_val))
+        elif self._current_float_val < 98.0 and self._target_val < 100.0:
+            # Creep suave e sutil enquanto aguarda a próxima etapa real (elimina qualquer congelamento visual)
+            self._current_float_val += 0.05
             self.progress.setValue(int(self._current_float_val))
 
     def set_progress(self, value: int, message: Optional[str] = None):
-        """Define o valor exato da barra de progresso e repinta imediatamente."""
-        if hasattr(self, "_anim_timer") and self._anim_timer.isActive():
-            self._anim_timer.stop()
+        """Define o valor do progresso e repinta imediatamente."""
+        self._target_val = max(getattr(self, "_target_val", 0.0), float(value))
+        self._current_float_val = float(value)
         self.progress.setValue(value)
         if message:
             self.lbl_status.setText(message)
@@ -135,7 +146,7 @@ class SplashScreen(QWidget):
         self.lbl_status.setText(message)
         QApplication.processEvents()
 
-    def finish(self, main_window):
+    def finish(self, main_window=None):
         """Conclui a barra em 100%, transiciona para a janela principal e fecha a splash."""
         if hasattr(self, "_anim_timer") and self._anim_timer.isActive():
             self._anim_timer.stop()

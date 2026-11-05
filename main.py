@@ -17,12 +17,28 @@ from dupeclean.ui.splash import SplashScreen
 
 class HardwareInitWorker(QThread):
     """Valida o hardware e inicializa o PyTorch sem congelar a animação da Splash Screen."""
+    progress_update = Signal(int, str)
     finished_init = Signal(bool, str, dict)
 
     def run(self):
-        from dupeclean.core.hardware import check_gpu_compatibility
-        is_compatible, error_msg, gpu_info = check_gpu_compatibility()
-        self.finished_init.emit(is_compatible, error_msg, gpu_info)
+        try:
+            self.progress_update.emit(25, "Initializing...")
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.init()
+
+            self.progress_update.emit(55, "Initializing...")
+            from dupeclean.core.hardware import check_gpu_compatibility
+            is_compatible, error_msg, gpu_info = check_gpu_compatibility()
+
+            self.progress_update.emit(80, "Initializing...")
+            from dupeclean.core.cache import CacheManager
+            CacheManager()
+
+            self.progress_update.emit(90, "Initializing...")
+            self.finished_init.emit(is_compatible, error_msg, gpu_info)
+        except Exception as e:
+            self.finished_init.emit(False, str(e), {})
 
 
 def excepthook(exc_type, exc_value, exc_tb):
@@ -67,6 +83,7 @@ def main():
 
     # 2. Hardware Gatekeeper: Validação em background sem congelar o loop de eventos
     worker = HardwareInitWorker()
+    worker.progress_update.connect(splash.set_target_progress)
     main_window_holder = []
 
     def on_hardware_ready(is_compatible, error_msg, gpu_info):
@@ -79,6 +96,9 @@ def main():
             )
             app.exit(1)
             return
+
+        splash.set_target_progress(95, "Initializing...")
+        app.processEvents()
 
         # 3. Inicialização da Interface Principal
         from dupeclean.ui.main_window import MainWindow

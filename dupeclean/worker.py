@@ -16,10 +16,11 @@ from dupeclean.core.cache import CacheManager
 
 
 class ScanWorker(QThread):
-    """Executa a varredura e processamento na GPU em background."""
+    """Executa a varredura e processamento na GPU em background com telemetria em múltiplos estágios."""
     
-    progress_status = Signal(str, int, int)  # (mensagem, item_atual, total_itens)
-    scan_finished = Signal(list)            # (List[DuplicateGroup])
+    progress_status = Signal(str, int, int)                    # (mensagem, item_atual, total_itens)
+    progress_stage = Signal(str, int, int, int, int)           # (mensagem, item_atual, total_itens, estagio_num, total_estagios)
+    scan_finished = Signal(list)                               # (List[DuplicateGroup])
     scan_error = Signal(str)
 
     def __init__(
@@ -38,16 +39,21 @@ class ScanWorker(QThread):
 
     def run(self):
         try:
+            total_stages = 3 if self.mode == ScanMode.EXACT else 4
             cache = CacheManager()
 
-            self.progress_status.emit("Scanning folders...", 0, 0)
+            # No Estágio 1 (descoberta), o total é 0 para manter a animação fluida e sem ETA redundante
+            self.progress_stage.emit("Scanning folders...", 0, 0, 1, total_stages)
 
-            # 1. Rastreamento recursivo de arquivos no disco (Modo Descoberta)
+            # 1. Rastreamento recursivo de arquivos no disco (Modo Descoberta - Estágio 1)
+            def _crawl_cb(msg: str, count: int, tot: int):
+                self.progress_stage.emit(msg, count, 0, 1, total_stages)
+
             records = crawl_directories(
                 scan_paths=self.scan_paths,
                 excluded_paths=self.excluded_paths,
                 mode=self.mode,
-                progress_callback=lambda msg, count, tot: self.progress_status.emit(msg, count, 0),
+                progress_callback=_crawl_cb,
                 stop_check=self.isInterruptionRequested
             )
 
@@ -58,29 +64,40 @@ class ScanWorker(QThread):
                 self.scan_finished.emit([])
                 return
 
-            self.progress_status.emit(f"{len(records):,} files found. Starting deduplication...", 0, len(records))
+            cache.save_folder_counts(self.scan_paths, len(records))
+            self.progress_stage.emit(f"{len(records):,} files found.", len(records), len(records), 1, total_stages)
 
-            # 2. Execução conforme o Modo Selecionado com Cache Persistente
+            # 2. Execução conforme o Modo Selecionado com Cache Persistente e Estágios
             groups: List[DuplicateGroup] = []
 
             if self.mode == ScanMode.EXACT:
+                def _exact_cb(msg: str, curr: int, tot: int):
+                    # Identifica se é estágio de agrupamento por tamanho ou hashing de conteúdo
+                    st_num = 2 if ("size" in msg.lower() or "candidat" in msg.lower()) else 3
+                    self.progress_stage.emit(msg, curr, tot, st_num, 3)
+
                 groups = find_exact_duplicates(
                     records=records,
-                    progress_callback=lambda msg, curr, tot: self.progress_status.emit(msg, curr, tot),
+                    progress_callback=_exact_cb,
                     stop_check=self.isInterruptionRequested,
                     cache_manager=cache
                 )
 
             elif self.mode == ScanMode.IMAGES:
+                def _image_cb(msg: str, curr: int, tot: int):
+                    # Se for mensagem de cache -> Estágio 2/4. Se for processamento de fotos -> Estágio 3/4
+                    st_num = 2 if "cache" in msg.lower() else 3
+                    self.progress_stage.emit(msg, curr, tot, st_num, 4)
+
                 valid_records, embeddings = extract_image_embeddings(
                     records=records,
                     batch_size=256,
-                    progress_callback=lambda msg, curr, tot: self.progress_status.emit(msg, curr, tot),
+                    progress_callback=_image_cb,
                     stop_check=self.isInterruptionRequested,
                     cache_manager=cache
                 )
                 if not self.isInterruptionRequested() and valid_records:
-                    self.progress_status.emit("Clustering similar photos...", 0, len(valid_records))
+                    self.progress_stage.emit("Clustering similar photos on RTX 5090...", 0, len(valid_records), 4, 4)
                     groups = cluster_by_similarity(
                         records=valid_records,
                         embeddings=embeddings,
@@ -88,16 +105,21 @@ class ScanWorker(QThread):
                         mode=ScanMode.IMAGES,
                         stop_check=self.isInterruptionRequested
                     )
+                    self.progress_stage.emit("Clustering complete.", len(valid_records), len(valid_records), 4, 4)
 
             elif self.mode == ScanMode.VIDEOS:
+                def _video_cb(msg: str, curr: int, tot: int):
+                    st_num = 2 if "cache" in msg.lower() else 3
+                    self.progress_stage.emit(msg, curr, tot, st_num, 4)
+
                 valid_records, embeddings = extract_video_embeddings(
                     records=records,
-                    progress_callback=lambda msg, curr, tot: self.progress_status.emit(msg, curr, tot),
+                    progress_callback=_video_cb,
                     stop_check=self.isInterruptionRequested,
                     cache_manager=cache
                 )
                 if not self.isInterruptionRequested() and valid_records:
-                    self.progress_status.emit("Clustering similar videos...", 0, len(valid_records))
+                    self.progress_stage.emit("Clustering similar videos on RTX 5090...", 0, len(valid_records), 4, 4)
                     groups = cluster_by_similarity(
                         records=valid_records,
                         embeddings=embeddings,
@@ -105,6 +127,7 @@ class ScanWorker(QThread):
                         mode=ScanMode.VIDEOS,
                         stop_check=self.isInterruptionRequested
                     )
+                    self.progress_stage.emit("Clustering complete.", len(valid_records), len(valid_records), 4, 4)
 
             if not self.isInterruptionRequested():
                 self.scan_finished.emit(groups)

@@ -14,7 +14,7 @@ import send2trash
 from PySide6.QtCore import Qt, Slot, QTimer, QSize
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont, QPen, QColor
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QListWidget,
+    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QListWidget,
     QListWidgetItem, QPushButton, QLabel, QSlider, QProgressBar,
     QMessageBox, QFileDialog, QSplitter, QFrame, QSizePolicy, QMenu,
     QApplication, QStyledItemDelegate
@@ -24,7 +24,7 @@ from dupeclean import __version__
 from dupeclean.core.models import ScanMode, DuplicateGroup
 from dupeclean.core.cache import CacheManager
 from dupeclean.ui.folder_panel import FolderPanel
-from dupeclean.ui.results_table import ResultsWidget
+from dupeclean.ui.results_table import ResultsWidget, format_size
 from dupeclean.worker import ScanWorker
 
 
@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(self._create_app_icon())
         self.setWindowTitle(f"DupeClean v{__version__} - GPU-Accelerated Duplicate File Finder")
         self.resize(1280, 820)
-        self.setMinimumSize(960, 600)
+        self.setMinimumSize(900, 560)
         self._init_ui()
         self._restore_app_state()
 
@@ -231,18 +231,16 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(15, 15, 15, 15)
         right_layout.setSpacing(10)
 
-        # 2.1 Action Bar (Krokiet Style)
+        # 2.1 Action Bar (Krokiet Style - Compacto e Responsivo)
         top_bar = QHBoxLayout()
-        top_bar.setSpacing(8)
+        top_bar.setSpacing(6)
 
         self.btn_scan = QPushButton("🔍 Scan")
         self.btn_scan.setObjectName("primaryButton")
-        self.btn_scan.setFixedWidth(110)
         self.btn_scan.clicked.connect(self._start_scan)
 
         self.btn_stop = QPushButton("⏹ Stop")
         self.btn_stop.setObjectName("stopButton")
-        self.btn_stop.setFixedWidth(90)
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_scan)
 
@@ -252,6 +250,8 @@ class MainWindow(QMainWindow):
         # Selection Dropdown Menu
         self.btn_select_menu = QPushButton("📋 Select ▾")
         menu_select = QMenu(self)
+        menu_select.addAction("Select Duplicates (Smart)", lambda: self.results_widget.select_smart_duplicates())
+        menu_select.addSeparator()
         menu_select.addAction("Select Smaller Files", lambda: self.results_widget.select_custom("except_biggest_size"))
         menu_select.addAction("Select Larger Files", lambda: self.results_widget.select_custom("except_smallest_size"))
         menu_select.addSeparator()
@@ -266,23 +266,29 @@ class MainWindow(QMainWindow):
         menu_select.addSeparator()
         menu_select.addAction("Unselect All", lambda: self.results_widget.unselect_all())
         menu_select.addAction("Select All", lambda: self.results_widget.select_all())
+        menu_select.addSeparator()
+        menu_select.addAction("Expand All Groups", lambda: self.results_widget.expand_all())
+        menu_select.addAction("Collapse All Groups", lambda: self.results_widget.collapse_all())
         self.btn_select_menu.setMenu(menu_select)
 
-        # Action Buttons
-        self.btn_move = QPushButton("📁 Move...")
+        # Action Buttons (Iniciam desabilitados até o usuário marcar pelo menos 1 arquivo)
+        self.btn_move = QPushButton("📁 Move")
         self.btn_move.setToolTip("Moves selected files to another folder.")
+        self.btn_move.setEnabled(False)
         self.btn_move.clicked.connect(self._move_selected_files)
 
-        self.btn_delete_trash = QPushButton("🗑️ Recycle Bin")
+        self.btn_delete_trash = QPushButton("🗑️ Trash")
         self.btn_delete_trash.setToolTip("Sends selected files to the Windows Recycle Bin.")
+        self.btn_delete_trash.setEnabled(False)
         self.btn_delete_trash.clicked.connect(self._delete_selected_to_trash)
 
         self.btn_delete_perm = QPushButton("❌ Delete")
         self.btn_delete_perm.setObjectName("dangerButton")
         self.btn_delete_perm.setToolTip("Permanently deletes selected files from disk.")
+        self.btn_delete_perm.setEnabled(False)
         self.btn_delete_perm.clicked.connect(self._delete_selected_permanently)
 
-        self.btn_save = QPushButton("💾 Save...")
+        self.btn_save = QPushButton("💾 Save")
         self.btn_save.setToolTip("Exports duplicate list to a text file.")
         self.btn_save.clicked.connect(self._export_results)
 
@@ -300,6 +306,7 @@ class MainWindow(QMainWindow):
 
         # Tabela de Resultados - TOPO
         self.results_widget = ResultsWidget()
+        self.results_widget.selection_changed.connect(self._on_selection_changed)
         splitter.addWidget(self.results_widget)
 
         # Painel de Pastas (Incluídas com Ref e Excluídas) - BASE
@@ -309,22 +316,68 @@ class MainWindow(QMainWindow):
         splitter.setSizes([520, 240])
         right_layout.addWidget(splitter)
 
-        # 2.3 Status Bar, Telemetry and Progress (2 Linhas Estáveis - Espaçamento Fixo)
+        # 2.3 Status Bar, Telemetry and Progress (Dois Estágios - Estilo Krokiet)
         status_container = QVBoxLayout()
         status_container.setSpacing(6)
         status_container.setContentsMargins(0, 4, 0, 0)
 
-        # Linha 1: Barra de Progresso de ponta a ponta na janela (Limites 100% fixos)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        sp_prog = self.progress_bar.sizePolicy()
-        sp_prog.setRetainSizeWhenHidden(True)
-        self.progress_bar.setSizePolicy(sp_prog)
-        self.progress_bar.setVisible(False)
+        # Widget de Estágios com grid de 2 linhas (Current Stage e All Stages)
+        self.stage_widget = QWidget()
+        stage_layout = QGridLayout(self.stage_widget)
+        stage_layout.setContentsMargins(0, 0, 0, 0)
+        stage_layout.setSpacing(6)
 
-        # Linha 2: Informações de status e telemetria/cronômetro
+        # Linha 1: Current Stage
+        self.lbl_stage_current = QLabel("Current Stage:")
+        self.lbl_stage_current.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
+        self.lbl_stage_current.setFixedWidth(84)
+
+        self.progress_current = QProgressBar()
+        self.progress_current.setObjectName("progCurrent")
+        self.progress_current.setFixedHeight(8)
+        self.progress_current.setTextVisible(False)
+        self.progress_current.setRange(0, 100)
+        self.progress_current.setValue(0)
+
+        self.lbl_pct_current = QLabel("0%")
+        self.lbl_pct_current.setStyleSheet("color: #38bdf8; font-size: 11px; font-family: 'Consolas', monospace;")
+        self.lbl_pct_current.setFixedWidth(40)
+        self.lbl_pct_current.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        stage_layout.addWidget(self.lbl_stage_current, 0, 0)
+        stage_layout.addWidget(self.progress_current, 0, 1)
+        stage_layout.addWidget(self.lbl_pct_current, 0, 2)
+
+        # Linha 2: All Stages
+        self.lbl_stage_all = QLabel("All Stages:")
+        self.lbl_stage_all.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
+        self.lbl_stage_all.setFixedWidth(84)
+
+        self.progress_all = QProgressBar()
+        self.progress_all.setObjectName("progAll")
+        self.progress_all.setFixedHeight(8)
+        self.progress_all.setTextVisible(False)
+        self.progress_all.setRange(0, 100)
+        self.progress_all.setValue(0)
+
+        self.lbl_pct_all = QLabel("0%")
+        self.lbl_pct_all.setStyleSheet("color: #0284c7; font-size: 11px; font-family: 'Consolas', monospace;")
+        self.lbl_pct_all.setFixedWidth(40)
+        self.lbl_pct_all.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        stage_layout.addWidget(self.lbl_stage_all, 1, 0)
+        stage_layout.addWidget(self.progress_all, 1, 1)
+        stage_layout.addWidget(self.lbl_pct_all, 1, 2)
+
+        # Alias progress_bar aponta para progress_all para retrocompatibilidade
+        self.progress_bar = self.progress_all
+
+        sp_stage = self.stage_widget.sizePolicy()
+        sp_stage.setRetainSizeWhenHidden(True)
+        self.stage_widget.setSizePolicy(sp_stage)
+        self.stage_widget.setVisible(False)
+
+        # Linha 3: Informações de status e telemetria/cronômetro
         status_info_layout = QHBoxLayout()
         status_info_layout.setSpacing(12)
 
@@ -348,7 +401,7 @@ class MainWindow(QMainWindow):
         status_info_layout.addWidget(self.lbl_status, stretch=1)
         status_info_layout.addWidget(self.lbl_timer, stretch=0)
 
-        status_container.addWidget(self.progress_bar)
+        status_container.addWidget(self.stage_widget)
         status_container.addLayout(status_info_layout)
 
         right_layout.addLayout(status_container)
@@ -383,10 +436,32 @@ class MainWindow(QMainWindow):
         self.slider_sim.setEnabled(not scanning)
         self.folder_panel.setEnabled(not scanning)
         self.btn_select_menu.setEnabled(not scanning)
-        self.btn_move.setEnabled(not scanning)
-        self.btn_delete_trash.setEnabled(not scanning)
-        self.btn_delete_perm.setEnabled(not scanning)
         self.btn_save.setEnabled(not scanning)
+
+        has_sel = (len(self.results_widget.get_selected_files()) > 0) and not scanning
+        self.btn_move.setEnabled(has_sel)
+        self.btn_delete_trash.setEnabled(has_sel)
+        self.btn_delete_perm.setEnabled(has_sel)
+
+    @Slot(int, int)
+    def _on_selection_changed(self, count: int, total_bytes: int):
+        """Atualiza dinamicamente os botões de ação e status conforme arquivos são marcados/desmarcados."""
+        is_scanning = bool(self.worker and self.worker.isRunning())
+        has_sel = (count > 0) and not is_scanning
+        self.btn_move.setEnabled(has_sel)
+        self.btn_delete_trash.setEnabled(has_sel)
+        self.btn_delete_perm.setEnabled(has_sel)
+
+        if count > 0:
+            size_str = format_size(total_bytes)
+            self.btn_move.setText(f"📁 Move ({count})")
+            self.btn_delete_trash.setText(f"🗑️ Trash ({count})")
+            self.btn_delete_perm.setText(f"❌ Delete ({count})")
+            self.lbl_status.setText(f"Selected: {count} duplicate file(s) ({size_str}) ready for action.")
+        else:
+            self.btn_move.setText("📁 Move")
+            self.btn_delete_trash.setText("🗑️ Trash")
+            self.btn_delete_perm.setText("❌ Delete")
 
     def _clear_cache_prompt(self):
         if self.worker and self.worker.isRunning():
@@ -435,9 +510,16 @@ class MainWindow(QMainWindow):
 
         self._set_scanning_state(True)
         self._was_cancelled = False
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminate at start
-        self.lbl_status.setText("Starting scan...")
+        self.current_stage_num = 1
+        self.stage_start_time = time.time()
+        self.total_stages = 3 if self.current_mode == ScanMode.EXACT else 4
+        self.stage_widget.setVisible(True)
+        self.progress_current.setRange(0, 0)
+        self.lbl_pct_current.setText("...")
+        self.progress_all.setRange(0, 100)
+        self.progress_all.setValue(0)
+        self.lbl_pct_all.setText("0%")
+        self.lbl_status.setText(f"Stage 1/{self.total_stages}: Scanning folders...")
 
         # Inicializa o temporizador
         self.start_time = time.time()
@@ -453,7 +535,7 @@ class MainWindow(QMainWindow):
             mode=self.current_mode,
             similarity_threshold=threshold
         )
-        self.worker.progress_status.connect(self._on_worker_progress)
+        self.worker.progress_stage.connect(self._on_stage_progress)
         self.worker.scan_finished.connect(self._on_scan_finished)
         self.worker.scan_error.connect(self._on_scan_error)
         self.worker.finished.connect(self._finalize_scan_ui)
@@ -498,29 +580,55 @@ class MainWindow(QMainWindow):
         elapsed = time.time() - self.start_time
         elapsed_str = self._format_duration(elapsed)
 
-        if self.latest_total > 0 and self.latest_current > 1 and elapsed > 0.5:
-            rate = self.latest_current / max(elapsed, 0.001)
+        # Regra do Usuário: Durante o Estágio 1 (descoberta de arquivos), exibe APENAS o tempo decorrido.
+        # O ETA só deve ser calculado e exibido a partir do Estágio 2, quando JÁ sabemos a quantidade exata de arquivos.
+        stage_num = getattr(self, "current_stage_num", 1)
+        if stage_num > 1 and self.latest_total > 0 and self.latest_current > 1 and elapsed > 0.5:
+            stage_elapsed = max(0.001, time.time() - getattr(self, "stage_start_time", self.start_time))
+            rate = self.latest_current / stage_elapsed
             remaining = max(0, self.latest_total - self.latest_current)
             eta_sec = remaining / max(rate, 0.001)
             eta_str = self._format_duration(eta_sec)
             self.lbl_timer.setText(f"⏱️ {elapsed_str} | ETA: ~{eta_str} ({rate:,.0f} it/s)")
-        elif self.latest_current > 1 and elapsed > 0.5:
-            rate = self.latest_current / max(elapsed, 0.001)
-            self.lbl_timer.setText(f"⏱️ {elapsed_str} | {rate:,.0f} files/s")
         else:
             self.lbl_timer.setText(f"⏱️ {elapsed_str}")
 
-    @Slot(str, int, int)
-    def _on_worker_progress(self, msg: str, current: int, total: int):
-        self.lbl_status.setText(msg)
+    @Slot(str, int, int, int, int)
+    def _on_stage_progress(self, msg: str, current: int, total: int, stage_num: int, total_stages: int):
+        # Se mudou de estágio, reseta o temporizador interno da fase para cálculo preciso de ETA
+        if getattr(self, "current_stage_num", 1) != stage_num:
+            self.current_stage_num = stage_num
+            self.stage_start_time = time.time()
+
+        self.current_stage_num = stage_num
+        self.total_stages = total_stages
         self.latest_current = current
         self.latest_total = total
 
+        # Rótulo de status 100% estável (nunca pisca e mantém o padrão de estágio)
+        self.lbl_status.setText(f"Stage {stage_num}/{total_stages}: {msg}")
+
+        # 1. Progresso do Estágio Atual (Current Stage)
         if total > 0:
-            self.progress_bar.setRange(0, total)
-            self.progress_bar.setValue(min(current, total))
+            pct_curr = int(min(1.0, current / total) * 100)
+            if self.progress_current.maximum() != 100 or self.progress_current.minimum() != 0:
+                self.progress_current.setRange(0, 100)
+            self.progress_current.setValue(pct_curr)
+            self.lbl_pct_current.setText(f"{pct_curr}%")
         else:
-            self.progress_bar.setRange(0, 0)
+            # Animação indeterminada suave no Estágio 1 (sem resets e sem solavancos)
+            if self.progress_current.maximum() != 0 or self.progress_current.minimum() != 0:
+                self.progress_current.setRange(0, 0)
+            self.lbl_pct_current.setText("...")
+
+        # 2. Progresso Geral Acumulado (All Stages)
+        if total_stages > 0:
+            fraction = (current / total) if total > 0 else 0.0
+            overall_pct = int(min(100, max(0, ((stage_num - 1 + fraction) / total_stages) * 100)))
+            if self.progress_all.maximum() != 100 or self.progress_all.minimum() != 0:
+                self.progress_all.setRange(0, 100)
+            self.progress_all.setValue(overall_pct)
+            self.lbl_pct_all.setText(f"{overall_pct}%")
 
         self._update_telemetry_tick()
 
@@ -546,10 +654,9 @@ class MainWindow(QMainWindow):
             file_word = "file" if total_files == 1 else "files"
             self.lbl_status.setText(
                 f"Scan completed{time_suffix}! Found {len(groups)} duplicate {group_word} "
-                f"({total_files} {file_word}). Estimated space to free: {reclaim_mb} MB."
+                f"({total_files} {file_word}). Estimated space to free: {reclaim_mb} MB. "
+                "Mark files to delete using checkboxes or the Select menu."
             )
-            # Automatically apply smart selection (protecting reference folders)
-            self.results_widget.select_smart_duplicates()
         else:
             self.lbl_status.setText(f"Scan completed{time_suffix}. No duplicates found with current filters.")
 
@@ -562,7 +669,7 @@ class MainWindow(QMainWindow):
     def _finalize_scan_ui(self):
         self.ui_timer.stop()
         self._set_scanning_state(False)
-        self.progress_bar.setVisible(False)
+        self.stage_widget.setVisible(False)
         if getattr(self, "_was_cancelled", False):
             self.lbl_status.setText("Scan cancelled by user.")
             if self.start_time:
@@ -580,11 +687,18 @@ class MainWindow(QMainWindow):
             )
             return
 
+        total_bytes = sum(p.stat().st_size for p in selected if p.exists())
+        size_str = format_size(total_bytes)
+
+        file_list_str = "\n".join(f"• {p.name}" for p in selected[:10])
+        if len(selected) > 10:
+            file_list_str += f"\n... and {len(selected) - 10} more file(s)"
+
         confirm = QMessageBox.question(
             self,
             "Confirm Move to Recycle Bin",
-            f"Move {len(selected)} selected file(s) to the Windows Recycle Bin?\n\n"
-            "Files in reference folders are never deleted.",
+            f"Move {len(selected)} selected file(s) ({size_str}) to the Windows Recycle Bin?\n\n"
+            f"Files to be moved:\n{file_list_str}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -633,6 +747,24 @@ class MainWindow(QMainWindow):
             return
 
         dest_path = Path(dest_dir)
+        total_bytes = sum(p.stat().st_size for p in selected if p.exists())
+        size_str = format_size(total_bytes)
+
+        file_list_str = "\n".join(f"• {p.name}" for p in selected[:10])
+        if len(selected) > 10:
+            file_list_str += f"\n... and {len(selected) - 10} more file(s)"
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Move Files",
+            f"Move {len(selected)} selected file(s) ({size_str}) to:\n{dest_path}?\n\n"
+            f"Files to move:\n{file_list_str}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
         moved_set = set()
         errors = []
 
@@ -651,7 +783,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 errors.append(f"{p.name}: {str(e)}")
 
-            self.results_widget.remove_deleted_files(moved_set)
+        self.results_widget.remove_deleted_files(moved_set)
 
         if errors:
             QMessageBox.warning(
@@ -679,12 +811,19 @@ class MainWindow(QMainWindow):
             )
             return
 
+        total_bytes = sum(p.stat().st_size for p in selected if p.exists())
+        size_str = format_size(total_bytes)
+
+        file_list_str = "\n".join(f"• {p.name}" for p in selected[:10])
+        if len(selected) > 10:
+            file_list_str += f"\n... and {len(selected) - 10} more file(s)"
+
         confirm = QMessageBox.warning(
             self,
             "Confirm Permanent Deletion",
-            f"WARNING: PERMANENTLY DELETE {len(selected)} selected file(s)?\n\n"
-            "This action CANNOT be undone and will NOT use the Recycle Bin!\n"
-            "Files in reference folders are 100% protected and untouched.",
+            f"WARNING: PERMANENTLY DELETE {len(selected)} selected file(s) ({size_str})?\n\n"
+            f"Files that will be permanently deleted from disk:\n{file_list_str}\n\n"
+            "This action CANNOT be undone and will NOT use the Recycle Bin!",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )

@@ -30,6 +30,7 @@ class FileRecord:
     ext: str = ""
     hash_value: Optional[str] = None
     embedding: Optional[Any] = None  # torch.Tensor na GPU ou CPU
+    duration: Optional[float] = None
 
     def __post_init__(self):
         if not self.name:

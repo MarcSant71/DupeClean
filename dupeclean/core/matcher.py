@@ -37,9 +37,9 @@ def cluster_by_similarity(
     stop_check: Optional[Callable[[], bool]] = None
 ) -> List[DuplicateGroup]:
     """
-    Calcula similaridade por cosseno em blocos GEMM na GPU e agrupa duplicatas por Union-Find.
-    Otimizado para bibliotecas massivas (100k+ arquivos), eliminando alocação densa de VRAM/RAM
-    e respondendo instantaneamente (<10ms) ao comando de parada (stop_check).
+    Calcula similaridade por cosseno em blocos GEMM na GPU e agrupa duplicatas por Complete Linkage (cliques).
+    Garante rigorosamente que TODOS os arquivos de um grupo possuam similaridade mútua >= limiar
+    e tolerância temporal (duração <= 8% em vídeos), eliminando falsos positivos e encadeamento espúrio.
     """
     n = len(records)
     if n <= 1 or embeddings.shape[0] != n:
@@ -47,11 +47,16 @@ def cluster_by_similarity(
     if stop_check and stop_check():
         return []
 
-    uf = DisjointSet(n)
+    # Vetor de durações para filtro GPU em vídeos
+    durations = None
+    if mode == ScanMode.VIDEOS:
+        dur_vals = [getattr(r, "duration", None) or 0.0 for r in records]
+        durations = torch.tensor(dur_vals, device=embeddings.device, dtype=torch.float32)
+
     pair_similarities: Dict[tuple, float] = {}
+    candidate_pairs: List[Tuple[float, int, int]] = []
 
     # Multiplicação matricial em blocos para evitar explosão de memória (40 GB em 140k itens)
-    # Bloco de 2048 linhas consome apenas ~500 MB na RTX 5090 e roda em milissegundos
     chunk_size = 2048
     emb_t = embeddings.t()  # [dim, n]
 
@@ -70,6 +75,16 @@ def cluster_by_similarity(
         col_indices = torch.arange(n, device=embeddings.device).unsqueeze(0)
         mask = (col_indices > row_indices) & (sim_block >= similarity_threshold)
 
+        # Filtro temporal estrito para vídeos: arquivos duplicados devem ter durações similares (<= 8%)
+        if durations is not None:
+            dur_row = durations[i:end_i].unsqueeze(1)
+            dur_col = durations.unsqueeze(0)
+            has_dur = (dur_row > 0) & (dur_col > 0)
+            dur_max = torch.maximum(dur_row, dur_col)
+            dur_diff = torch.abs(dur_row - dur_col) / torch.clamp(dur_max, min=1e-5)
+            dur_valid = (~has_dur) | (dur_diff <= 0.08)
+            mask = mask & dur_valid
+
         nonzero = torch.nonzero(mask)
         if nonzero.shape[0] > 0:
             r_locals = nonzero[:, 0]
@@ -83,37 +98,65 @@ def cluster_by_similarity(
                     return []
                 g_i = int(r_globals[k])
                 g_j = int(c_globals_np[k])
-                uf.union(g_i, g_j)
-                pair_similarities[(min(g_i, g_j), max(g_i, g_j))] = float(scores[k])
+                sc = float(scores[k])
+                pair_similarities[(min(g_i, g_j), max(g_i, g_j))] = sc
+                candidate_pairs.append((sc, g_i, g_j))
 
     if stop_check and stop_check():
         return []
 
-    # Agrupar por raiz do Union-Find
-    clusters: Dict[int, List[int]] = {}
-    for i in range(n):
+    # Agrupamento por Complete Linkage (Clique exato):
+    # Ordena pares por similaridade decrescente para priorizar os pares mais próximos
+    candidate_pairs.sort(key=lambda x: x[0], reverse=True)
+
+    clusters: List[List[int]] = []
+    item_to_cluster: Dict[int, List[int]] = {}
+
+    for s, g_i, g_j in candidate_pairs:
         if stop_check and stop_check():
             return []
-        root = uf.find(i)
-        if root not in clusters:
-            clusters[root] = []
-        clusters[root].append(i)
+
+        c_i = item_to_cluster.get(g_i)
+        c_j = item_to_cluster.get(g_j)
+
+        if c_i is None and c_j is None:
+            new_c = [g_i, g_j]
+            clusters.append(new_c)
+            item_to_cluster[g_i] = new_c
+            item_to_cluster[g_j] = new_c
+        elif c_i is not None and c_j is None:
+            # g_j só é adicionado ao grupo se for similar a TODOS os membros já no grupo
+            if all((min(g_j, m), max(g_j, m)) in pair_similarities for m in c_i):
+                c_i.append(g_j)
+                item_to_cluster[g_j] = c_i
+        elif c_j is not None and c_i is None:
+            # g_i só é adicionado ao grupo se for similar a TODOS os membros já no grupo
+            if all((min(g_i, m), max(g_i, m)) in pair_similarities for m in c_j):
+                c_j.append(g_i)
+                item_to_cluster[g_i] = c_j
+        elif c_i is not c_j:
+            # Fusão de dois grupos: só mescla se TODOS os membros forem mutuamente similares
+            if all((min(a, b), max(a, b)) in pair_similarities for a in c_i for b in c_j):
+                for m in c_j:
+                    c_i.append(m)
+                    item_to_cluster[m] = c_i
+                clusters.remove(c_j)
 
     duplicate_groups: List[DuplicateGroup] = []
     group_id = 1
 
-    for root, indices in clusters.items():
+    for cl in clusters:
         if stop_check and stop_check():
             return []
 
-        if len(indices) > 1:
-            group_files = [records[i] for i in indices]
+        if len(cl) > 1:
+            group_files = [records[i] for i in cl]
 
-            # Calcular a similaridade média do grupo
+            # Similaridade real média de todos os pares do clique
             scores = []
-            for a_idx in range(len(indices)):
-                for b_idx in range(a_idx + 1, len(indices)):
-                    pair = (min(indices[a_idx], indices[b_idx]), max(indices[a_idx], indices[b_idx]))
+            for a_idx in range(len(cl)):
+                for b_idx in range(a_idx + 1, len(cl)):
+                    pair = (min(cl[a_idx], cl[b_idx]), max(cl[a_idx], cl[b_idx]))
                     if pair in pair_similarities:
                         scores.append(pair_similarities[pair])
 

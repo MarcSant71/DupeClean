@@ -269,6 +269,7 @@ class CacheManager:
     def get_image_cache(
         self,
         records: List[FileRecord],
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
         stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, bytes]:
         """
@@ -280,8 +281,9 @@ class CacheManager:
             return results
 
         chunk_size = 900
+        total_recs = len(records)
         with self._get_connection() as conn:
-            for i in range(0, len(records), chunk_size):
+            for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
                     return results
                 chunk = records[i:i + chunk_size]
@@ -297,6 +299,11 @@ class CacheManager:
                     rec = record_map.get(c_path)
                     if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
                         results[c_path] = emb_blob
+
+                if progress_callback and total_recs > 2000 and (i % 2700 == 0 or i + chunk_size >= total_recs):
+                    done = min(i + chunk_size, total_recs)
+                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", done, total_recs)
+
         return results
 
     def save_image_batch(self, entries: List[Tuple[str, int, float, bytes]]):

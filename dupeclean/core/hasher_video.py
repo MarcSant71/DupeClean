@@ -7,6 +7,9 @@ import shutil
 import subprocess
 import json
 import sys
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Tuple, Callable
 import numpy as np
@@ -67,6 +70,28 @@ def get_video_duration(path: Path, ffprobe_path: str) -> Optional[float]:
     return None
 
 
+def crop_letterbox(frames: np.ndarray, threshold: int = 25) -> np.ndarray:
+    """
+    Detecta e recorta barras pretas (letterbox / pillarbox) antes do hashing.
+    Evita que o formato de tela (ex: 16:9 embutido em 4:3) gere harmônicos espúrios na DCT 2D.
+    """
+    cropped_list = []
+    for f in frames:
+        row_means = f.mean(axis=1)
+        col_means = f.mean(axis=0)
+        valid_rows = np.where(row_means > threshold)[0]
+        valid_cols = np.where(col_means > threshold)[0]
+        if len(valid_rows) >= 16 and len(valid_cols) >= 16 and (len(valid_rows) < IMG_SIZE or len(valid_cols) < IMG_SIZE):
+            top, bottom = valid_rows[0], valid_rows[-1] + 1
+            left, right = valid_cols[0], valid_cols[-1] + 1
+            cropped = f[top:bottom, left:right]
+            pil_img = Image.fromarray(cropped).resize((IMG_SIZE, IMG_SIZE), Image.Resampling.BILINEAR)
+            cropped_list.append(np.asarray(pil_img, dtype=np.uint8))
+        else:
+            cropped_list.append(f)
+    return np.array(cropped_list)
+
+
 def extract_video_frames(
     path: Path,
     duration: float,
@@ -74,25 +99,22 @@ def extract_video_frames(
     num_samples: int = 5
 ) -> Optional[np.ndarray]:
     """
-    Extrai `num_samples` frames distribuídos no tempo usando decodificação acelerada por hardware.
-    Retorna array numpy com shape [num_samples, 64, 64].
+    Extrai `num_samples` frames genuinamente distribuídos na linha do tempo do vídeo (15%, 35%, 50%, 65%, 85%).
+    Utiliza busca rápida por keyframe (-ss antes de -i) individual por ponto temporal,
+    garantindo que cada amostra venha de um momento diferente do vídeo e removendo bordas pretas (letterbox).
+    Retorna array numpy com shape [num_samples, 64, 64] em uint8.
     """
     if duration <= 1.0:
         sample_times = [duration * 0.5]
     else:
-        # Pontos de amostragem percentuais (15%, 35%, 50%, 65%, 85%)
         percentages = [0.15, 0.35, 0.50, 0.65, 0.85][:num_samples]
         sample_times = [duration * p for p in percentages]
 
-    frames = []
-
+    frames: List[np.ndarray] = []
     for t in sample_times:
         try:
-            # -hwaccel cuda ativa decodificação direta via NVDEC na RTX 5090 (device 0)
             cmd = [
                 ffmpeg_path,
-                "-hwaccel", "cuda",
-                "-hwaccel_device", "0",
                 "-ss", f"{t:.2f}",
                 "-i", str(path),
                 "-vframes", "1",
@@ -110,44 +132,19 @@ def extract_video_frames(
                 creationflags=CREATE_NO_WINDOW
             )
             if res.returncode == 0 and len(res.stdout) >= IMG_SIZE * IMG_SIZE:
-                frame_bytes = res.stdout[:IMG_SIZE * IMG_SIZE]
-                frame_arr = np.frombuffer(frame_bytes, dtype=np.uint8).reshape((IMG_SIZE, IMG_SIZE))
-                frames.append(frame_arr.astype(np.float32) / 255.0)
-            else:
-                # Tenta fallback sem hwaccel caso o codec exótico não seja acelerável por NVDEC
-                cmd_cpu = [
-                    ffmpeg_path,
-                    "-ss", f"{t:.2f}",
-                    "-i", str(path),
-                    "-vframes", "1",
-                    "-s", f"{IMG_SIZE}x{IMG_SIZE}",
-                    "-f", "rawvideo",
-                    "-pix_fmt", "gray",
-                    "-v", "quiet",
-                    "pipe:1"
-                ]
-                res_cpu = subprocess.run(
-                    cmd_cpu,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=4,
-                    creationflags=CREATE_NO_WINDOW
-                )
-                if res_cpu.returncode == 0 and len(res_cpu.stdout) >= IMG_SIZE * IMG_SIZE:
-                    frame_bytes = res_cpu.stdout[:IMG_SIZE * IMG_SIZE]
-                    frame_arr = np.frombuffer(frame_bytes, dtype=np.uint8).reshape((IMG_SIZE, IMG_SIZE))
-                    frames.append(frame_arr.astype(np.float32) / 255.0)
+                frame_arr = np.frombuffer(res.stdout[:IMG_SIZE * IMG_SIZE], dtype=np.uint8).reshape((IMG_SIZE, IMG_SIZE))
+                frames.append(frame_arr)
         except Exception:
             continue
 
     if not frames:
         return None
 
-    # Preenche se faltou algum frame
     while len(frames) < num_samples:
         frames.append(frames[-1])
 
-    return np.array(frames[:num_samples])
+    arr = np.array(frames[:num_samples])
+    return crop_letterbox(arr)
 
 
 def extract_video_embeddings(
@@ -157,8 +154,8 @@ def extract_video_embeddings(
     cache_manager: Optional[CacheManager] = None
 ) -> Tuple[List[FileRecord], torch.Tensor]:
     """
-    Processa arquivos de vídeo, extrai múltiplos frames via NVDEC
-    e consolida assinaturas compostas em tensores na GPU.
+    Processa múltiplos vídeos em paralelo (ThreadPoolExecutor), satura os decodificadores NVDEC
+    da RTX 5090 e consolida assinaturas compostas em tensores na GPU.
     Utiliza cache SQLite persistente com commits periódicos para retenção total de progresso.
     """
     device = "cuda"
@@ -182,8 +179,9 @@ def extract_video_embeddings(
     for rec in records:
         p_key = str(rec.path)
         if p_key in cached_map:
-            valid_records.append(rec)
             dur, emb_blob = cached_map[p_key]
+            rec.duration = dur
+            valid_records.append(rec)
             # Reconstrói array a partir do BLOB binário FP16 [320 floats]
             arr = np.frombuffer(emb_blob, dtype=np.float16).reshape(1, LOW_FREQ_SIZE * LOW_FREQ_SIZE * 5)
             embeddings_list.append(torch.tensor(arr, device=device, dtype=dtype))
@@ -212,49 +210,75 @@ def extract_video_embeddings(
     new_cache_entries: List[Tuple[str, int, float, float, bytes]] = []
     uncached_total = len(to_process)
 
-    for idx, rec in enumerate(to_process):
+    def _worker_task(r: FileRecord) -> Optional[Tuple[FileRecord, float, np.ndarray]]:
         if stop_check and stop_check():
-            if new_cache_entries:
+            return None
+        dur = get_video_duration(r.path, ffprobe_path)
+        if not dur or dur <= 0:
+            return None
+        f_arr = extract_video_frames(r.path, dur, ffmpeg_path, num_samples=5)
+        if f_arr is None:
+            return None
+        return r, dur, f_arr
+
+    # Paralelismo: até 10 threads concorrentes para saturar NVDEC da RTX 5090 e a rede iSCSI/NAS
+    num_workers = min(10, max(2, os.cpu_count() or 4))
+    executor = ThreadPoolExecutor(max_workers=num_workers)
+    future_map = {executor.submit(_worker_task, rec): rec for rec in to_process}
+
+    processed_count = 0
+    last_progress_time = 0.0
+
+    try:
+        for fut in as_completed(future_map):
+            if stop_check and stop_check():
+                for f in future_map:
+                    f.cancel()
+                break
+
+            processed_count += 1
+            current_total_done = cached_count + processed_count
+
+            now = time.time()
+            if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
+                last_progress_time = now
+                progress_callback(f"Processing videos ({current_total_done:,}/{total:,})...", current_total_done, total)
+
+            res = fut.result()
+            if res is not None:
+                rec, duration, frames_arr = res
+                rec.duration = duration
+
+                # frames_arr: [5, 64, 64] uint8 -> VRAM
+                t_frames = torch.tensor(frames_arr, device=device, dtype=dtype) / 255.0
+                dct_2d = torch.matmul(dct_mat, torch.matmul(t_frames, dct_mat_t))
+                low_freq = dct_2d[:, :LOW_FREQ_SIZE, :LOW_FREQ_SIZE].clone()
+                low_freq[:, 0, 0] = low_freq[:, 0, 0] * 0.15
+
+                # Concatena os 5 frames em uma assinatura contínua [5 * 64] = 320 dimensões
+                flat = low_freq.reshape(-1)
+                norm = torch.norm(flat, p=2).clamp(min=1e-6)
+                normalized = (flat / norm).unsqueeze(0)  # [1, 320]
+
+                embeddings_list.append(normalized)
+                valid_records.append(rec)
+
+                # Prepara entrada para persistência no SQLite
+                emb_bytes = normalized.cpu().numpy().tobytes()
+                new_cache_entries.append((str(rec.path), rec.size, rec.mtime, duration, emb_bytes))
+
+                # Salva periodicamente a cada 50 vídeos para retenção e durabilidade em cancelamento
+                if len(new_cache_entries) >= 50 or processed_count == uncached_total:
+                    cache.save_video_batch(new_cache_entries)
+                    new_cache_entries.clear()
+
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+        if new_cache_entries:
+            try:
                 cache.save_video_batch(new_cache_entries)
-            break
-
-        current_total_done = cached_count + idx + 1
-        if progress_callback:
-            progress_callback(f"Processing videos ({current_total_done}/{total})...", current_total_done, total)
-
-        duration = get_video_duration(rec.path, ffprobe_path)
-        if not duration or duration <= 0:
-            continue
-
-        frames_arr = extract_video_frames(rec.path, duration, ffmpeg_path, num_samples=5)
-        if frames_arr is None:
-            continue
-
-        # frames_arr: [5, 64, 64]
-        t_frames = torch.tensor(frames_arr, device=device, dtype=dtype)
-        dct_2d = torch.matmul(dct_mat, torch.matmul(t_frames, dct_mat_t))
-        low_freq = dct_2d[:, :LOW_FREQ_SIZE, :LOW_FREQ_SIZE].clone()
-        low_freq[:, 0, 0] = low_freq[:, 0, 0] * 0.15
-
-        # Concatena os 5 frames em uma assinatura contínua [5 * 64] = 320 dimensões
-        flat = low_freq.reshape(-1)
-        norm = torch.norm(flat, p=2).clamp(min=1e-6)
-        normalized = (flat / norm).unsqueeze(0)  # [1, 320]
-
-        embeddings_list.append(normalized)
-        valid_records.append(rec)
-
-        # Prepara entrada para persistência no SQLite
-        emb_bytes = normalized.cpu().numpy().tobytes()
-        new_cache_entries.append((str(rec.path), rec.size, rec.mtime, duration, emb_bytes))
-
-        # Salva periodicamente a cada 25 vídeos para retenção em cancelamento
-        if len(new_cache_entries) >= 25:
-            cache.save_video_batch(new_cache_entries)
-            new_cache_entries = []
-
-    if new_cache_entries:
-        cache.save_video_batch(new_cache_entries)
+            except Exception:
+                pass
 
     if not embeddings_list:
         return [], torch.empty((0, LOW_FREQ_SIZE * LOW_FREQ_SIZE * 5), device=device, dtype=dtype)

@@ -32,7 +32,7 @@ QPushButton {
     color: #fafafa;
     border: 1px solid #3f3f46;
     border-radius: 5px;
-    padding: 6px 14px;
+    padding: 6px 11px;
     font-weight: 500;
 }
 QPushButton:hover {
@@ -89,6 +89,11 @@ QPushButton#dangerButton {
 }
 QPushButton#dangerButton:hover {
     background-color: #991b1b;
+}
+QPushButton#dangerButton:disabled {
+    background-color: #27272a;
+    color: #52525b;
+    border: 1px solid #27272a;
 }
 
 /* Botão Quadradinho com Checkmark da Pasta de Referência (Estilo Krokiet) */
@@ -179,7 +184,7 @@ QSlider::handle:horizontal:disabled {
     border: 1px solid #3f3f46;
 }
 
-/* Barra de Progresso */
+/* Barra de Progresso Geral e Estágios (Estilo Krokiet) */
 QProgressBar {
     border: 1px solid #3f3f46;
     border-radius: 4px;
@@ -191,6 +196,25 @@ QProgressBar {
     max-height: 18px;
 }
 QProgressBar::chunk {
+    background-color: #0284c7;
+    border-radius: 3px;
+}
+
+QProgressBar#progCurrent, QProgressBar#progAll {
+    border: 1px solid #3f3f46;
+    border-radius: 4px;
+    background-color: #18181b;
+    height: 8px;
+    min-height: 8px;
+    max-height: 8px;
+}
+
+QProgressBar#progCurrent::chunk {
+    background-color: #38bdf8;
+    border-radius: 3px;
+}
+
+QProgressBar#progAll::chunk {
     background-color: #0284c7;
     border-radius: 3px;
 }

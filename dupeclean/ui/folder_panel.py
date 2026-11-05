@@ -3,6 +3,7 @@ Folder panel for included and excluded directories with Windows Drag & Drop supp
 and Reference Folder (Ref) toggle button.
 """
 
+import os
 from pathlib import Path
 from typing import List
 from PySide6.QtCore import Qt, Signal
@@ -176,7 +177,7 @@ class FolderPanel(QWidget):
             self.add_excluded_path(p)
 
     def add_included_path(self, path: Path, is_reference: bool = False):
-        path_str = str(path.resolve())
+        path_str = os.path.normpath(str(path))
 
         # Avoid duplicates in folder list
         for row in range(self.table_included.rowCount()):
@@ -222,7 +223,7 @@ class FolderPanel(QWidget):
             self.add_excluded_path(Path(folder))
 
     def add_excluded_path(self, path: Path):
-        path_str = str(path.resolve())
+        path_str = os.path.normpath(str(path))
         # Evita duplicatas
         for idx in range(self.list_excluded.count()):
             if self.list_excluded.item(idx).text().lower() == path_str.lower():
@@ -266,24 +267,24 @@ class FolderPanel(QWidget):
         }
 
     def import_state(self, state: dict):
-        """Restaura as pastas salvas na interface, preservando flags de referência."""
+        """Restaura as pastas salvas na interface, preservando flags de referência sem bloquear I/O em discos remotos."""
         if not isinstance(state, dict):
             return
 
         self.table_included.setRowCount(0)
         for item in state.get("included", []):
             if isinstance(item, dict):
-                p = Path(item.get("path", ""))
+                p_str = item.get("path", "")
                 is_ref = bool(item.get("is_reference", False))
             else:
-                p = Path(str(item))
+                p_str = str(item)
                 is_ref = False
 
-            if p.exists() and p.is_dir():
-                self.add_included_path(p, is_reference=is_ref)
+            if p_str and p_str.strip():
+                self.add_included_path(Path(p_str.strip()), is_reference=is_ref)
 
         self.list_excluded.clear()
         for item in state.get("excluded", []):
-            p = Path(str(item))
-            if p.exists() and p.is_dir():
-                self.add_excluded_path(p)
+            p_str = str(item)
+            if p_str and p_str.strip():
+                self.add_excluded_path(Path(p_str.strip()))

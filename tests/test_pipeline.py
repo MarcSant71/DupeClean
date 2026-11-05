@@ -93,7 +93,50 @@ def test_image_gpu_embeddings():
         print(f"[OK] Similar Images GPU Tensor Core test (Similarity: {groups[0].similarity*100:.1f}%) passed successfully!")
 
 
+def test_video_clustering_rules():
+    """Testa Complete Linkage e filtro estrito de tolerância de duração em vídeos."""
+    # 4 vídeos sintéticos:
+    # v1 e v2: mesmo conteúdo, duração idêntica (600s) -> DUPLICATA
+    # v3: conteúdo similar a v1/v2, mas duração muito diferente (1200s, +100%) -> NÃO DEVE AGRUPAR
+    # v4: conteúdo completamente diferente, mesma duração (600s) -> NÃO DEVE AGRUPAR
+    
+    dim = 320
+    v1_vec = torch.randn(1, dim)
+    v1_vec = v1_vec / torch.norm(v1_vec)
+    
+    # v2 quase idêntico a v1 (cosseno ~0.99)
+    v2_vec = v1_vec + 0.005 * torch.randn(1, dim)
+    v2_vec = v2_vec / torch.norm(v2_vec)
+    
+    # v3 muito similar a v2 (cosseno ~0.99), mas duração 1200s
+    v3_vec = v2_vec + 0.005 * torch.randn(1, dim)
+    v3_vec = v3_vec / torch.norm(v3_vec)
+    
+    # v4 ortogonal/diferente
+    v4_vec = torch.randn(1, dim)
+    v4_vec = v4_vec / torch.norm(v4_vec)
+    
+    embeddings = torch.cat([v1_vec, v2_vec, v3_vec, v4_vec], dim=0)
+    if torch.cuda.is_available():
+        embeddings = embeddings.cuda()
+    
+    records = [
+        FileRecord(path=Path("v1.mp4"), size=1000, mtime=1.0, duration=600.0),
+        FileRecord(path=Path("v2.mp4"), size=1000, mtime=2.0, duration=602.0), # dur_diff = 0.3%
+        FileRecord(path=Path("v3.mp4"), size=2000, mtime=3.0, duration=1200.0), # dur_diff = 50%
+        FileRecord(path=Path("v4.mp4"), size=1000, mtime=4.0, duration=600.0),
+    ]
+    
+    groups = cluster_by_similarity(records, embeddings, similarity_threshold=0.90, mode=ScanMode.VIDEOS)
+    assert len(groups) == 1, f"Esperado exatamente 1 grupo de duplicatas, obtido {len(groups)}"
+    assert len(groups[0].files) == 2, f"Esperado 2 arquivos (v1 e v2), obtido {len(groups[0].files)}"
+    names = {f.name for f in groups[0].files}
+    assert names == {"v1.mp4", "v2.mp4"}, f"Grupo deve conter apenas v1 e v2, obtido: {names}"
+    print(f"[OK] Video Complete Linkage & Duration Filter test passed successfully!")
+
+
 if __name__ == "__main__":
     test_exact_duplicates()
     test_image_gpu_embeddings()
+    test_video_clustering_rules()
     print("\nALL INTEGRATION TESTS PASSED SUCCESSFULLY!")

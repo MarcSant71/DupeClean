@@ -152,7 +152,7 @@ def find_exact_duplicates(
                         total_candidates
                     )
 
-                if new_prefix_entries:
+                if len(new_prefix_entries) >= 1024:
                     cache.save_exact_batch(new_prefix_entries)
                     new_prefix_entries = []
         finally:
@@ -233,7 +233,7 @@ def find_exact_duplicates(
                         total_deep_check
                     )
 
-                if new_full_entries:
+                if len(new_full_entries) >= 512:
                     cache.save_exact_batch(new_full_entries)
                     new_full_entries = []
         finally:
