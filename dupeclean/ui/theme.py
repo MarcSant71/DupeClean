@@ -154,7 +154,6 @@ QHeaderView::section {
 QHeaderView::section:hover {
     background-color: #27272a;
     color: #38bdf8;
-    cursor: pointer;
 }
 
 /* Sliders */

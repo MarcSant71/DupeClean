@@ -124,17 +124,13 @@ class ResultsWidget(QWidget):
         ])
 
         header = self.tree.header()
-        # Interactive em todas as colunas para permitir ajuste manual livre com o mouse
-        header.setMinimumSectionSize(55)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)  # Apenas Full Path expande com a janela
+        # Todas as 7 colunas em modo Interactive e stretch desativado para permitir redimensionamento 100% livre com o mouse
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(50)
+        for col_idx in range(7):
+            header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
 
-        # Calibragem de indentação e larguras para eliminar cortes em checkboxes e ícones em qualquer escala DPI
+        # Calibragem de indentação e larguras iniciais
         self.tree.setIndentation(12)
         self.tree.setColumnWidth(0, 85)   # Selection
         self.tree.setColumnWidth(1, 260)  # File Name
@@ -142,6 +138,10 @@ class ResultsWidget(QWidget):
         self.tree.setColumnWidth(3, 140)  # Date Modified
         self.tree.setColumnWidth(4, 85)   # Similarity
         self.tree.setColumnWidth(5, 105)  # Origin
+        self.tree.setColumnWidth(6, 420)  # Full Path
+
+        # Permite rolagem horizontal suave se as colunas excederem o espaço disponível
+        self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         # Habilita ordenação interativa ao clicar nos cabeçalhos
         header.setSectionsClickable(True)
