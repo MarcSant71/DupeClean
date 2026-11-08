@@ -1,5 +1,18 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.0
+- **Responsive Media Preview Panel (Krokiet-Style):**
+  - Integrated horizontal splitter on results table with a dedicated side preview panel that stays hidden until a media file is selected.
+  - Single-click or keyboard navigation smoothly activates the preview panel for both photos and videos.
+  - Preserves 100% of double-click functionality to launch files in default Windows applications (`os.startfile`), as well as right-click context menu options (`Open File`, `Open Containing Folder`).
+  - **Photos:** High-resolution asynchronous loading with automatic EXIF orientation normalization (`ImageOps.exif_transpose`), preventing smartphone portrait photos from displaying sideways.
+  - **Videos:** Instant keyframe extraction via FFmpeg pipe rendering full-color poster frames with resolution and duration telemetry.
+  - **Zero-Latency In-Memory LRU Cache:** 60-item RAM cache providing 0ms instant switching between original and duplicate pairs without disk re-reads.
+  - **KISS Metadata Card:** Compact info box displaying file name, resolution/dimensions, format, and disk size, free of redundant action buttons.
+- **Unified Progress Bar Aesthetics:**
+  - Standardized progress fill colors for both `Current Stage` and `All Stages` to consistent sky-cyan (`#38bdf8`) with rounded geometries.
+  - Harmonized percentage indicator fonts and color palettes across both tracking tiers.
+
 ### What's New in v1.0.9
 - **Safe & Deterministic Deletion Workflow:**
   - Removed silent post-scan auto-selection. All duplicate items start strictly unchecked upon scan completion to avoid accidental bulk deletion.

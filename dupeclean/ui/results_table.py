@@ -5,7 +5,7 @@ selection rules, and visual Reference Folder protection.
 
 from pathlib import Path
 from datetime import datetime
-from typing import List, Set
+from typing import List, Set, Optional
 import os
 import subprocess
 
@@ -105,6 +105,7 @@ class SortableFileItem(QTreeWidgetItem):
 class ResultsWidget(QWidget):
     """Visualizador em árvore das duplicatas encontradas."""
     selection_changed = Signal(int, int)  # (count, total_bytes)
+    file_selected = Signal(object)        # Optional[FileRecord]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -150,6 +151,8 @@ class ResultsWidget(QWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.currentItemChanged.connect(self._on_current_item_changed)
         self.tree.itemChanged.connect(self._on_item_changed)
 
         layout.addWidget(self.tree)
@@ -161,6 +164,7 @@ class ResultsWidget(QWidget):
         self.tree.blockSignals(True)
         self.groups = groups
         self.tree.clear()
+        self.file_selected.emit(None)
 
         bold_font = QFont()
         bold_font.setBold(True)
@@ -470,6 +474,12 @@ class ResultsWidget(QWidget):
 
     def remove_deleted_files(self, deleted_paths: Set[Path]):
         """Remove da árvore os arquivos que foram excluídos com sucesso."""
+        cur_item = self.tree.currentItem()
+        if cur_item and cur_item.childCount() == 0:
+            cur_rec: Optional[FileRecord] = cur_item.data(0, Qt.ItemDataRole.UserRole)
+            if cur_rec and cur_rec.path in deleted_paths:
+                self.file_selected.emit(None)
+
         root = self.tree.invisibleRootItem()
         for i in range(root.childCount() - 1, -1, -1):
             parent = root.child(i)
@@ -483,6 +493,22 @@ class ResultsWidget(QWidget):
             if parent.childCount() <= 1:
                 root.removeChild(parent)
         self._emit_selection_stats()
+
+    def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
+        """Ao clicar com 1 clique em um arquivo, emite sinal para o preview."""
+        if item and item.childCount() == 0:
+            file_rec: Optional[FileRecord] = item.data(0, Qt.ItemDataRole.UserRole)
+            self.file_selected.emit(file_rec)
+        else:
+            self.file_selected.emit(None)
+
+    def _on_current_item_changed(self, current: Optional[QTreeWidgetItem], previous: Optional[QTreeWidgetItem]):
+        """Ao navegar com o teclado ou mudar a seleção na árvore, atualiza o preview."""
+        if current and current.childCount() == 0:
+            file_rec: Optional[FileRecord] = current.data(0, Qt.ItemDataRole.UserRole)
+            self.file_selected.emit(file_rec)
+        else:
+            self.file_selected.emit(None)
 
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int):
         """Ao clicar duas vezes em um arquivo, abre no player ou visualizador padrão do Windows."""

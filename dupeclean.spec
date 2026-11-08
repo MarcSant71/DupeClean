@@ -18,6 +18,7 @@ hiddenimports = [
     'PySide6.QtWidgets',
     'PIL',
     'PIL.Image',
+    'PIL.ImageOps',
     'sqlite3',
 ]
 

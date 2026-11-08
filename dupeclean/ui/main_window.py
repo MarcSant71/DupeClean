@@ -21,10 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from dupeclean import __version__
-from dupeclean.core.models import ScanMode, DuplicateGroup
+from dupeclean.core.models import ScanMode, DuplicateGroup, FileRecord
+from dupeclean.core.scanner import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from dupeclean.core.cache import CacheManager
 from dupeclean.ui.folder_panel import FolderPanel
 from dupeclean.ui.results_table import ResultsWidget, format_size
+from dupeclean.ui.preview_panel import PreviewPanel
 from dupeclean.worker import ScanWorker
 
 
@@ -301,20 +303,33 @@ class MainWindow(QMainWindow):
 
         right_layout.addLayout(top_bar)
 
-        # 2.2 Splitter vertical: Tabela de Resultados (cima) e Pastas (baixo) — Padrão Krokiet
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        # 2.2 Splitter vertical: Resultados+Preview (cima) e Pastas (baixo) — Padrão Krokiet
+        self.v_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        # Tabela de Resultados - TOPO
+        # Splitter horizontal no topo: Tabela de Resultados (esquerda) e Preview (direita)
+        self.h_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.h_splitter.setChildrenCollapsible(True)
+
+        # Tabela de Resultados
         self.results_widget = ResultsWidget()
         self.results_widget.selection_changed.connect(self._on_selection_changed)
-        splitter.addWidget(self.results_widget)
+        self.results_widget.file_selected.connect(self._on_file_selected)
+        self.h_splitter.addWidget(self.results_widget)
+
+        # Painel lateral de Preview (Inicia oculto até clicar em um arquivo de foto/vídeo)
+        self.preview_panel = PreviewPanel()
+        self.preview_panel.setVisible(False)
+        self.h_splitter.addWidget(self.preview_panel)
+        self.h_splitter.setSizes([750, 320])
+
+        self.v_splitter.addWidget(self.h_splitter)
 
         # Painel de Pastas (Incluídas com Ref e Excluídas) - BASE
         self.folder_panel = FolderPanel()
-        splitter.addWidget(self.folder_panel)
+        self.v_splitter.addWidget(self.folder_panel)
 
-        splitter.setSizes([520, 240])
-        right_layout.addWidget(splitter)
+        self.v_splitter.setSizes([520, 240])
+        right_layout.addWidget(self.v_splitter)
 
         # 2.3 Status Bar, Telemetry and Progress (Dois Estágios - Estilo Krokiet)
         status_container = QVBoxLayout()
@@ -361,7 +376,7 @@ class MainWindow(QMainWindow):
         self.progress_all.setValue(0)
 
         self.lbl_pct_all = QLabel("0%")
-        self.lbl_pct_all.setStyleSheet("color: #0284c7; font-size: 11px; font-family: 'Consolas', monospace;")
+        self.lbl_pct_all.setStyleSheet("color: #38bdf8; font-size: 11px; font-family: 'Consolas', monospace;")
         self.lbl_pct_all.setFixedWidth(40)
         self.lbl_pct_all.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
@@ -415,8 +430,29 @@ class MainWindow(QMainWindow):
             self.current_mode = item.data(Qt.ItemDataRole.UserRole)
             # Show slider only in visual modes
             self.container_slider.setVisible(self.current_mode in (ScanMode.IMAGES, ScanMode.VIDEOS))
+            self.preview_panel.clear()
+            self.preview_panel.setVisible(False)
             self.results_widget.set_results([])
             self.lbl_status.setText(f"Mode changed to: {item.text()}.")
+
+    @Slot(object)
+    def _on_file_selected(self, file_rec: Optional[FileRecord]):
+        """Atualiza o painel de preview quando o usuário clica com 1 clique em um arquivo de foto ou vídeo."""
+        if file_rec is not None and file_rec.path.exists():
+            ext = file_rec.ext.lower()
+            if ext in IMAGE_EXTENSIONS or ext in VIDEO_EXTENSIONS:
+                self.preview_panel.load_file(file_rec)
+                if not self.preview_panel.isVisible():
+                    self.preview_panel.setVisible(True)
+                    sizes = self.h_splitter.sizes()
+                    if len(sizes) == 2 and sizes[1] < 120:
+                        total_w = sum(sizes) if sum(sizes) > 0 else 1000
+                        self.h_splitter.setSizes([int(total_w * 0.68), int(total_w * 0.32)])
+                return
+
+        # Se clicou em cabeçalho ou arquivo não multimídia, recolhe o painel
+        self.preview_panel.clear()
+        self.preview_panel.setVisible(False)
 
     @staticmethod
     def _format_duration(seconds: float) -> str:
@@ -509,6 +545,8 @@ class MainWindow(QMainWindow):
         threshold = self.slider_sim.value() / 100.0
 
         self._set_scanning_state(True)
+        self.preview_panel.clear()
+        self.preview_panel.setVisible(False)
         self._was_cancelled = False
         self.current_stage_num = 1
         self.stage_start_time = time.time()
@@ -551,6 +589,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Ensures immediate termination of all background processes and threads upon closing the window."""
         self.ui_timer.stop()
+        if hasattr(self, "preview_panel"):
+            self.preview_panel._worker.stop()
 
         # Persiste pastas incluídas e excluídas no DupeClean.db antes de fechar
         try:

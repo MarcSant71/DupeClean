@@ -209,13 +209,8 @@ QProgressBar#progCurrent, QProgressBar#progAll {
     max-height: 8px;
 }
 
-QProgressBar#progCurrent::chunk {
+QProgressBar#progCurrent::chunk, QProgressBar#progAll::chunk {
     background-color: #38bdf8;
-    border-radius: 3px;
-}
-
-QProgressBar#progAll::chunk {
-    background-color: #0284c7;
     border-radius: 3px;
 }
 
@@ -295,5 +290,19 @@ QMenu::separator {
     height: 1px;
     background-color: #3f3f46;
     margin: 4px 6px;
+}
+
+/* Divisores de Splitter (Vertical e Horizontal) */
+QSplitter::handle {
+    background-color: #27272a;
+}
+QSplitter::handle:hover {
+    background-color: #38bdf8;
+}
+QSplitter::handle:horizontal {
+    width: 4px;
+}
+QSplitter::handle:vertical {
+    height: 4px;
 }
 """
