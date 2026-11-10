@@ -2,18 +2,18 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
 ### What's New in v1.1.1
 - **GPU Cohesive Clique Clustering:**
-  - Replaced single-point star clustering with complete-linkage cohesive clique clustering on GPU tensor cores.
-  - Mathematically guarantees that every video clip within a duplicate group shares mutual pairwise similarity $\ge \text{threshold}$, eliminating false positives between empty rooms and scenes with human activity.
-- **Robust Video Feature Extraction & PyAV Stream Pipeline:**
-  - Fast keyframe extraction across temporal keypoints with multi-slice DCT and spectral whitening on RTX Tensor Cores.
-  - Resolved dynamic stream descriptor demux errors on surveillance `.dav` video clips.
-  - Enforced strict 3-channel RGB array normalization, resolving shape mismatch crashes (`ValueError: all input arrays must have the same shape`) when infrared night-vision clips are processed in batches alongside daytime clips.
+  - Replaced star clustering with complete-linkage cohesive clique clustering executed directly on GPU.
+  - Guarantees that every video clip in a duplicate group shares pairwise similarity ≥ threshold, eliminating false positives between empty rooms and scenes with human activity.
+- **Robust Video Feature Extraction & PyAV Demuxing:**
+  - Multi-slice keyframe extraction across temporal keypoints with 2D DCT and spectral whitening.
+  - Fixed dynamic stream descriptor demux errors on surveillance `.dav` video clips.
+  - Enforced strict RGB array normalization, resolving shape mismatch crashes (`ValueError: all input arrays must have the same shape`) when infrared night-vision clips are processed in batches alongside daytime clips.
 - **Instant Tombstone Caching:**
   - Unreadable, 0-frame, or corrupted video files are persistently tombstoned in SQLite cache (`duration = -1.0, embedding = b""`).
   - Subsequent scans instantly skip unreadable files in ~2ms from RAM/cache, eliminating redundant disk I/O, CPU decompression cycles, and scan churn.
 - **Instantaneous Telemetry & Sliding-Window Throughput:**
   - Replaced cumulative average rate with a 3-second sliding window for instantaneous throughput (`it/s`) and dynamic, accurate ETA calculations during long scans.
-- **Privacy-Preserving Crash Logger & Clean Error Dialogs:**
+- **Crash Diagnostics & Clean Error Dialogs:**
   - Added timestamped error diagnostics to `data/logs/` with sensitive path and username sanitization.
   - Refined error presentation ("An error report has been saved in data/logs.").
 - **UI & Grid Stability:**
