@@ -1,9 +1,9 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
 ### What's New in v1.1.1
-- **GPU Cohesive Clique Clustering:**
-  - Replaced star clustering with complete-linkage cohesive clique clustering executed directly on GPU.
-  - Guarantees that every video clip in a duplicate group shares pairwise similarity ≥ threshold, eliminating false positives between empty rooms and scenes with human activity.
+- **Strict Mutual Similarity Grouping:**
+  - Enforces that every file within a duplicate group must directly match all other files in that group (pairwise mutual similarity ≥ threshold).
+  - Eliminates false-positive chaining, where dissimilar files (such as an empty room and a clip with people) could previously be merged into the same group through intermediate similar frames.
 - **Robust Video Feature Extraction & PyAV Demuxing:**
   - Multi-slice keyframe extraction across temporal keypoints with 2D DCT and spectral whitening.
   - Fixed dynamic stream descriptor demux errors on surveillance `.dav` video clips.
