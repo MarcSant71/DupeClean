@@ -100,6 +100,7 @@ class DeletableListWidget(QListWidget):
 
 class FolderPanel(QWidget):
     """Painel inferior com pastas incluídas e excluídas."""
+    folders_cleared = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -123,6 +124,7 @@ class FolderPanel(QWidget):
         self.table_included.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table_included.setColumnWidth(0, 50)
         self.table_included.paths_dropped.connect(self._add_multiple_included_paths)
+        self.table_included.model().rowsRemoved.connect(self._on_included_rows_removed)
         inc_layout.addWidget(self.table_included)
 
         # Action buttons for included folders
@@ -209,13 +211,20 @@ class FolderPanel(QWidget):
         path_item.setFlags(path_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.table_included.setItem(row, 1, path_item)
 
+    def _on_included_rows_removed(self, parent, first, last):
+        if self.table_included.rowCount() == 0:
+            self.folders_cleared.emit()
+
     def _remove_selected_included(self):
         selected_rows = set(index.row() for index in self.table_included.selectedIndexes())
         for row in sorted(selected_rows, reverse=True):
             self.table_included.removeRow(row)
 
     def _clear_all_included(self):
-        self.table_included.setRowCount(0)
+        if self.table_included.rowCount() == 0:
+            self.folders_cleared.emit()
+        else:
+            self.table_included.setRowCount(0)
 
     def _browse_excluded_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder to Exclude")

@@ -4,6 +4,7 @@ Worker multithread (QThread) para escaneamento assíncrono sem congelar a interf
 
 from pathlib import Path
 from typing import List
+import torch
 from PySide6.QtCore import QThread, Signal
 
 from dupeclean.core.models import ScanPath, ScanMode, DuplicateGroup
@@ -18,8 +19,8 @@ from dupeclean.core.cache import CacheManager
 class ScanWorker(QThread):
     """Executa a varredura e processamento na GPU em background com telemetria em múltiplos estágios."""
     
-    progress_status = Signal(str, int, int)                    # (mensagem, item_atual, total_itens)
-    progress_stage = Signal(str, int, int, int, int)           # (mensagem, item_atual, total_itens, estagio_num, total_estagios)
+    progress_status = Signal(str, "qint64", "qint64")                    # (mensagem, item_atual, total_itens)
+    progress_stage = Signal(str, "qint64", "qint64", int, int)           # (mensagem, item_atual, total_itens, estagio_num, total_estagios)
     scan_finished = Signal(list)                               # (List[DuplicateGroup])
     scan_error = Signal(str)
 
@@ -84,28 +85,37 @@ class ScanWorker(QThread):
                 )
 
             elif self.mode == ScanMode.IMAGES:
+                from dupeclean.core.hardware import get_optimal_gpu_budgets
+                budgets = get_optimal_gpu_budgets()
+                img_batch = budgets.get("image_batch_size", 256)
+
                 def _image_cb(msg: str, curr: int, tot: int):
-                    # Se for mensagem de cache -> Estágio 2/4. Se for processamento de fotos -> Estágio 3/4
                     st_num = 2 if "cache" in msg.lower() else 3
                     self.progress_stage.emit(msg, curr, tot, st_num, 4)
 
                 valid_records, embeddings = extract_image_embeddings(
                     records=records,
-                    batch_size=256,
+                    batch_size=img_batch,
                     progress_callback=_image_cb,
                     stop_check=self.isInterruptionRequested,
                     cache_manager=cache
                 )
                 if not self.isInterruptionRequested() and valid_records:
-                    self.progress_stage.emit("Clustering similar photos on RTX 5090...", 0, len(valid_records), 4, 4)
+                    def _cluster_img_cb(msg: str, curr: int, tot: int):
+                        self.progress_stage.emit(msg, curr, tot, 4, 4)
+
                     groups = cluster_by_similarity(
                         records=valid_records,
                         embeddings=embeddings,
                         similarity_threshold=self.similarity_threshold,
                         mode=ScanMode.IMAGES,
-                        stop_check=self.isInterruptionRequested
+                        stop_check=self.isInterruptionRequested,
+                        progress_callback=_cluster_img_cb
                     )
-                    self.progress_stage.emit("Clustering complete.", len(valid_records), len(valid_records), 4, 4)
+                    self.progress_stage.emit("Grouping complete.", len(valid_records), len(valid_records), 4, 4)
+                del embeddings
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             elif self.mode == ScanMode.VIDEOS:
                 def _video_cb(msg: str, curr: int, tot: int):
@@ -119,20 +129,35 @@ class ScanWorker(QThread):
                     cache_manager=cache
                 )
                 if not self.isInterruptionRequested() and valid_records:
-                    self.progress_stage.emit("Clustering similar videos on RTX 5090...", 0, len(valid_records), 4, 4)
+                    def _cluster_vid_cb(msg: str, curr: int, tot: int):
+                        self.progress_stage.emit(msg, curr, tot, 4, 4)
+
                     groups = cluster_by_similarity(
                         records=valid_records,
                         embeddings=embeddings,
                         similarity_threshold=self.similarity_threshold,
                         mode=ScanMode.VIDEOS,
-                        stop_check=self.isInterruptionRequested
+                        stop_check=self.isInterruptionRequested,
+                        progress_callback=_cluster_vid_cb
                     )
-                    self.progress_stage.emit("Clustering complete.", len(valid_records), len(valid_records), 4, 4)
+                    self.progress_stage.emit("Grouping complete.", len(valid_records), len(valid_records), 4, 4)
+                del embeddings
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             if not self.isInterruptionRequested():
                 self.scan_finished.emit(groups)
 
         except Exception as e:
+            try:
+                from dupeclean.core.crash_logger import log_critical_crash
+                ctx = {
+                    "Scan Mode": getattr(self.mode, "name", str(self.mode)),
+                    "Files Count": f"{len(records):,}" if "records" in locals() and records else "0"
+                }
+                log_critical_crash(e, context=ctx)
+            except Exception:
+                pass
             self.scan_error.emit(f"Error during scan: {str(e)}")
         finally:
             if not self.isInterruptionRequested():

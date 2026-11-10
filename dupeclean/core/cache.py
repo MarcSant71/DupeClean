@@ -124,6 +124,9 @@ class CacheManager:
             conn.execute("DROP INDEX IF EXISTS idx_exact_lookup;")
             conn.execute("DROP INDEX IF EXISTS idx_images_lookup;")
             conn.execute("DROP INDEX IF EXISTS idx_videos_lookup;")
+            # Purga embeddings de versões obsoletas (preserva tombstones com duration == -1.0)
+            conn.execute("DELETE FROM cache_images WHERE length(embedding) != 1536 AND length(embedding) != 0;")
+            conn.execute("DELETE FROM cache_videos WHERE length(embedding) != 7680 AND duration != -1.0;")
             conn.commit()
         finally:
             conn.close()
@@ -269,11 +272,13 @@ class CacheManager:
     def get_image_cache(
         self,
         records: List[FileRecord],
+        expected_bytes: Optional[int] = None,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
         stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, bytes]:
         """
         Retorna dicionário {caminho: embedding_bytes} para imagens com cache válido.
+        Valida tamanho em bytes do embedding para garantir compatibilidade estrutural.
         Suporta cancelamento imediato via stop_check.
         """
         results: Dict[str, bytes] = {}
@@ -298,7 +303,8 @@ class CacheManager:
                     c_path, c_size, c_mtime, emb_blob = row
                     rec = record_map.get(c_path)
                     if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
-                        results[c_path] = emb_blob
+                        if expected_bytes is None or len(emb_blob) == expected_bytes:
+                            results[c_path] = emb_blob
 
                 if progress_callback and total_recs > 2000 and (i % 2700 == 0 or i + chunk_size >= total_recs):
                     done = min(i + chunk_size, total_recs)
@@ -327,10 +333,13 @@ class CacheManager:
     def get_video_cache(
         self,
         records: List[FileRecord],
+        expected_bytes: Optional[int] = None,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
         stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Tuple[float, bytes]]:
         """
         Retorna dicionário {caminho: (duracao, embedding_bytes)} para vídeos válidos no cache.
+        Valida tamanho em bytes do embedding para garantir compatibilidade estrutural.
         Suporta cancelamento imediato via stop_check.
         """
         results: Dict[str, Tuple[float, bytes]] = {}
@@ -338,8 +347,9 @@ class CacheManager:
             return results
 
         chunk_size = 900
+        total_recs = len(records)
         with self._get_connection() as conn:
-            for i in range(0, len(records), chunk_size):
+            for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
                     return results
                 chunk = records[i:i + chunk_size]
@@ -354,7 +364,16 @@ class CacheManager:
                     c_path, c_size, c_mtime, dur, emb_blob = row
                     rec = record_map.get(c_path)
                     if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
-                        results[c_path] = (dur, emb_blob)
+                        if dur == -1.0 and len(emb_blob) == 0:
+                            # Tombstone: arquivo com falha/ilegível conhecido
+                            results[c_path] = (-1.0, b"")
+                        elif expected_bytes is None or len(emb_blob) == expected_bytes:
+                            results[c_path] = (dur, emb_blob)
+
+                if progress_callback and total_recs > 2000 and (i % 2700 == 0 or i + chunk_size >= total_recs):
+                    done = min(i + chunk_size, total_recs)
+                    progress_callback(f"Checking video cache ({done:,}/{total_recs:,})...", done, total_recs)
+
         return results
 
     def save_video_batch(self, entries: List[Tuple[str, int, float, float, bytes]]):

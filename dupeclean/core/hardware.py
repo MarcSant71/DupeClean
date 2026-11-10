@@ -89,3 +89,59 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     }
 
     return True, "", info
+
+
+def get_optimal_gpu_budgets() -> Dict[str, Any]:
+    """
+    Calcula dinamicamente os orçamentos de memória VRAM e tamanhos de lote
+    baseando-se estritamente na GPU real e na VRAM livre detectada em tempo de execução.
+    
+    Protege placas de 8 GB (RTX 3070 / 4060) contra transbordamento para RAM compartilhada,
+    ao mesmo tempo em que extrai 100% da vazão dos Tensor Cores em placas de 24 GB / 32 GB (3090, 4090, 5090).
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return {
+                "target_chunk_bytes": 128 * 1024 * 1024,
+                "image_batch_size": 128,
+                "vram_total_gb": 0.0,
+                "vram_free_gb": 0.0,
+                "gpu_name": "CPU",
+            }
+
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        total_gb = total_bytes / (1024 ** 3)
+        free_gb = free_bytes / (1024 ** 3)
+
+        # Regra de Segurança: aloca no máximo 25% da VRAM livre para um único bloco de cálculo GEMM.
+        # Garante 75% da VRAM livre como margem de segurança contra WDDM swap para a RAM.
+        # Piso: 256 MB (para 8 GB VRAM) | Teto: 2.0 GB (ponto ótimo para 24-32 GB VRAM).
+        target_chunk_bytes = max(
+            256 * 1024 * 1024,
+            min(int(free_bytes * 0.25), 2 * 1024 * 1024 * 1024)
+        )
+
+        # Escalonamento dinâmico do lote de extração de imagens por VRAM total
+        if total_gb >= 24.0:
+            image_batch_size = 1024
+        elif total_gb >= 11.5:
+            image_batch_size = 512
+        else:
+            image_batch_size = 256
+
+        return {
+            "target_chunk_bytes": target_chunk_bytes,
+            "image_batch_size": image_batch_size,
+            "vram_total_gb": round(total_gb, 2),
+            "vram_free_gb": round(free_gb, 2),
+            "gpu_name": torch.cuda.get_device_name(0),
+        }
+    except Exception:
+        return {
+            "target_chunk_bytes": 256 * 1024 * 1024,
+            "image_batch_size": 256,
+            "vram_total_gb": 8.0,
+            "vram_free_gb": 4.0,
+            "gpu_name": "NVIDIA RTX",
+        }

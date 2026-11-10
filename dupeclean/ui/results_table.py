@@ -104,8 +104,8 @@ class SortableFileItem(QTreeWidgetItem):
 
 class ResultsWidget(QWidget):
     """Visualizador em árvore das duplicatas encontradas."""
-    selection_changed = Signal(int, int)  # (count, total_bytes)
-    file_selected = Signal(object)        # Optional[FileRecord]
+    selection_changed = Signal(int, "qint64")  # (count, total_bytes) - qint64 suporta até 9 Exabytes sem overflow
+    file_selected = Signal(object)             # Optional[FileRecord]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -246,13 +246,16 @@ class ResultsWidget(QWidget):
             self.tree.addTopLevelItems(top_level_items)
 
         # Expande automaticamente todos os grupos por padrão (elimina a necessidade de clicar em cada um)
-        self.tree.expandAll()
         self.tree.setSortingEnabled(True)
         self.tree.sortByColumn(1, Qt.SortOrder.AscendingOrder)
         self.tree.expandAll()
         self.tree.blockSignals(False)
         self.tree.setUpdatesEnabled(True)
         self._emit_selection_stats()
+
+    def clear(self):
+        """Limpa completamente os resultados da árvore e reseta a seleção."""
+        self.set_results([])
 
     def _emit_selection_stats(self):
         """Calcula em tempo real quantos arquivos estão marcados e emite sinal para a janela principal."""
@@ -284,6 +287,8 @@ class ResultsWidget(QWidget):
         - Se houver arquivos de referência no grupo, marca os demais.
         - Se não houver referência, mantém o maior/mais recente e marca os outros.
         """
+        was_sorting = self.tree.isSortingEnabled()
+        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
         self.tree.setUpdatesEnabled(False)
         try:
@@ -315,6 +320,8 @@ class ResultsWidget(QWidget):
         finally:
             self.tree.setUpdatesEnabled(True)
             self.tree.blockSignals(False)
+            if was_sorting:
+                self.tree.setSortingEnabled(True)
             self._emit_selection_stats()
 
     def select_custom(self, rule: str):
@@ -322,6 +329,8 @@ class ResultsWidget(QWidget):
         Aplica regras de seleção avançadas por grupo (estilo Krokiet).
         Arquivos de referência são 100% protegidos e nunca marcados.
         """
+        was_sorting = self.tree.isSortingEnabled()
+        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
         self.tree.setUpdatesEnabled(False)
         try:
@@ -379,10 +388,14 @@ class ResultsWidget(QWidget):
         finally:
             self.tree.setUpdatesEnabled(True)
             self.tree.blockSignals(False)
+            if was_sorting:
+                self.tree.setSortingEnabled(True)
             self._emit_selection_stats()
 
     def invert_all(self):
         """Inverte a seleção de todos os arquivos não-referência da árvore inteira."""
+        was_sorting = self.tree.isSortingEnabled()
+        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
         self.tree.setUpdatesEnabled(False)
         try:
@@ -399,10 +412,14 @@ class ResultsWidget(QWidget):
         finally:
             self.tree.setUpdatesEnabled(True)
             self.tree.blockSignals(False)
+            if was_sorting:
+                self.tree.setSortingEnabled(True)
             self._emit_selection_stats()
 
     def select_all(self):
         """Marca todos os arquivos (exceto os de referência)."""
+        was_sorting = self.tree.isSortingEnabled()
+        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
         self.tree.setUpdatesEnabled(False)
         try:
@@ -417,10 +434,14 @@ class ResultsWidget(QWidget):
         finally:
             self.tree.setUpdatesEnabled(True)
             self.tree.blockSignals(False)
+            if was_sorting:
+                self.tree.setSortingEnabled(True)
             self._emit_selection_stats()
 
     def unselect_all(self):
         """Desmarca todos os arquivos."""
+        was_sorting = self.tree.isSortingEnabled()
+        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
         self.tree.setUpdatesEnabled(False)
         try:
@@ -435,6 +456,8 @@ class ResultsWidget(QWidget):
         finally:
             self.tree.setUpdatesEnabled(True)
             self.tree.blockSignals(False)
+            if was_sorting:
+                self.tree.setSortingEnabled(True)
             self._emit_selection_stats()
 
     def get_selected_files(self) -> List[Path]:

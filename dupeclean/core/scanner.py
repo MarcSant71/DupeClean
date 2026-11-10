@@ -21,7 +21,7 @@ VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
     ".m4v", ".ts", ".m2ts", ".mts", ".vob", ".mpg", ".mpeg",
     ".rmvb", ".rm", ".3gp", ".3g2", ".asf", ".f4v", ".divx",
-    ".ogv", ".m2v", ".m4b"
+    ".ogv", ".m2v", ".m4b", ".dav"
 }
 
 

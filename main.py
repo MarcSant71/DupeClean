@@ -42,19 +42,22 @@ class HardwareInitWorker(QThread):
 
 
 def excepthook(exc_type, exc_value, exc_tb):
-    """Captura exceções globais e grava em crash.log para diagnóstico fácil."""
-    error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    """Captura exceções globais não tratadas e grava log sanitizado (LGPD) com retenção de 7 dias."""
+    log_file_str = "data/logs/"
     try:
-        log_file = Path(__file__).resolve().parent / "crash.log"
-        log_file.write_text(error_msg, encoding="utf-8")
+        from dupeclean.core.crash_logger import log_critical_crash
+        log_path = log_critical_crash((exc_type, exc_value, exc_tb))
+        if log_path:
+            log_file_str = log_path.name
     except Exception:
         pass
-    print(error_msg, file=sys.stderr)
+
     try:
         QMessageBox.critical(
             None,
             "Unexpected Error - DupeClean",
-            f"An error occurred while running the application:\n\n{exc_value}\n\nDetails saved to crash.log"
+            f"An unexpected critical error occurred:\n\n{exc_value}\n\n"
+            f"A sanitized error report (LGPD compliant) has been recorded in {log_file_str}."
         )
     except Exception:
         pass

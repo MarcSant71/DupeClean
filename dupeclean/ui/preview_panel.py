@@ -7,7 +7,6 @@ cache LRU em memória e preservação estrita de proporção (aspect ratio).
 import io
 import os
 import sys
-import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 from collections import OrderedDict
@@ -22,10 +21,7 @@ from PySide6.QtWidgets import (
 
 from dupeclean.core.models import FileRecord
 from dupeclean.core.scanner import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
-from dupeclean.core.hasher_video import find_ffmpeg_binaries, get_video_duration
 from dupeclean.ui.results_table import format_size
-
-CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 class AspectRatioPixmapLabel(QLabel):
@@ -134,63 +130,54 @@ class PreviewWorker(QThread):
 
     def _load_video_frame(self, file_rec: FileRecord) -> Tuple[Optional[QPixmap], Dict[str, Any]]:
         path = file_rec.path
-        ffmpeg, ffprobe = find_ffmpeg_binaries()
-        if not ffmpeg:
-            return None, {"error": "FFmpeg not available"}
+        try:
+            import av
+            is_dav = path.suffix.lower() == ".dav"
+            options = {"probesize": "65536", "analyzeduration": "0"} if is_dav else None
+            container = av.open(str(path), options=options)
+            if not container.streams.video:
+                container.close()
+                return None, {"error": "No video stream found"}
 
-        duration = file_rec.duration
-        if duration is None and ffprobe:
-            duration = get_video_duration(path, ffprobe)
+            stream = container.streams.video[0]
+            duration = file_rec.duration
+            if duration is None:
+                duration = float(container.duration) / 1000000.0 if container.duration else None
+                if duration is None and stream.duration and stream.time_base:
+                    duration = float(stream.duration * stream.time_base)
 
-        # Escolhe um momento representativo: 20% da duração ou 1.0s
-        seek_sec = max(0.5, (duration * 0.2)) if (duration and duration > 2.0) else 1.0
+            seek_sec = max(0.5, (duration * 0.2)) if (duration and duration > 2.0) else 1.0
+            frame_img = None
 
-        cmd = [
-            ffmpeg,
-            "-ss", f"{seek_sec:.2f}",
-            "-i", str(path),
-            "-vframes", "1",
-            "-f", "image2pipe",
-            "-vcodec", "png",
-            "-v", "quiet",
-            "pipe:1"
-        ]
+            # 1. Tenta seek rápido para momento representativo (somente se não for .dav)
+            if not is_dav:
+                try:
+                    target_pts = int(seek_sec / stream.time_base) if stream.time_base else int(seek_sec * 1000000)
+                    container.seek(target_pts, any_frame=False, backward=True, stream=stream)
+                    for f in container.decode(video=0):
+                        frame_img = f.to_image()
+                        break
+                except Exception:
+                    frame_img = None
 
-        res = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=5,
-            creationflags=CREATE_NO_WINDOW
-        )
+            # 2. Fallback / .dav: decodifica o primeiro keyframe disponível via demux rápido
+            if frame_img is None:
+                for pkt in container.demux(stream):
+                    if pkt.is_keyframe:
+                        decoded = pkt.decode()
+                        if decoded:
+                            frame_img = decoded[0].to_image()
+                            break
 
-        if res.returncode != 0 or not res.stdout:
-            # Fallback para o início absoluto se a busca falhar
-            fallback_cmd = [
-                ffmpeg,
-                "-i", str(path),
-                "-vframes", "1",
-                "-f", "image2pipe",
-                "-vcodec", "png",
-                "-v", "quiet",
-                "pipe:1"
-            ]
-            res = subprocess.run(
-                fallback_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=5,
-                creationflags=CREATE_NO_WINDOW
-            )
+            container.close()
 
-        if res.returncode == 0 and res.stdout:
-            with Image.open(io.BytesIO(res.stdout)) as img:
-                orig_w, orig_h = img.size
+            if frame_img:
+                orig_w, orig_h = frame_img.size
                 max_bound = 1200
                 if orig_w > max_bound or orig_h > max_bound:
-                    img.thumbnail((max_bound, max_bound), Image.Resampling.BILINEAR)
+                    frame_img.thumbnail((max_bound, max_bound), Image.Resampling.BILINEAR)
 
-                img_rgba = img.convert("RGBA")
+                img_rgba = frame_img.convert("RGBA")
                 data = img_rgba.tobytes("raw", "RGBA")
                 qimg = QImage(data, img_rgba.width, img_rgba.height, img_rgba.width * 4, QImage.Format.Format_RGBA8888)
                 pixmap = QPixmap.fromImage(qimg.copy())
@@ -205,6 +192,8 @@ class PreviewWorker(QThread):
                     "path": str(path)
                 }
                 return pixmap, meta
+        except Exception as e:
+            return None, {"error": str(e)}
 
         return None, {"error": "Could not decode video frame"}
 

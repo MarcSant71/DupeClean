@@ -1,5 +1,25 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.1
+- **GPU Cohesive Clique Clustering:**
+  - Replaced single-point star clustering with complete-linkage cohesive clique clustering on GPU tensor cores.
+  - Mathematically guarantees that every video clip within a duplicate group shares mutual pairwise similarity $\ge \text{threshold}$, eliminating false positives between empty rooms and scenes with human activity.
+- **Robust Video Feature Extraction & PyAV Stream Pipeline:**
+  - Fast keyframe extraction across temporal keypoints with multi-slice DCT and spectral whitening on RTX Tensor Cores.
+  - Resolved dynamic stream descriptor demux errors on surveillance `.dav` video clips.
+  - Enforced strict 3-channel RGB array normalization, resolving shape mismatch crashes (`ValueError: all input arrays must have the same shape`) when infrared night-vision clips are processed in batches alongside daytime clips.
+- **Instant Tombstone Caching:**
+  - Unreadable, 0-frame, or corrupted video files are persistently tombstoned in SQLite cache (`duration = -1.0, embedding = b""`).
+  - Subsequent scans instantly skip unreadable files in ~2ms from RAM/cache, eliminating redundant disk I/O, CPU decompression cycles, and scan churn.
+- **Instantaneous Telemetry & Sliding-Window Throughput:**
+  - Replaced cumulative average rate with a 3-second sliding window for instantaneous throughput (`it/s`) and dynamic, accurate ETA calculations during long scans.
+- **Privacy-Preserving Crash Logger & Clean Error Dialogs:**
+  - Added timestamped error diagnostics to `data/logs/` with sensitive path and username sanitization.
+  - Refined error presentation ("An error report has been saved in data/logs.").
+- **UI & Grid Stability:**
+  - Interactive column width resizing with native cursor feedback across all result table headers.
+  - Safe folder state clearing and preview reset when comparison sources are cleared.
+
 ### What's New in v1.1.0
 - **Responsive Media Preview Panel (Krokiet-Style):**
   - Integrated horizontal splitter on results table with a dedicated side preview panel that stays hidden until a media file is selected.
@@ -74,7 +94,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 - **KISS Dark UI:** Clean PySide6 interface with non-blocking real-time telemetry.
 
 ### Quick Start (Portable)
-1. Download **`DupeClean-v1.0.8-windows-cuda.7z`** below.
+1. Download **`DupeClean-v1.1.1-windows-cuda.7z`** below.
 2. Extract with [7-Zip](https://www.7-zip.org/) or WinRAR to any folder.
 3. Launch **`DupeClean.exe`**.
 

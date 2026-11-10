@@ -7,6 +7,7 @@ similarity slider, and folder panel with Reference protection and Drag & Drop.
 import os
 import shutil
 import time
+from collections import deque
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import send2trash
@@ -326,6 +327,7 @@ class MainWindow(QMainWindow):
 
         # Painel de Pastas (Incluídas com Ref e Excluídas) - BASE
         self.folder_panel = FolderPanel()
+        self.folder_panel.folders_cleared.connect(self._on_folders_cleared)
         self.v_splitter.addWidget(self.folder_panel)
 
         self.v_splitter.setSizes([520, 240])
@@ -479,7 +481,7 @@ class MainWindow(QMainWindow):
         self.btn_delete_trash.setEnabled(has_sel)
         self.btn_delete_perm.setEnabled(has_sel)
 
-    @Slot(int, int)
+    @Slot(int, "qint64")
     def _on_selection_changed(self, count: int, total_bytes: int):
         """Atualiza dinamicamente os botões de ação e status conforme arquivos são marcados/desmarcados."""
         is_scanning = bool(self.worker and self.worker.isRunning())
@@ -498,6 +500,26 @@ class MainWindow(QMainWindow):
             self.btn_move.setText("📁 Move")
             self.btn_delete_trash.setText("🗑️ Trash")
             self.btn_delete_perm.setText("❌ Delete")
+
+    @Slot()
+    def _on_folders_cleared(self):
+        """Ao remover todas as fontes de comparação, limpa a grade de duplicatas, fecha preview e reseta status."""
+        if self.worker and self.worker.isRunning():
+            return
+
+        self.results_widget.clear()
+        if hasattr(self, "preview_panel"):
+            self.preview_panel.clear()
+            self.preview_panel.setVisible(False)
+
+        self.lbl_status.setText("Ready to scan. Add folders below.")
+
+        # Persiste o estado limpo das pastas no banco local
+        try:
+            cache = CacheManager()
+            cache.save_setting("saved_folders", self.folder_panel.export_state())
+        except Exception:
+            pass
 
     def _clear_cache_prompt(self):
         if self.worker and self.worker.isRunning():
@@ -614,18 +636,35 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _update_telemetry_tick(self):
-        """Autonomous telemetry update every 250ms, decoupled from disk I/O."""
+        """Autonomous telemetry update every 250ms with sliding-window instantaneous rate."""
         if not self.start_time:
             return
-        elapsed = time.time() - self.start_time
+        now = time.time()
+        elapsed = now - self.start_time
         elapsed_str = self._format_duration(elapsed)
 
         # Regra do Usuário: Durante o Estágio 1 (descoberta de arquivos), exibe APENAS o tempo decorrido.
         # O ETA só deve ser calculado e exibido a partir do Estágio 2, quando JÁ sabemos a quantidade exata de arquivos.
         stage_num = getattr(self, "current_stage_num", 1)
         if stage_num > 1 and self.latest_total > 0 and self.latest_current > 1 and elapsed > 0.5:
-            stage_elapsed = max(0.001, time.time() - getattr(self, "stage_start_time", self.start_time))
-            rate = self.latest_current / stage_elapsed
+            if not hasattr(self, "_telemetry_window"):
+                self._telemetry_window = deque()
+
+            self._telemetry_window.append((now, self.latest_current))
+            # Mantém apenas amostras dos últimos 3 segundos para velocidade instantânea real
+            while len(self._telemetry_window) > 2 and (now - self._telemetry_window[0][0]) > 3.0:
+                self._telemetry_window.popleft()
+
+            t_old, c_old = self._telemetry_window[0]
+            dt = now - t_old
+            dc = self.latest_current - c_old
+
+            if dt >= 0.8 and dc > 0:
+                rate = dc / dt
+            else:
+                stage_elapsed = max(0.001, now - getattr(self, "stage_start_time", self.start_time))
+                rate = self.latest_current / stage_elapsed
+
             remaining = max(0, self.latest_total - self.latest_current)
             eta_sec = remaining / max(rate, 0.001)
             eta_str = self._format_duration(eta_sec)
@@ -633,12 +672,14 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_timer.setText(f"⏱️ {elapsed_str}")
 
-    @Slot(str, int, int, int, int)
+    @Slot(str, "qint64", "qint64", int, int)
     def _on_stage_progress(self, msg: str, current: int, total: int, stage_num: int, total_stages: int):
-        # Se mudou de estágio, reseta o temporizador interno da fase para cálculo preciso de ETA
+        # Se mudou de estágio, reseta o temporizador interno da fase e a janela deslizante
         if getattr(self, "current_stage_num", 1) != stage_num:
             self.current_stage_num = stage_num
             self.stage_start_time = time.time()
+            if hasattr(self, "_telemetry_window"):
+                self._telemetry_window.clear()
 
         self.current_stage_num = stage_num
         self.total_stages = total_stages
@@ -704,7 +745,18 @@ class MainWindow(QMainWindow):
     def _on_scan_error(self, err_msg: str):
         self._finalize_scan_ui()
         self.lbl_status.setText("Scan error.")
-        QMessageBox.critical(self, "Execution Error", err_msg)
+        from dupeclean.core.crash_logger import sanitize_text
+        sanitized_err = sanitize_text(err_msg)
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Critical)
+        msg_box.setWindowTitle("Execution Error - DupeClean")
+        msg_box.setText(
+            f"A critical error occurred during the scan:\n\n"
+            f"{sanitized_err}\n\n"
+            f"An error report has been saved in data/logs."
+        )
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.exec()
 
     def _finalize_scan_ui(self):
         self.ui_timer.stop()
@@ -730,15 +782,10 @@ class MainWindow(QMainWindow):
         total_bytes = sum(p.stat().st_size for p in selected if p.exists())
         size_str = format_size(total_bytes)
 
-        file_list_str = "\n".join(f"• {p.name}" for p in selected[:10])
-        if len(selected) > 10:
-            file_list_str += f"\n... and {len(selected) - 10} more file(s)"
-
         confirm = QMessageBox.question(
             self,
             "Confirm Move to Recycle Bin",
-            f"Move {len(selected)} selected file(s) ({size_str}) to the Windows Recycle Bin?\n\n"
-            f"Files to be moved:\n{file_list_str}",
+            f"Move {len(selected)} selected file(s) ({size_str}) to the Windows Recycle Bin?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -790,15 +837,10 @@ class MainWindow(QMainWindow):
         total_bytes = sum(p.stat().st_size for p in selected if p.exists())
         size_str = format_size(total_bytes)
 
-        file_list_str = "\n".join(f"• {p.name}" for p in selected[:10])
-        if len(selected) > 10:
-            file_list_str += f"\n... and {len(selected) - 10} more file(s)"
-
         confirm = QMessageBox.question(
             self,
             "Confirm Move Files",
-            f"Move {len(selected)} selected file(s) ({size_str}) to:\n{dest_path}?\n\n"
-            f"Files to move:\n{file_list_str}",
+            f"Move {len(selected)} selected file(s) ({size_str}) to:\n{dest_path}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -854,15 +896,10 @@ class MainWindow(QMainWindow):
         total_bytes = sum(p.stat().st_size for p in selected if p.exists())
         size_str = format_size(total_bytes)
 
-        file_list_str = "\n".join(f"• {p.name}" for p in selected[:10])
-        if len(selected) > 10:
-            file_list_str += f"\n... and {len(selected) - 10} more file(s)"
-
         confirm = QMessageBox.warning(
             self,
             "Confirm Permanent Deletion",
-            f"WARNING: PERMANENTLY DELETE {len(selected)} selected file(s) ({size_str})?\n\n"
-            f"Files that will be permanently deleted from disk:\n{file_list_str}\n\n"
+            f"WARNING: Permanently delete {len(selected)} selected file(s) ({size_str}) from disk?\n\n"
             "This action CANNOT be undone and will NOT use the Recycle Bin!",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No

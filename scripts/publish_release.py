@@ -64,6 +64,19 @@ for r in releases:
         except Exception as e:
             print(f"Could not delete release {tag}: {e}")
 
+        # Delete older tag ref on GitHub
+        print(f"Deleting older git tag {tag} from GitHub...")
+        del_tag_req = urllib.request.Request(
+            f"https://api.github.com/repos/{REPO}/git/refs/tags/{tag}",
+            headers=headers,
+            method='DELETE'
+        )
+        try:
+            with urllib.request.urlopen(del_tag_req, timeout=30) as del_tag_resp:
+                print(f"Deleted older tag {tag} successfully.")
+        except Exception as e:
+            print(f"Could not delete tag {tag}: {e}")
+
 # 3. Read release notes
 body_text = NOTES_PATH.read_text(encoding="utf-8")
 
@@ -115,6 +128,15 @@ for a in existing_assets:
             print("Deleted old asset.")
 
 # 6. Upload .7z asset via streaming with progress updates
+# Clean up any older .7z archives in dist/
+for old_archive in (ROOT_DIR / "dist").glob("*.7z"):
+    if old_archive.name != ARCHIVE_NAME:
+        try:
+            print(f"Removing old local archive: {old_archive.name}")
+            old_archive.unlink()
+        except Exception as e:
+            print(f"Could not remove {old_archive.name}: {e}")
+
 if not ARCHIVE_PATH.exists():
     raise FileNotFoundError(f"Archive {ARCHIVE_PATH} does not exist!")
 

@@ -20,7 +20,7 @@ class ScanPath:
     is_reference: bool = False  # Se True, arquivos NUNCA são sugeridos para deleção
 
 
-@dataclass
+@dataclass(slots=True)
 class FileRecord:
     path: Path
     size: int

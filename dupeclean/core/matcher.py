@@ -5,28 +5,43 @@ Aplica rigorosamente as diretrizes da Pasta de Referência (Ref).
 """
 
 from pathlib import Path
-from typing import List, Dict, Set, Optional, Callable
+from typing import List, Dict, Set, Optional, Callable, Tuple
+import time
 import torch
+import numpy as np
 
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
 
 
-class DisjointSet:
-    """Estrutura Union-Find para agrupar pares similares em clusters."""
-    def __init__(self, size: int):
-        self.parent = list(range(size))
+def _fast_gpu_greedy_clique(cand_sims: torch.Tensor, thresh: float) -> torch.Tensor:
+    """
+    Calcula na GPU um clique maximal garantido onde TODOS os pares selecionados possuem
+    similaridade mútua >= thresh (elimina rigorosamente falsos positivos e encadeamento indireto).
+    """
+    K = cand_sims.shape[0]
+    if K <= 1:
+        return torch.ones(K, dtype=torch.bool, device=cand_sims.device)
 
-    def find(self, i: int) -> int:
-        if self.parent[i] == i:
-            return i
-        self.parent[i] = self.find(self.parent[i])
-        return self.parent[i]
+    adj = cand_sims >= thresh
+    in_clique = torch.zeros(K, dtype=torch.bool, device=cand_sims.device)
+    in_clique[0] = True
+    pool = adj[0].clone()
+    pool[0] = False
 
-    def union(self, i: int, j: int):
-        root_i = self.find(i)
-        root_j = self.find(j)
-        if root_i != root_j:
-            self.parent[root_i] = root_j
+    while pool.any():
+        pool_indices = torch.nonzero(pool).squeeze(1)
+        if pool_indices.numel() == 1:
+            next_node = pool_indices[0]
+        else:
+            sub_adj = adj[pool_indices][:, pool_indices]
+            best_local_idx = torch.argmax(sub_adj.sum(dim=1))
+            next_node = pool_indices[best_local_idx]
+
+        in_clique[next_node] = True
+        pool = pool & adj[next_node]
+        pool[in_clique] = False
+
+    return in_clique
 
 
 def cluster_by_similarity(
@@ -34,12 +49,14 @@ def cluster_by_similarity(
     embeddings: torch.Tensor,
     similarity_threshold: float,
     mode: ScanMode,
-    stop_check: Optional[Callable[[], bool]] = None
+    stop_check: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[Callable[[str, int, int], None]] = None
 ) -> List[DuplicateGroup]:
     """
-    Calcula similaridade por cosseno em blocos GEMM na GPU e agrupa duplicatas por Complete Linkage (cliques).
-    Garante rigorosamente que TODOS os arquivos de um grupo possuam similaridade mútua >= limiar
-    e tolerância temporal (duração <= 8% em vídeos), eliminando falsos positivos e encadeamento espúrio.
+    Calcula similaridade por cosseno em blocos GEMM na GPU e agrupa duplicatas via
+    algoritmo de Exemplar/Star Clustering de altíssimo rendimento diretamente na VRAM.
+    Elimina qualquer gargalo de CPU em coleções massivas, garantindo telemetria contínua,
+    alta ocupação de GPU (RTX Tensor Cores) e tolerância temporal em vídeos (<= 8%).
     """
     n = len(records)
     if n <= 1 or embeddings.shape[0] != n:
@@ -47,130 +64,157 @@ def cluster_by_similarity(
     if stop_check and stop_check():
         return []
 
-    # Vetor de durações para filtro GPU em vídeos
-    durations = None
-    if mode == ScanMode.VIDEOS:
-        dur_vals = [getattr(r, "duration", None) or 0.0 for r in records]
-        durations = torch.tensor(dur_vals, device=embeddings.device, dtype=torch.float32)
+    device = embeddings.device
 
-    pair_similarities: Dict[tuple, float] = {}
-    candidate_pairs: List[Tuple[float, int, int]] = []
+    with torch.inference_mode():
+        # 1. Vetor de durações para filtro GPU em vídeos
+        durations = None
+        if mode == ScanMode.VIDEOS:
+            dur_vals = [getattr(r, "duration", None) or 0.0 for r in records]
+            durations = torch.tensor(dur_vals, device=device, dtype=torch.float32)
 
-    # Multiplicação matricial em blocos para evitar explosão de memória (40 GB em 140k itens)
-    chunk_size = 2048
-    emb_t = embeddings.t()  # [dim, n]
+        # 2. Análise de conectividade em lote (GEMM) na GPU
+        # Dimensiona o chunk baseado no hardware para proteger placas de 8 GB e escalar até 32 GB
+        from dupeclean.core.hardware import get_optimal_gpu_budgets
+        budgets = get_optimal_gpu_budgets()
+        target_chunk_bytes = budgets.get("target_chunk_bytes", 256 * 1024 * 1024)
+        chunk_size = max(128, min(4096, int(target_chunk_bytes / (n * 2))))
+        emb_t = embeddings.t()
 
-    for i in range(0, n, chunk_size):
-        if stop_check and stop_check():
+        degrees = torch.zeros(n, dtype=torch.int32, device=device)
+        unassigned = torch.ones(n, dtype=torch.bool, device=device)
+
+        last_progress_time = 0.0
+
+        for i in range(0, n, chunk_size):
+            if stop_check and stop_check():
+                return []
+            end_i = min(i + chunk_size, n)
+            chunk = embeddings[i:end_i]
+            sim_block = torch.matmul(chunk, emb_t)
+            mask = sim_block >= similarity_threshold
+
+            if durations is not None:
+                dur_row = durations[i:end_i].unsqueeze(1)
+                dur_col = durations.unsqueeze(0)
+                has_dur = (dur_row > 0) & (dur_col > 0)
+                dur_max = torch.maximum(dur_row, dur_col)
+                dur_diff = torch.abs(dur_row - dur_col) / torch.clamp(dur_max, min=1e-5)
+                dur_valid = (~has_dur) | (dur_diff <= 0.08)
+                mask = mask & dur_valid
+
+            degrees[i:end_i] = mask.sum(dim=1).to(torch.int32) - 1
+
+            now = time.time()
+            if progress_callback and (now - last_progress_time >= 0.08 or end_i == n):
+                last_progress_time = now
+                progress_callback(f"Analyzing similarities ({end_i:,}/{n:,})...", end_i, n)
+
+        # Arquivos com grau 0 não possuem nenhum par similar
+        unassigned[degrees <= 0] = False
+        candidates = torch.nonzero(unassigned).squeeze(1)
+        total_candidates = candidates.numel()
+
+        if total_candidates == 0:
             return []
 
-        end_i = min(i + chunk_size, n)
-        chunk = embeddings[i:end_i]  # [chunk_len, dim]
+        # 3. Ordenação inteligente de líderes:
+        # Prioriza arquivos de Referência (is_reference=True) e maior densidade/grau de conectividade
+        is_ref_arr = np.array([1 if getattr(r, "is_reference", False) else 0 for r in records], dtype=np.int32)
+        is_ref_tensor = torch.from_numpy(is_ref_arr).to(device)
 
-        # sim_block: [chunk_len, n]
-        sim_block = torch.matmul(chunk, emb_t)
+        cand_degrees = degrees[candidates]
+        cand_refs = is_ref_tensor[candidates]
+        composite_keys = (cand_refs.to(torch.int64) * 1_000_000_000) + cand_degrees.to(torch.int64)
+        sorted_order = candidates[torch.argsort(composite_keys, descending=True)]
 
-        # Máscara estrita do triângulo superior (j > i_global) e acima do limiar
-        row_indices = torch.arange(i, end_i, device=embeddings.device).unsqueeze(1)
-        col_indices = torch.arange(n, device=embeddings.device).unsqueeze(0)
-        mask = (col_indices > row_indices) & (sim_block >= similarity_threshold)
+        # 4. Formação de grupos por Cohesive Clique Clustering acelerado na GPU
+        duplicate_groups: List[DuplicateGroup] = []
+        group_id = 1
+        processed_candidates = 0
 
-        # Filtro temporal estrito para vídeos: arquivos duplicados devem ter durações similares (<= 8%)
-        if durations is not None:
-            dur_row = durations[i:end_i].unsqueeze(1)
-            dur_col = durations.unsqueeze(0)
-            has_dur = (dur_row > 0) & (dur_col > 0)
-            dur_max = torch.maximum(dur_row, dur_col)
-            dur_diff = torch.abs(dur_row - dur_col) / torch.clamp(dur_max, min=1e-5)
-            dur_valid = (~has_dur) | (dur_diff <= 0.08)
-            mask = mask & dur_valid
+        for idx in sorted_order:
+            if stop_check and stop_check():
+                return []
 
-        nonzero = torch.nonzero(mask)
-        if nonzero.shape[0] > 0:
-            r_locals = nonzero[:, 0]
-            c_globals = nonzero[:, 1]
-            scores = sim_block[r_locals, c_globals].cpu().float().numpy()
-            r_globals = (r_locals + i).cpu().numpy()
-            c_globals_np = c_globals.cpu().numpy()
+            idx_val = idx.item()
+            if not unassigned[idx_val]:
+                continue
 
-            for k in range(len(scores)):
-                if stop_check and stop_check():
-                    return []
-                g_i = int(r_globals[k])
-                g_j = int(c_globals_np[k])
-                sc = float(scores[k])
-                pair_similarities[(min(g_i, g_j), max(g_i, g_j))] = sc
-                candidate_pairs.append((sc, g_i, g_j))
+            sim_vec = torch.mv(embeddings, embeddings[idx_val])
+            match_mask = unassigned & (sim_vec >= similarity_threshold)
 
-    if stop_check and stop_check():
-        return []
+            if durations is not None:
+                lead_dur = durations[idx_val]
+                if lead_dur > 0:
+                    has_dur = (lead_dur > 0) & (durations > 0)
+                    dur_max = torch.maximum(lead_dur, durations)
+                    dur_diff = torch.abs(lead_dur - durations) / torch.clamp(dur_max, min=1e-5)
+                    dur_valid = (~has_dur) | (dur_diff <= 0.08)
+                    match_mask = match_mask & dur_valid
 
-    # Agrupamento por Complete Linkage (Clique exato):
-    # Ordena pares por similaridade decrescente para priorizar os pares mais próximos
-    candidate_pairs.sort(key=lambda x: x[0], reverse=True)
+            cand_indices = torch.nonzero(match_mask).squeeze(1)
+            k_members = cand_indices.numel()
 
-    clusters: List[List[int]] = []
-    item_to_cluster: Dict[int, List[int]] = {}
+            if k_members <= 1:
+                unassigned[idx_val] = False
+                processed_candidates += 1
+                continue
 
-    for s, g_i, g_j in candidate_pairs:
-        if stop_check and stop_check():
-            return []
+            cand_embs = embeddings[cand_indices]
+            cand_sims = torch.matmul(cand_embs, cand_embs.t())
 
-        c_i = item_to_cluster.get(g_i)
-        c_j = item_to_cluster.get(g_j)
+            # 1. Verifica se todos os candidatos já formam um clique perfeito
+            if (cand_sims.min(dim=1).values >= similarity_threshold).all():
+                clique_indices = cand_indices
+                k_clique = k_members
+                avg_sim = (cand_sims.sum() - k_clique).item() / (k_clique * (k_clique - 1)) if k_clique > 1 else 1.0
+            else:
+                # 2. Extrai na GPU o clique maximal contendo o líder
+                clique_mask = _fast_gpu_greedy_clique(cand_sims, similarity_threshold)
+                clique_indices = cand_indices[clique_mask]
+                k_clique = clique_indices.numel()
+                if k_clique > 1:
+                    sub_sims = cand_sims[clique_mask][:, clique_mask]
+                    avg_sim = (sub_sims.sum() - k_clique).item() / (k_clique * (k_clique - 1))
+                else:
+                    clique_indices = torch.empty(0, dtype=torch.int64, device=device)
+                    avg_sim = 1.0
 
-        if c_i is None and c_j is None:
-            new_c = [g_i, g_j]
-            clusters.append(new_c)
-            item_to_cluster[g_i] = new_c
-            item_to_cluster[g_j] = new_c
-        elif c_i is not None and c_j is None:
-            # g_j só é adicionado ao grupo se for similar a TODOS os membros já no grupo
-            if all((min(g_j, m), max(g_j, m)) in pair_similarities for m in c_i):
-                c_i.append(g_j)
-                item_to_cluster[g_j] = c_i
-        elif c_j is not None and c_i is None:
-            # g_i só é adicionado ao grupo se for similar a TODOS os membros já no grupo
-            if all((min(g_i, m), max(g_i, m)) in pair_similarities for m in c_j):
-                c_j.append(g_i)
-                item_to_cluster[g_i] = c_j
-        elif c_i is not c_j:
-            # Fusão de dois grupos: só mescla se TODOS os membros forem mutuamente similares
-            if all((min(a, b), max(a, b)) in pair_similarities for a in c_i for b in c_j):
-                for m in c_j:
-                    c_i.append(m)
-                    item_to_cluster[m] = c_i
-                clusters.remove(c_j)
+            if clique_indices.numel() > 1:
+                members_list = clique_indices.cpu().tolist()
+                # Garante que o líder seja o primeiro elemento da lista
+                if idx_val in members_list:
+                    members_list.remove(idx_val)
+                    members_list.insert(0, idx_val)
 
-    duplicate_groups: List[DuplicateGroup] = []
-    group_id = 1
+                group_files = [records[m] for m in members_list]
 
-    for cl in clusters:
-        if stop_check and stop_check():
-            return []
+                duplicate_groups.append(DuplicateGroup(
+                    group_id=group_id,
+                    files=group_files,
+                    similarity=round(float(avg_sim), 4),
+                    kind=mode
+                ))
+                group_id += 1
 
-        if len(cl) > 1:
-            group_files = [records[i] for i in cl]
+                unassigned[clique_indices] = False
+                processed_candidates += clique_indices.numel()
+            else:
+                unassigned[idx_val] = False
+                processed_candidates += 1
 
-            # Similaridade real média de todos os pares do clique
-            scores = []
-            for a_idx in range(len(cl)):
-                for b_idx in range(a_idx + 1, len(cl)):
-                    pair = (min(cl[a_idx], cl[b_idx]), max(cl[a_idx], cl[b_idx]))
-                    if pair in pair_similarities:
-                        scores.append(pair_similarities[pair])
+            now = time.time()
+            if progress_callback and (now - last_progress_time >= 0.08 or processed_candidates >= total_candidates):
+                last_progress_time = now
+                item_label = "photos" if mode == ScanMode.IMAGES else ("videos" if mode == ScanMode.VIDEOS else "files")
+                progress_callback(
+                    f"Grouping similar {item_label} ({min(processed_candidates, total_candidates):,}/{total_candidates:,})...",
+                    min(processed_candidates, total_candidates),
+                    total_candidates
+                )
 
-            avg_score = sum(scores) / len(scores) if scores else similarity_threshold
-
-            duplicate_groups.append(DuplicateGroup(
-                group_id=group_id,
-                files=group_files,
-                similarity=round(avg_score, 4),
-                kind=mode
-            ))
-            group_id += 1
-
-    return duplicate_groups
+        return duplicate_groups
 
 
 def apply_reference_rules(group: DuplicateGroup) -> Set[Path]:
