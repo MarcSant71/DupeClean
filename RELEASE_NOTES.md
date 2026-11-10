@@ -108,11 +108,7 @@ Traditional tools are lightweight (~15 MB) because they run basic pixel math on 
 - Completely isolated Python 3 runtime — **zero installation or setup required**.
 
 ### 💡 Prefer a lightweight download? Run from source!
-If you already have Python and PyTorch installed on your machine (e.g., from ComfyUI or SD), you don't need this 1.7 GB bundle! You can clone and run directly from source (**under 1 MB** of code):
+If you already have Python and an NVIDIA CUDA-enabled PyTorch environment on your machine (e.g., for ComfyUI, Stable Diffusion, or AI development), you don't need to download this 1.7 GB standalone bundle. The repository source code is **under 1 MB**.
 
-```bash
-git clone https://github.com/MarcSant71/DupeClean.git
-cd DupeClean
-pip install -r requirements.txt
-python main.py
-```
+Follow the step-by-step setup in the repository documentation:  
+👉 **[Installation & Setup Guide](https://github.com/MarcSant71/DupeClean#-installation--setup)** (includes virtual environment configuration, PyTorch CUDA builds for RTX 30/40/50, and hardware FFmpeg NVDEC binaries).
