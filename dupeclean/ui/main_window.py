@@ -751,7 +751,13 @@ class MainWindow(QMainWindow):
                 stage_elapsed = max(0.001, now - getattr(self, "stage_start_time", self.start_time))
                 rate = self.latest_current / stage_elapsed
 
-            self.lbl_timer.setText(f"⏱️ {elapsed_str} ({rate:,.0f} it/s)")
+            remaining = max(0, self.latest_total - self.latest_current)
+            if rate > 0 and remaining > 0:
+                eta_sec = remaining / rate
+                eta_str = self._format_duration(eta_sec)
+                self.lbl_timer.setText(f"⏱️ {elapsed_str} (ETA: {eta_str}) • {rate:,.0f} it/s")
+            else:
+                self.lbl_timer.setText(f"⏱️ {elapsed_str} ({rate:,.0f} it/s)")
         else:
             self.lbl_timer.setText(f"⏱️ {elapsed_str}")
 
