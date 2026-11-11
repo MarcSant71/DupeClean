@@ -51,6 +51,9 @@ class DuplicateGroup:
         """Calcula espaço recuperável deixando pelo menos 1 arquivo intacto."""
         if len(self.files) <= 1:
             return 0
+        ref_files = [f for f in self.files if f.is_reference]
+        if ref_files:
+            return sum(f.size for f in self.files if not f.is_reference)
         sizes = [f.size for f in self.files]
         # Deixa o maior ou o primeiro preservado
         return sum(sizes) - max(sizes)

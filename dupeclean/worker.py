@@ -3,7 +3,9 @@ Worker multithread (QThread) para escaneamento assíncrono sem congelar a interf
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Set
+import shutil
+import send2trash
 import torch
 from PySide6.QtCore import QThread, Signal
 
@@ -12,7 +14,7 @@ from dupeclean.core.scanner import crawl_directories
 from dupeclean.core.hasher_exact import find_exact_duplicates
 from dupeclean.core.hasher_image import extract_image_embeddings
 from dupeclean.core.hasher_video import extract_video_embeddings
-from dupeclean.core.matcher import cluster_by_similarity
+from dupeclean.core.matcher import cluster_by_similarity, filter_reference_groups
 from dupeclean.core.cache import CacheManager
 
 
@@ -146,6 +148,7 @@ class ScanWorker(QThread):
                     torch.cuda.empty_cache()
 
             if not self.isInterruptionRequested():
+                groups = filter_reference_groups(groups)
                 self.scan_finished.emit(groups)
 
         except Exception as e:
@@ -165,3 +168,65 @@ class ScanWorker(QThread):
                     cache.checkpoint()
                 except Exception:
                     pass
+
+
+class FileActionWorker(QThread):
+    """Executa ações de arquivos (lixeira, exclusão permanente ou movimentação) em background sem congelar a UI."""
+
+    progress = Signal(str, "qint64", "qint64")  # (status_msg, current_count, total_count)
+    finished_action = Signal(set, list)        # (deleted_paths_set, errors_list)
+
+    def __init__(
+        self,
+        paths: List[Path],
+        action: str,  # 'trash', 'delete', 'move'
+        dest_dir: Optional[Path] = None,
+        parent=None
+    ):
+        super().__init__(parent)
+        self.paths = paths
+        self.action = action
+        self.dest_dir = dest_dir
+
+    def run(self):
+        deleted_set: Set[Path] = set()
+        errors: List[str] = []
+        total = len(self.paths)
+
+        verb_map = {
+            "trash": "Moving to Recycle Bin",
+            "delete": "Permanently deleting",
+            "move": "Moving files"
+        }
+        verb = verb_map.get(self.action, "Processing")
+
+        for idx, path in enumerate(self.paths, 1):
+            if self.isInterruptionRequested():
+                break
+
+            try:
+                if self.action == "trash":
+                    send2trash.send2trash(str(path))
+                    deleted_set.add(path)
+                elif self.action == "delete":
+                    path.unlink(missing_ok=True)
+                    deleted_set.add(path)
+                elif self.action == "move" and self.dest_dir:
+                    target = self.dest_dir / path.name
+                    if target.exists():
+                        stem = path.stem
+                        suffix = path.suffix
+                        c = 1
+                        while target.exists():
+                            target = self.dest_dir / f"{stem}_dup{c}{suffix}"
+                            c += 1
+                    shutil.move(str(path), str(target))
+                    deleted_set.add(path)
+            except Exception as e:
+                errors.append(f"{path.name}: {str(e)}")
+
+            # Emite telemetria periódica (a cada 20 arquivos ou nos extremos) para manter o event loop leve e 60fps
+            if idx % 20 == 0 or idx == total or idx == 1:
+                self.progress.emit(f"{verb} ({idx:,} / {total:,}) - {path.name}", idx, total)
+
+        self.finished_action.emit(deleted_set, errors)

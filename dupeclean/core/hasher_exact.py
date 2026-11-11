@@ -94,16 +94,20 @@ def find_exact_duplicates(
     cache_hits_prefix = sum(1 for f in flat_candidates if str(f.path) in cached_exact and cached_exact[str(f.path)][0])
 
     if progress_callback and cache_hits_prefix > 0:
-        progress_callback(f"Loading cached headers ({cache_hits_prefix}/{total_candidates})...", cache_hits_prefix, total_candidates)
+        progress_callback(f"Loading cached results ({cache_hits_prefix:,}/{total_candidates:,})...", cache_hits_prefix, total_candidates)
 
+    by_full_hash = defaultdict(list)
     by_header_hash = defaultdict(list)
     to_header_check: List[FileRecord] = []
 
-    # Separa candidatos já presentes no cache dos que requerem leitura em disco
+    # Fast-path: arquivos já com hash completo em cache vão direto para o agrupamento final (elimina loops redundantes)
     for rec in flat_candidates:
         p_key = str(rec.path)
         cached_data = cached_exact.get(p_key)
-        if cached_data and cached_data[0]:
+        if cached_data and cached_data[1]:
+            rec.hash_value = cached_data[1]
+            by_full_hash[(rec.size, cached_data[1])].append(rec)
+        elif cached_data and cached_data[0]:
             by_header_hash[(rec.size, cached_data[0])].append(rec)
         else:
             to_header_check.append(rec)
@@ -147,7 +151,7 @@ def find_exact_duplicates(
 
                 if progress_callback:
                     progress_callback(
-                        f"Comparing headers ({header_processed}/{total_candidates})...",
+                        f"Comparing file signatures ({header_processed:,}/{total_candidates:,})...",
                         header_processed,
                         total_candidates
                     )
@@ -171,23 +175,21 @@ def find_exact_duplicates(
     candidates_by_header = [files for key, files in by_header_hash.items() if len(files) > 1]
     total_deep_check = sum(len(f) for f in candidates_by_header)
 
-    if total_deep_check == 0 or (stop_check and stop_check()):
-        return []
-
-    flat_deep_candidates = [f for grp in candidates_by_header for f in grp]
-    by_full_hash = defaultdict(list)
     to_deep_check: List[FileRecord] = []
     deep_cached_count = 0
 
-    for rec in flat_deep_candidates:
-        p_key = str(rec.path)
-        cached_data = cached_exact.get(p_key)
-        if cached_data and cached_data[1]:
-            rec.hash_value = cached_data[1]
-            by_full_hash[(rec.size, rec.hash_value)].append(rec)
-            deep_cached_count += 1
-        else:
-            to_deep_check.append(rec)
+    if total_deep_check > 0 and not (stop_check and stop_check()):
+        flat_deep_candidates = [f for grp in candidates_by_header for f in grp]
+
+        for rec in flat_deep_candidates:
+            p_key = str(rec.path)
+            cached_data = cached_exact.get(p_key)
+            if cached_data and cached_data[1]:
+                rec.hash_value = cached_data[1]
+                by_full_hash[(rec.size, rec.hash_value)].append(rec)
+                deep_cached_count += 1
+            else:
+                to_deep_check.append(rec)
 
     if to_deep_check and not (stop_check and stop_check()):
         deep_workers = min(16, max(4, os.cpu_count() or 4))
@@ -228,7 +230,7 @@ def find_exact_duplicates(
 
                 if progress_callback:
                     progress_callback(
-                        f"Computing full hashes ({deep_processed}/{total_deep_check})...",
+                        f"Computing full hashes ({deep_processed:,}/{total_deep_check:,})...",
                         deep_processed,
                         total_deep_check
                     )

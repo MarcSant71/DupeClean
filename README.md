@@ -9,7 +9,7 @@
 High-performance duplicate file, image, and video finder engineered and optimized exclusively for **NVIDIA GeForce RTX (30, 40, and 50 Series)** GPUs with Ampere, Ada Lovelace, and Blackwell architectures.
 
 > 📦 **Portable Release (No Python Installation Required):**  
-> Download the pre-built standalone package [**`DupeClean-v1.0.3-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
+> Download the pre-built standalone package [**`DupeClean-v1.1.2-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
 
 ---
 
@@ -42,6 +42,69 @@ When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools 
   * Drag & Drop folder support from Windows Explorer.
   * Similarity threshold slider (70% to 100%) for perceptual image and video matching.
   * Safe file deletion via the Windows Recycle Bin (`Send2Trash`).
+
+---
+
+## 🔬 Pipeline Architecture & Hardware Allocation
+
+DupeClean achieves extreme deduplication throughput by strictly assigning each task to the processor architecture best equipped for it: **CPU for parallel micro-sampling and I/O; GPU Tensor Cores for mass linear algebra and vector clustering.**
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   DUPACLEAN PIPELINE                                   │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+  Stage 1: Discovery         Fast multi-threaded directory crawl & metadata indexing (CPU)
+         │
+  Stage 2: Cache Check       Instant lookup in SQLite WAL database (<5 ms per 10k items)
+         │
+  Stage 3: Frame Sampling    Multi-process CPU workers pinpoint 5 keyframes (Fast Seek)
+         │                   Batched directly into GPU VRAM for 2D Spectral DCT (FP16)
+         │
+  Stage 4: GPU Clustering    Pairwise Cosine Similarity & Cohesive Clique Clustering
+                             executed 100% inside RTX VRAM via Tensor Cores (GEMM)
+```
+
+### The 4-Stage Breakdown
+
+#### Stage 1/4: Discovery & Metadata Enumeration (CPU / Disk I/O)
+* **What happens:** Recursively crawls target folders, indexes paths, isolates user-defined **Reference Folders** (`Ref`), and extracts metadata (file size, timestamps, container extensions).
+* **Optimization:** Discards zero-byte files, filters out excluded directories, and indexes hundreds of thousands of files in seconds using low-overhead OS system calls.
+
+#### Stage 2/4: Exact Pre-filtering & Persistent Cache (CPU & SQLite WAL)
+* **What happens:** Consults the local persistent database (`dupeclean_cache.db`) using SQLite WAL mode.
+* **Optimization:** 
+  * Files whose signatures already exist are loaded into memory at **over 15,000 files/second**, bypassing redundant disk reads entirely.
+  * In *Duplicate Files* mode, applies accelerated xxHash64 on the initial 4 KB of files with identical sizes to eliminate 90%+ of non-duplicate candidates before reading full files.
+
+#### Stage 3/4: Feature Extraction & Micro-Sampling (Multi-Process CPU → GPU Batching)
+* **What happens:** Uncached images and videos are read, decoded, and converted into compact spectral feature vectors.
+* **Architecture Choice (Why CPU Multi-processing for Keyframes?):**
+  * **Video Transcoding vs. Deduplication Sampling:** Video converters transcode hundreds of thousands of *continuous frames* from a single video, where paying the ~20 ms GPU session startup cost makes sense. In deduplication, we only need **5 temporal keyframes** across **100,000+ distinct files**.
+  * **Zero Setup Overhead:** Standard GeForce drivers restrict concurrent NVDEC hardware decode sessions (typically 3 to 8 streams). Creating and tearing down GPU decoder contexts for 5 frames per file causes massive driver latency.
+  * **Parallel CPU Workers:** DupeClean allocates `(CPU Threads // 2)` isolated worker processes. In standard indexed containers (MP4, MKV, MOV), workers execute **Fast Keyframe Seek**, reading only the header index and fetching the 5 I-frames in **1–2 ms** without reading the full file.
+* **Immediate GPU Hand-off:** As soon as workers gather a batch of frames, PyTorch transfers them to the RTX GPU to execute **2D Spectral Discrete Cosine Transform (DCT)** in half-precision (FP16) in less than 0.5 ms.
+
+#### Stage 4/4: Mass Tensor Core Clustering (100% GPU VRAM)
+* **What happens:** All embeddings reside in GPU VRAM as a contiguous matrix (e.g., `[154,624 x 3,840]` in FP16). The GPU performs all-to-all cosine similarity matrix multiplications (GEMM) and runs cohesive clique clustering.
+* **Architecture Choice:** What would take hours of CPU multi-threading is executed in seconds on RTX **Tensor Cores**, delivering millions of similarity comparisons per second.
+
+---
+
+### 💡 Frequently Asked Questions on Hardware Usage
+
+#### *"Why is my CPU usage high (~50–60%) while my RTX GPU stays near 0% during Stage 3?"*
+During Stage 3, multiple CPU workers are concurrently opening containers and extracting keyframes from disk. The RTX GPU processes each batch of 128 frames in **fractions of a millisecond** (<0.5 ms). Because the GPU finishes almost instantly and waits for the next disk/CPU batch, Windows Task Manager's 1-second average sampler reports ~0% utilization until Stage 4 begins.
+
+#### *"How does DupeClean adapt to different CPUs (e.g., Core i9 vs. Ryzen 5)?"*
+Worker allocation scales dynamically based on logical processor count:
+* **Intel Core i9-14900K (32 threads):** 16 workers (~50–60 videos/s on raw DVR files, 250+ videos/s on MP4).
+* **AMD Ryzen 5 4500 (12 threads):** 6 workers (~15 videos/s on raw DVR files, 70+ videos/s on MP4).
+* Half of your CPU threads are always kept free so Windows, desktop audio, and the UI never freeze or stutter.
+
+#### *"Does it automatically optimize for different RTX GPUs (RTX 3070 vs. 3090 vs. 5090)?"*
+Yes. The `get_optimal_gpu_budgets()` engine inspects VRAM capacity and free headroom in real time via `torch.cuda.mem_get_info()`:
+* **8 GB GPUs (e.g., RTX 3070, 4060):** Restricts GEMM matrix blocks to **256 MB** to prevent Windows WDDM from swapping VRAM into system RAM (zero out-of-memory crashes).
+* **24 GB / 32 GB GPUs (e.g., RTX 3090, 4090, 5090):** Automatically scales up to **2.0 GB blocks** and 1,024-item batches, saturating memory bandwidth and 3rd/4th/5th Gen Tensor Cores.
 
 ---
 

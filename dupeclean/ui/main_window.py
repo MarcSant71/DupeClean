@@ -28,7 +28,7 @@ from dupeclean.core.cache import CacheManager
 from dupeclean.ui.folder_panel import FolderPanel
 from dupeclean.ui.results_table import ResultsWidget, format_size
 from dupeclean.ui.preview_panel import PreviewPanel
-from dupeclean.worker import ScanWorker
+from dupeclean.worker import ScanWorker, FileActionWorker
 
 
 class ModeItemDelegate(QStyledItemDelegate):
@@ -70,13 +70,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.gpu_info = gpu_info
         self.worker: ScanWorker = None
+        self.file_worker: Optional[FileActionWorker] = None
         self.current_mode = ScanMode.EXACT
         self.start_time: Optional[float] = None
         self.latest_current: int = 0
         self.latest_total: int = 0
         self._was_cancelled: bool = False
 
-        # Temporizador independente da UI para contagem contínua e cálculo de ETA
+        # Temporizador independente da UI para contagem contínua e taxa de iteração
         self.ui_timer = QTimer(self)
         self.ui_timer.setInterval(250)
         self.ui_timer.timeout.connect(self._update_telemetry_tick)
@@ -165,7 +166,7 @@ class MainWindow(QMainWindow):
 
         item_images = QListWidgetItem("🖼️ Similar Images")
         item_images.setData(Qt.ItemDataRole.UserRole, ScanMode.IMAGES)
-        item_images.setToolTip("Finds identical or similar photos using GPU Tensor Cores.")
+        item_images.setToolTip("Finds identical or similar images using GPU Tensor Cores.")
         item_images.setSizeHint(QSize(230, 40))
 
         item_videos = QListWidgetItem("🎬 Similar Videos")
@@ -314,6 +315,7 @@ class MainWindow(QMainWindow):
         # Tabela de Resultados
         self.results_widget = ResultsWidget()
         self.results_widget.selection_changed.connect(self._on_selection_changed)
+        self.results_widget.selection_progress.connect(self._on_operation_progress)
         self.results_widget.file_selected.connect(self._on_file_selected)
         self.h_splitter.addWidget(self.results_widget)
 
@@ -403,7 +405,7 @@ class MainWindow(QMainWindow):
         self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.lbl_status.setMinimumWidth(0)
 
-        # Telemetry Badge (Elapsed Time / ETA / Iteration Rate)
+        # Telemetry Badge (Elapsed Time / Iteration Rate)
         self.lbl_timer = QLabel("⏱️ 00:00")
         self.lbl_timer.setStyleSheet(
             "font-weight: bold; font-family: 'Consolas', monospace; color: #38bdf8; "
@@ -428,14 +430,18 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _on_mode_changed(self, row: int):
         item = self.sidebar_modes.item(row)
-        if item:
-            self.current_mode = item.data(Qt.ItemDataRole.UserRole)
-            # Show slider only in visual modes
-            self.container_slider.setVisible(self.current_mode in (ScanMode.IMAGES, ScanMode.VIDEOS))
-            self.preview_panel.clear()
-            self.preview_panel.setVisible(False)
-            self.results_widget.set_results([])
-            self.lbl_status.setText(f"Mode changed to: {item.text()}.")
+        if not item:
+            return
+
+        new_mode = item.data(Qt.ItemDataRole.UserRole)
+        if new_mode == self.current_mode:
+            return
+
+        self.current_mode = new_mode
+
+        # Exibe o controle de sensibilidade (slider) apenas para modos visuais
+        self.container_slider.setVisible(self.current_mode in (ScanMode.IMAGES, ScanMode.VIDEOS))
+        # Mantém a grade e a barra de status 100% intactas, com tempo de resposta zero (0 ms).
 
     @Slot(object)
     def _on_file_selected(self, file_rec: Optional[FileRecord]):
@@ -476,16 +482,86 @@ class MainWindow(QMainWindow):
         self.btn_select_menu.setEnabled(not scanning)
         self.btn_save.setEnabled(not scanning)
 
-        has_sel = (len(self.results_widget.get_selected_files()) > 0) and not scanning
+        has_sel = self.results_widget.has_selected_files() and not scanning
         self.btn_move.setEnabled(has_sel)
         self.btn_delete_trash.setEnabled(has_sel)
         self.btn_delete_perm.setEnabled(has_sel)
 
+    def _set_action_busy_state(self, busy: bool):
+        """Enables/disables UI controls while a background file action (trash/delete/move) is running."""
+        self.btn_scan.setEnabled(not busy)
+        self.btn_stop.setEnabled(busy)
+        self.btn_clear_cache.setEnabled(not busy)
+        self.sidebar_modes.setEnabled(not busy)
+        self.slider_sim.setEnabled(not busy)
+        self.folder_panel.setEnabled(not busy)
+        self.btn_select_menu.setEnabled(not busy)
+        self.btn_save.setEnabled(not busy)
+        has_sel = self.results_widget.has_selected_files() and not busy
+        self.btn_move.setEnabled(has_sel)
+        self.btn_delete_trash.setEnabled(has_sel)
+        self.btn_delete_perm.setEnabled(has_sel)
+
+    @Slot(str, int, int)
+    def _on_operation_progress(self, title: str, current: int, total: int):
+        """Atualiza a barra de estágios e percentual para operações em lote mantendo a coerência visual."""
+        if total > 0 and current <= total:
+            self.stage_widget.setVisible(True)
+            fraction = min(1.0, max(0.0, current / total))
+            pct = 100 if current >= total else min(99, int(fraction * 100))
+
+            if title == "Loading results" and getattr(self, "_is_scan_mounting", False):
+                # Mantém a coerência visual estrita do scan:
+                # Linha de cima: 'Current Stage:' avança de 0% a 100% da montagem
+                # Linha intermediária: 'All Stages:' avança proporcionalmente dos estágios anteriores até 100%
+                # Linha de baixo: 'Loading results (X / Y)...'
+                self.lbl_stage_current.setText("Current Stage:")
+                self.lbl_stage_all.setVisible(True)
+                self.progress_all.setVisible(True)
+                self.lbl_pct_all.setVisible(True)
+
+                total_stages = getattr(self, "total_stages", 3)
+                display_total_stages = total_stages + 1
+                base_pct = (total_stages / display_total_stages) * 100.0
+                stage_weight = (1.0 / display_total_stages) * 100.0
+                if current >= total:
+                    overall_pct = 100
+                else:
+                    overall_pct = min(99, int(base_pct + fraction * stage_weight))
+
+                if self.progress_all.maximum() != 100 or self.progress_all.minimum() != 0:
+                    self.progress_all.setRange(0, 100)
+                self.progress_all.setValue(overall_pct)
+                self.lbl_pct_all.setText(f"{overall_pct}%")
+            else:
+                self.lbl_stage_all.setVisible(False)
+                self.progress_all.setVisible(False)
+                self.lbl_pct_all.setVisible(False)
+                self.lbl_stage_current.setText(f"{title}:")
+
+            if self.progress_current.maximum() != 100 or self.progress_current.minimum() != 0:
+                self.progress_current.setRange(0, 100)
+            self.progress_current.setValue(pct)
+            self.lbl_pct_current.setText(f"{pct}%")
+            self.lbl_status.setText(f"{title} ({current:,} / {total:,})...")
+        else:
+            self.stage_widget.setVisible(False)
+            self.lbl_stage_all.setVisible(True)
+            self.progress_all.setVisible(True)
+            self.lbl_pct_all.setVisible(True)
+            self.lbl_stage_current.setText("Current Stage:")
+            self.lbl_pct_current.setText("0%")
+            self.progress_current.setRange(0, 100)
+            self.progress_current.setValue(0)
+            self.lbl_pct_all.setText("0%")
+            self.progress_all.setRange(0, 100)
+            self.progress_all.setValue(0)
+
     @Slot(int, "qint64")
     def _on_selection_changed(self, count: int, total_bytes: int):
         """Atualiza dinamicamente os botões de ação e status conforme arquivos são marcados/desmarcados."""
-        is_scanning = bool(self.worker and self.worker.isRunning())
-        has_sel = (count > 0) and not is_scanning
+        is_busy = bool((self.worker and self.worker.isRunning()) or (getattr(self, 'file_worker', None) and self.file_worker.isRunning()))
+        has_sel = (count > 0) and not is_busy
         self.btn_move.setEnabled(has_sel)
         self.btn_delete_trash.setEnabled(has_sel)
         self.btn_delete_perm.setEnabled(has_sel)
@@ -533,7 +609,7 @@ class MainWindow(QMainWindow):
             f"The persistent cache speeds up repeated scans.\n\n"
             f"Current cache statistics:\n"
             f"• Exact hashes saved: {stats['exact_count']}\n"
-            f"• Photos cached: {stats['images_count']}\n"
+            f"• Images cached: {stats['images_count']}\n"
             f"• Videos cached: {stats['videos_count']}\n"
             f"• Disk usage: {stats['db_size_mb']} MB\n\n"
             f"Do you want to clear the persistent cache to force a full recomputation?"
@@ -567,9 +643,11 @@ class MainWindow(QMainWindow):
         threshold = self.slider_sim.value() / 100.0
 
         self._set_scanning_state(True)
+        self.results_widget.clear()
         self.preview_panel.clear()
         self.preview_panel.setVisible(False)
         self._was_cancelled = False
+        self._is_scan_mounting = False
         self.current_stage_num = 1
         self.stage_start_time = time.time()
         self.total_stages = 3 if self.current_mode == ScanMode.EXACT else 4
@@ -607,6 +685,10 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("Stopping scan...")
             self.btn_stop.setEnabled(False)
             self.worker.requestInterruption()
+        elif getattr(self, "file_worker", None) and self.file_worker.isRunning():
+            self.lbl_status.setText("Stopping file action...")
+            self.btn_stop.setEnabled(False)
+            self.file_worker.requestInterruption()
 
     def closeEvent(self, event):
         """Ensures immediate termination of all background processes and threads upon closing the window."""
@@ -621,6 +703,10 @@ class MainWindow(QMainWindow):
             cache.save_setting("saved_folders", state)
         except Exception as e:
             print(f"[WARN] Failed to persist folders on close: {e}")
+
+        if getattr(self, "file_worker", None) and self.file_worker.isRunning():
+            self.file_worker.requestInterruption()
+            self.file_worker.wait(400)
 
         if self.worker and self.worker.isRunning():
             self.lbl_status.setText("Shutting down...")
@@ -643,8 +729,8 @@ class MainWindow(QMainWindow):
         elapsed = now - self.start_time
         elapsed_str = self._format_duration(elapsed)
 
-        # Regra do Usuário: Durante o Estágio 1 (descoberta de arquivos), exibe APENAS o tempo decorrido.
-        # O ETA só deve ser calculado e exibido a partir do Estágio 2, quando JÁ sabemos a quantidade exata de arquivos.
+        # Durante o Estágio 1 (descoberta de arquivos), exibe apenas o tempo decorrido.
+        # A taxa de iteração (it/s) é calculada e exibida a partir do Estágio 2.
         stage_num = getattr(self, "current_stage_num", 1)
         if stage_num > 1 and self.latest_total > 0 and self.latest_current > 1 and elapsed > 0.5:
             if not hasattr(self, "_telemetry_window"):
@@ -665,10 +751,7 @@ class MainWindow(QMainWindow):
                 stage_elapsed = max(0.001, now - getattr(self, "stage_start_time", self.start_time))
                 rate = self.latest_current / stage_elapsed
 
-            remaining = max(0, self.latest_total - self.latest_current)
-            eta_sec = remaining / max(rate, 0.001)
-            eta_str = self._format_duration(eta_sec)
-            self.lbl_timer.setText(f"⏱️ {elapsed_str} | ETA: ~{eta_str} ({rate:,.0f} it/s)")
+            self.lbl_timer.setText(f"⏱️ {elapsed_str} ({rate:,.0f} it/s)")
         else:
             self.lbl_timer.setText(f"⏱️ {elapsed_str}")
 
@@ -704,8 +787,10 @@ class MainWindow(QMainWindow):
 
         # 2. Progresso Geral Acumulado (All Stages)
         if total_stages > 0:
-            fraction = (current / total) if total > 0 else 0.0
-            overall_pct = int(min(100, max(0, ((stage_num - 1 + fraction) / total_stages) * 100)))
+            fraction = min(1.0, max(0.0, current / total)) if total > 0 else 0.0
+            # Inclui o estágio final de carregamento na grade (+1) para que 'All Stages' nunca chegue a 100% prematuramente
+            display_total_stages = total_stages + 1
+            overall_pct = int(min(99, max(0, ((stage_num - 1 + fraction) / display_total_stages) * 100)))
             if self.progress_all.maximum() != 100 or self.progress_all.minimum() != 0:
                 self.progress_all.setRange(0, 100)
             self.progress_all.setValue(overall_pct)
@@ -723,7 +808,26 @@ class MainWindow(QMainWindow):
             total_time_str = self._format_duration(total_elapsed)
             self.lbl_timer.setText(f"⏱️ Total Time: {total_time_str}")
 
-        self.results_widget.set_results(groups)
+        if groups:
+            self.lbl_status.setText(f"Loading results ({len(groups):,} duplicate groups)...")
+            app = QApplication.instance()
+            if app:
+                app.processEvents()
+
+        self._is_scan_mounting = bool(groups)
+        try:
+            self.results_widget.set_results(groups)
+        finally:
+            self._is_scan_mounting = False
+
+        # Garante 100% em ambas as barras ao concluir o scan com visualização perfeita
+        self.progress_current.setRange(0, 100)
+        self.progress_current.setValue(100)
+        self.lbl_pct_current.setText("100%")
+        self.progress_all.setRange(0, 100)
+        self.progress_all.setValue(100)
+        self.lbl_pct_all.setText("100%")
+        self.stage_widget.setVisible(True)
 
         total_files = sum(len(g.files) for g in groups)
         total_reclaim = sum(g.reclaimable_bytes for g in groups)
@@ -761,8 +865,8 @@ class MainWindow(QMainWindow):
     def _finalize_scan_ui(self):
         self.ui_timer.stop()
         self._set_scanning_state(False)
-        self.stage_widget.setVisible(False)
         if getattr(self, "_was_cancelled", False):
+            self.stage_widget.setVisible(False)
             self.lbl_status.setText("Scan cancelled by user.")
             if self.start_time:
                 elapsed = time.time() - self.start_time
@@ -785,38 +889,13 @@ class MainWindow(QMainWindow):
         confirm = QMessageBox.question(
             self,
             "Confirm Move to Recycle Bin",
-            f"Move {len(selected)} selected file(s) ({size_str}) to the Windows Recycle Bin?",
+            f"Move {len(selected):,} selected file(s) ({size_str}) to the Windows Recycle Bin?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
 
         if confirm == QMessageBox.StandardButton.Yes:
-            deleted_set = set()
-            errors = []
-
-            for path in selected:
-                try:
-                    send2trash.send2trash(str(path))
-                    deleted_set.add(path)
-                except Exception as e:
-                    errors.append(f"{path.name}: {str(e)}")
-
-            self.results_widget.remove_deleted_files(deleted_set)
-
-            if errors:
-                QMessageBox.warning(
-                    self,
-                    "Completed with Warnings",
-                    f"{len(deleted_set)} files moved to the Recycle Bin.\n"
-                    f"{len(errors)} errors:\n" + "\n".join(errors[:5])
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"{len(deleted_set)} file(s) safely moved to the Windows Recycle Bin!"
-                )
-                self.lbl_status.setText(f"{len(deleted_set)} file(s) moved to the Recycle Bin.")
+            self._start_file_action(selected, "trash")
 
     def _move_selected_files(self):
         """Moves selected files to another destination folder chosen by the user."""
@@ -840,47 +919,14 @@ class MainWindow(QMainWindow):
         confirm = QMessageBox.question(
             self,
             "Confirm Move Files",
-            f"Move {len(selected)} selected file(s) ({size_str}) to:\n{dest_path}?",
+            f"Move {len(selected):,} selected file(s) ({size_str}) to:\n{dest_path}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        moved_set = set()
-        errors = []
-
-        for p in selected:
-            try:
-                target = dest_path / p.name
-                if target.exists():
-                    stem = p.stem
-                    suffix = p.suffix
-                    idx = 1
-                    while target.exists():
-                        target = dest_path / f"{stem}_dup{idx}{suffix}"
-                        idx += 1
-                shutil.move(str(p), str(target))
-                moved_set.add(p)
-            except Exception as e:
-                errors.append(f"{p.name}: {str(e)}")
-
-        self.results_widget.remove_deleted_files(moved_set)
-
-        if errors:
-            QMessageBox.warning(
-                self,
-                "Completed with Warnings",
-                f"{len(moved_set)} file(s) moved to '{dest_path.name}'.\n"
-                f"{len(errors)} errors:\n" + "\n".join(errors[:5])
-            )
-        else:
-            QMessageBox.information(
-                self,
-                "Success",
-                f"{len(moved_set)} file(s) safely moved to:\n{dest_path}"
-            )
-            self.lbl_status.setText(f"{len(moved_set)} file(s) moved to {dest_path.name}.")
+        self._start_file_action(selected, "move", dest_dir=dest_path)
 
     def _delete_selected_permanently(self):
         """Permanently deletes selected files from disk with strict user confirmation."""
@@ -899,39 +945,110 @@ class MainWindow(QMainWindow):
         confirm = QMessageBox.warning(
             self,
             "Confirm Permanent Deletion",
-            f"WARNING: Permanently delete {len(selected)} selected file(s) ({size_str}) from disk?\n\n"
+            f"WARNING: Permanently delete {len(selected):,} selected file(s) ({size_str}) from disk?\n\n"
             "This action CANNOT be undone and will NOT use the Recycle Bin!",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
 
         if confirm == QMessageBox.StandardButton.Yes:
-            deleted_set = set()
-            errors = []
+            self._start_file_action(selected, "delete")
 
-            for path in selected:
-                try:
-                    path.unlink(missing_ok=True)
-                    deleted_set.add(path)
-                except Exception as e:
-                    errors.append(f"{path.name}: {str(e)}")
+    def _start_file_action(self, paths: List[Path], action: str, dest_dir: Optional[Path] = None):
+        """Inicia a execução da ação de arquivo em background com feedback visual não-bloqueante."""
+        self._action_start_time = time.time()
+        self._action_type = action
+        self._action_dest_dir = dest_dir
+        self._action_total = len(paths)
+        self._set_action_busy_state(True)
 
-            self.results_widget.remove_deleted_files(deleted_set)
+        verb_map = {
+            "trash": "Moving to Recycle Bin",
+            "delete": "Permanently deleting",
+            "move": "Moving files"
+        }
+        self._action_verb = verb_map.get(action, "Processing")
+        self._on_operation_progress(self._action_verb, 0, len(paths))
 
+        self.file_worker = FileActionWorker(paths, action, dest_dir=dest_dir, parent=self)
+        self.file_worker.progress.connect(self._on_file_action_progress)
+        self.file_worker.finished_action.connect(self._on_file_action_finished)
+        self.file_worker.start()
+
+    @Slot(str, "qint64", "qint64")
+    def _on_file_action_progress(self, msg: str, current: int, total: int):
+        verb = getattr(self, "_action_verb", "Processing")
+        self._on_operation_progress(verb, current, total)
+        self.lbl_status.setText(msg)
+        if hasattr(self, "_action_start_time") and self._action_start_time:
+            elapsed = time.time() - self._action_start_time
+            rate = current / max(0.001, elapsed)
+            elapsed_str = self._format_duration(elapsed)
+            self.lbl_timer.setText(f"⏱️ {elapsed_str} ({rate:.0f} files/s)")
+
+    @Slot(set, list)
+    def _on_file_action_finished(self, deleted_set: set, errors: list):
+        self._on_operation_progress("", 0, 0)
+        self._set_action_busy_state(False)
+
+        action = getattr(self, "_action_type", "delete")
+        dest_dir = getattr(self, "_action_dest_dir", None)
+        self.file_worker = None
+
+        if hasattr(self, "_action_start_time") and self._action_start_time:
+            elapsed = time.time() - self._action_start_time
+            self.lbl_timer.setText(f"⏱️ Done in {self._format_duration(elapsed)}")
+
+        self.results_widget.remove_deleted_files(deleted_set)
+
+        if action == "trash":
             if errors:
                 QMessageBox.warning(
                     self,
                     "Completed with Warnings",
-                    f"{len(deleted_set)} files permanently deleted.\n"
-                    f"{len(errors)} errors:\n" + "\n".join(errors[:5])
+                    f"{len(deleted_set):,} files moved to the Recycle Bin.\n"
+                    f"{len(errors):,} errors:\n" + "\n".join(errors[:5])
                 )
             else:
                 QMessageBox.information(
                     self,
                     "Success",
-                    f"{len(deleted_set)} file(s) permanently deleted from disk."
+                    f"{len(deleted_set):,} file(s) safely moved to the Windows Recycle Bin!"
                 )
-                self.lbl_status.setText(f"{len(deleted_set)} file(s) permanently deleted.")
+                self.lbl_status.setText(f"{len(deleted_set):,} file(s) moved to the Recycle Bin.")
+
+        elif action == "delete":
+            if errors:
+                QMessageBox.warning(
+                    self,
+                    "Completed with Warnings",
+                    f"{len(deleted_set):,} files permanently deleted.\n"
+                    f"{len(errors):,} errors:\n" + "\n".join(errors[:5])
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"{len(deleted_set):,} file(s) permanently deleted from disk."
+                )
+                self.lbl_status.setText(f"{len(deleted_set):,} file(s) permanently deleted.")
+
+        elif action == "move":
+            dest_name = dest_dir.name if dest_dir else "destination"
+            if errors:
+                QMessageBox.warning(
+                    self,
+                    "Completed with Warnings",
+                    f"{len(deleted_set):,} file(s) moved to '{dest_name}'.\n"
+                    f"{len(errors):,} errors:\n" + "\n".join(errors[:5])
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"{len(deleted_set):,} file(s) safely moved to:\n{dest_dir}"
+                )
+                self.lbl_status.setText(f"{len(deleted_set):,} file(s) moved to '{dest_name}'.")
 
     def _export_results(self):
         """Exports duplicate results to a text report file."""

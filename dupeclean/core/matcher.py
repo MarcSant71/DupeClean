@@ -207,7 +207,7 @@ def cluster_by_similarity(
             now = time.time()
             if progress_callback and (now - last_progress_time >= 0.08 or processed_candidates >= total_candidates):
                 last_progress_time = now
-                item_label = "photos" if mode == ScanMode.IMAGES else ("videos" if mode == ScanMode.VIDEOS else "files")
+                item_label = "images" if mode == ScanMode.IMAGES else ("videos" if mode == ScanMode.VIDEOS else "files")
                 progress_callback(
                     f"Grouping similar {item_label} ({min(processed_candidates, total_candidates):,}/{total_candidates:,})...",
                     min(processed_candidates, total_candidates),
@@ -247,3 +247,52 @@ def apply_reference_rules(group: DuplicateGroup) -> Set[Path]:
             selected_for_removal.add(f.path)
 
     return selected_for_removal
+
+
+def filter_reference_groups(groups: List[DuplicateGroup]) -> List[DuplicateGroup]:
+    """
+    Filtra e calibra os grupos de duplicatas sob a política estrita de Pastas de Referência:
+    - Se o grupo possui arquivos de Referência:
+      1. Descarta o grupo caso NÃO existam arquivos de pastas normais (não-referência) para limpar.
+         (Um grupo com apenas arquivos de referência não permite exclusão e gera apenas poluição visual).
+      2. Preserva apenas UM arquivo representativo da pasta de referência (o canônico: menor caminho / mais antigo).
+         (Elimina a duplicação interna redundante da própria pasta de referência nos resultados).
+      3. Monta o grupo como: 1 arquivo mestre de referência + todas as duplicatas das demais pastas normais.
+    - Se o grupo NÃO possui arquivos de Referência (ex: duplicatas entre pastas normais):
+      Mantém o grupo intacto desde que possua 2 ou mais arquivos.
+    """
+    filtered_groups: List[DuplicateGroup] = []
+    new_group_id = 1
+
+    for g in groups:
+        ref_files = [f for f in g.files if f.is_reference]
+        non_ref_files = [f for f in g.files if not f.is_reference]
+
+        if ref_files:
+            # Se não há nenhum arquivo fora da referência, o grupo é puramente interno e inerte
+            if not non_ref_files:
+                continue
+
+            # Elege o arquivo canônico de referência (menor comprimento de caminho e data mais antiga)
+            canonical_ref = min(ref_files, key=lambda f: (len(str(f.path)), f.mtime))
+
+            # Grupo definitivo: 1 arquivo mestre travado + arquivos duplicados das pastas de destino
+            new_files = [canonical_ref] + non_ref_files
+            filtered_groups.append(DuplicateGroup(
+                group_id=new_group_id,
+                files=new_files,
+                similarity=g.similarity,
+                kind=g.kind
+            ))
+            new_group_id += 1
+        else:
+            if len(g.files) > 1:
+                filtered_groups.append(DuplicateGroup(
+                    group_id=new_group_id,
+                    files=g.files,
+                    similarity=g.similarity,
+                    kind=g.kind
+                ))
+                new_group_id += 1
+
+    return filtered_groups

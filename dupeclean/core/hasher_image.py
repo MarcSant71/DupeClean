@@ -106,7 +106,7 @@ def extract_image_embeddings(
         del cached_mat
 
     if progress_callback and cached_count > 0:
-        progress_callback(f"Loading cached photos ({cached_count}/{total})...", cached_count, total)
+        progress_callback(f"Loading cached images ({cached_count}/{total})...", cached_count, total)
 
     # 2. Se todas estavam no cache, finaliza imediatamente!
     if not to_process or (stop_check and stop_check()):
@@ -224,7 +224,7 @@ def extract_image_embeddings(
                         last_progress_time = now
                         done_count = cached_count + processed_count
                         progress_callback(
-                            f"Processing photos ({done_count:,}/{total:,})...",
+                            f"Processing images ({done_count:,}/{total:,})...",
                             done_count,
                             total
                         )

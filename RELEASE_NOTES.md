@@ -1,5 +1,19 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.2
+- **Streamlined Telemetry (Volatile ETA Calculation Removed):**
+  - Removed volatile and jumping ETA time estimations during scanning and bulk file actions.
+  - Telemetry badge now displays pure elapsed time and stable instantaneous iteration rate (`⏱️ MM:SS (XX it/s)`), providing clean and distraction-free progress feedback.
+- **Visual Grid Cleanliness & Protected Reference Rows:**
+  - Removed the redundant "Origin" column from the duplicate results tree, streamlining results into 6 focused columns.
+  - Protected Reference files are now visually distinguished across the entire row with a muted background style and protective tooltip, removing lock icons and keeping the selection column clean.
+  - Reference filtering automatically discards internal reference-to-reference duplicate clusters, ensuring reference folders act exclusively as master anchor targets against target folders.
+- **Complete Visual Consistency (Images vs. Photos):**
+  - Harmonized all stage progression messages, tooltips, and persistent cache dialogs to "Images", maintaining 100% coherence with the "Similar Images" sidebar mode.
+- **Two-Tier Progress Bar Synchronization & Responsive File Actions:**
+  - Standardized completion logic to guarantee both `Current Stage` and `All Stages` reach 100% on scan completion without premature freezes.
+  - Background asynchronous worker for file actions (`Move`, `Recycle Bin`, `Permanent Delete`) with real-time file-rate telemetry and non-blocking UI.
+
 ### What's New in v1.1.1
 - **Strict Mutual Similarity Grouping:**
   - Enforces that every file within a duplicate group must directly match all other files in that group (pairwise mutual similarity ≥ threshold).
@@ -94,7 +108,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 - **KISS Dark UI:** Clean PySide6 interface with non-blocking real-time telemetry.
 
 ### Quick Start (Portable)
-1. Download **`DupeClean-v1.1.1-windows-cuda.7z`** below.
+1. Download **`DupeClean-v1.1.2-windows-cuda.7z`** below.
 2. Extract with [7-Zip](https://www.7-zip.org/) or WinRAR to any folder.
 3. Launch **`DupeClean.exe`**.
 

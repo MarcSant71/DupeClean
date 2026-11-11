@@ -15,7 +15,7 @@ from dupeclean.core.models import ScanPath, ScanMode, FileRecord, DuplicateGroup
 from dupeclean.core.scanner import crawl_directories
 from dupeclean.core.hasher_exact import find_exact_duplicates
 from dupeclean.core.hasher_image import extract_image_embeddings
-from dupeclean.core.matcher import cluster_by_similarity, apply_reference_rules
+from dupeclean.core.matcher import cluster_by_similarity, apply_reference_rules, filter_reference_groups
 
 
 def test_exact_duplicates():
@@ -135,8 +135,47 @@ def test_video_clustering_rules():
     print(f"[OK] Video Complete Linkage & Duration Filter test passed successfully!")
 
 
+def test_reference_filtering():
+    """Valida o filtro estrito de pastas de referência."""
+    # 1. Grupo com 2 arquivos de Referência e 1 Não-Referência
+    r1 = FileRecord(path=Path("C:/SET1/vid.mp4"), size=500, mtime=10.0, is_reference=True)
+    r2 = FileRecord(path=Path("C:/SET1/sub/vid_dup.mp4"), size=500, mtime=20.0, is_reference=True)
+    dup1 = FileRecord(path=Path("C:/SET2/vid.mp4"), size=500, mtime=30.0, is_reference=False)
+    g1 = DuplicateGroup(group_id=1, files=[r1, r2, dup1], similarity=1.0)
+
+    # 2. Grupo com 2 arquivos de Referência e ZERO Não-Referência (duplicação 100% interna da referência)
+    r3 = FileRecord(path=Path("C:/SET1/photo1.jpg"), size=200, mtime=10.0, is_reference=True)
+    r4 = FileRecord(path=Path("C:/SET1/photo1_copy.jpg"), size=200, mtime=20.0, is_reference=True)
+    g2 = DuplicateGroup(group_id=2, files=[r3, r4], similarity=1.0)
+
+    # 3. Grupo sem referência (duplicatas normais entre SET2 e SET3)
+    n1 = FileRecord(path=Path("C:/SET2/doc.pdf"), size=300, mtime=10.0, is_reference=False)
+    n2 = FileRecord(path=Path("C:/SET3/doc.pdf"), size=300, mtime=20.0, is_reference=False)
+    g3 = DuplicateGroup(group_id=3, files=[n1, n2], similarity=1.0)
+
+    filtered = filter_reference_groups([g1, g2, g3])
+
+    # Esperado: 2 grupos (g1 filtrado para r1+dup1, g2 descartado, g3 mantido)
+    assert len(filtered) == 2, f"Esperado 2 grupos, obtido {len(filtered)}"
+
+    # Checa g1 filtrado
+    group_1_files = filtered[0].files
+    assert len(group_1_files) == 2, f"Esperado 2 arquivos no Grupo 1, obtido {len(group_1_files)}"
+    assert group_1_files[0] == r1, "Arquivo canônico de referência deve ser r1 (menor caminho)"
+    assert group_1_files[1] == dup1, "Segundo arquivo deve ser a duplicata de SET2"
+    assert filtered[0].reclaimable_bytes == 500, f"Espaço recuperável esperado 500, obtido {filtered[0].reclaimable_bytes}"
+
+    # Checa g3 preservado
+    group_2_files = filtered[1].files
+    assert len(group_2_files) == 2
+    assert filtered[1].reclaimable_bytes == 300
+
+    print("[OK] Reference filtering (discard internal ref dupes & canonical anchor) test passed successfully!")
+
+
 if __name__ == "__main__":
     test_exact_duplicates()
     test_image_gpu_embeddings()
     test_video_clustering_rules()
+    test_reference_filtering()
     print("\nALL INTEGRATION TESTS PASSED SUCCESSFULLY!")
