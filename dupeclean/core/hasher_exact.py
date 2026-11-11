@@ -8,22 +8,27 @@ Algoritmo de 3 estágios otimizado para alta vazão (NVMe, SSD, HDDs mecânicos 
 """
 
 import os
+import time
 from collections import defaultdict
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Callable, Optional, Tuple, Dict
+from typing import List, Callable, Optional, Tuple, Dict, Any
 import xxhash
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
 from dupeclean.core.cache import CacheManager
 
-# Buffer de leitura streaming otimizado para alto throughput de I/O (armazenamentos locais e em rede)
-STREAM_BUFFER_SIZE = 4 * 1024 * 1024  # 4 MB por bloco de leitura
+# Tamanho limite para resolução imediata no Estágio 2 (elimina reabertura de 55%+ dos arquivos no Estágio 3)
+FAST_PATH_SIZE = 64 * 1024  # 64 KB
+
+# Buffer de leitura streaming otimizado para alta vazão contínua sem fragmentação de memória
+STREAM_BUFFER_SIZE = 512 * 1024  # 512 KB por bloco de leitura
 
 
 def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str, bool]]:
     """
     Calcula a assinatura rápida do arquivo com suporte a cancelamento atômico:
-    - Arquivos <= 8 KB: lê o conteúdo integral e calcula o hash definitivo (is_full=True).
-    - Arquivos > 8 KB: lê os primeiros 4 KB e os últimos 4 KB (Head + Tail) (is_full=False),
+    - Arquivos <= 64 KB: lê o conteúdo integral e já calcula o hash definitivo (is_full=True).
+    - Arquivos > 64 KB: lê os primeiros 4 KB e os últimos 4 KB (Head + Tail) (is_full=False),
       descartando 99.9% dos falsos positivos de cabeçalho sem streaming do arquivo inteiro.
     Retorna (rec, hash_value, is_full) ou None em caso de erro de I/O ou cancelamento.
     """
@@ -32,8 +37,8 @@ def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Op
         return None
     try:
         with open(rec.path, "rb") as f:
-            if rec.size <= 8192:
-                data = f.read(8192)
+            if rec.size <= FAST_PATH_SIZE:
+                data = f.read(FAST_PATH_SIZE)
                 if stop_check and stop_check():
                     return None
                 h = xxhash.xxh64(data).hexdigest()
@@ -125,11 +130,11 @@ def find_exact_duplicates(
     by_header_hash = defaultdict(list)
     to_header_check: List[FileRecord] = []
 
-    # Fast-path: arquivos pequenos (<= 8 KB) com full_hash em cache vão direto para by_full_hash
+    # Fast-path: arquivos pequenos (<= FAST_PATH_SIZE) com full_hash em cache vão direto para by_full_hash
     for rec in flat_candidates:
         p_key = str(rec.path)
         cached_data = cached_exact.get(p_key)
-        if rec.size <= 8192 and cached_data and cached_data[1]:
+        if rec.size <= FAST_PATH_SIZE and cached_data and cached_data[1]:
             rec.hash_value = cached_data[1]
             by_full_hash[(rec.size, cached_data[1])].append(rec)
         elif cached_data and cached_data[0]:
@@ -147,38 +152,46 @@ def find_exact_duplicates(
         # para leitura sequencial do MFT e blocos de diretório, eliminando head thrashing em HDDs e storages NAS
         to_header_check.sort(key=lambda r: str(r.path.parent))
 
-        # Concorrência equilibrada para evitar saturação de fila de I/O em discos mecânicos e iSCSI
+        # Concorrência equilibrada para máximo throughput contínuo
         header_workers = min(16, max(4, os.cpu_count() or 4))
         new_prefix_entries: List[Tuple[str, int, float, Optional[str], Optional[str]]] = []
         header_processed = cache_hits_prefix
+        last_progress_time = time.perf_counter()
 
-        # Chunks para conferência frequente de stop_check
-        header_chunk_size = 256
         executor = ThreadPoolExecutor(max_workers=header_workers)
+        # Janela deslizante de tarefas em voo (pipeline sem barreira de sincronização)
+        max_in_flight = header_workers * 4
+        futures_map: Dict[Any, FileRecord] = {}
+        rec_iter = iter(to_header_check)
+
         try:
-            for chunk_start in range(0, len(to_header_check), header_chunk_size):
+            for r in rec_iter:
                 if stop_check and stop_check():
                     break
-
-                chunk = to_header_check[chunk_start : chunk_start + header_chunk_size]
-                task_args = [(r, stop_check) for r in chunk]
-                futures = [executor.submit(_read_signature, arg) for arg in task_args]
-                results = []
-                for f in futures:
-                    if stop_check and stop_check():
-                        for pending in futures:
-                            pending.cancel()
-                        break
-                    try:
-                        results.append(f.result())
-                    except Exception:
-                        results.append(None)
-
-                if stop_check and stop_check():
+                f = executor.submit(_read_signature, (r, stop_check))
+                futures_map[f] = r
+                if len(futures_map) >= max_in_flight:
                     break
 
-                for res in results:
+            while futures_map:
+                if stop_check and stop_check():
+                    for pending in futures_map:
+                        pending.cancel()
+                    break
+
+                done, _ = concurrent.futures.wait(
+                    futures_map.keys(),
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                for f in done:
+                    r = futures_map.pop(f)
                     header_processed += 1
+                    try:
+                        res = f.result()
+                    except Exception:
+                        res = None
+
                     if res is not None:
                         rec, h, is_full = res
                         if is_full:
@@ -189,12 +202,21 @@ def find_exact_duplicates(
                             by_header_hash[(rec.size, h)].append(rec)
                             new_prefix_entries.append((str(rec.path), rec.size, rec.mtime, h, None))
 
-                if progress_callback:
+                    # Mantém os workers a 100% de utilização submetendo o próximo arquivo imediatamente
+                    if not (stop_check and stop_check()):
+                        next_rec = next(rec_iter, None)
+                        if next_rec is not None:
+                            next_f = executor.submit(_read_signature, (next_rec, stop_check))
+                            futures_map[next_f] = next_rec
+
+                now = time.perf_counter()
+                if progress_callback and (now - last_progress_time >= 0.1 or header_processed % 128 == 0):
                     progress_callback(
                         f"Comparing file signatures ({header_processed:,}/{total_candidates:,})...",
                         header_processed,
                         total_candidates
                     )
+                    last_progress_time = now
 
                 if len(new_prefix_entries) >= 1024:
                     cache.save_exact_batch(new_prefix_entries)
@@ -210,7 +232,7 @@ def find_exact_duplicates(
         return []
 
     # -------------------------------------------------------------------------
-    # Estágio 3: Hash completo em streaming paralelo com buffer largo (4 MB)
+    # Estágio 3: Hash completo em streaming paralelo com buffer contínuo (512 KB)
     # -------------------------------------------------------------------------
     candidates_by_header = [files for key, files in by_header_hash.items() if len(files) > 1]
     total_deep_check = sum(len(f) for f in candidates_by_header)
@@ -235,49 +257,65 @@ def find_exact_duplicates(
         # Otimização espacial para leitura sequencial de grandes blocos contíguos
         to_deep_check.sort(key=lambda r: str(r.path.parent))
 
-        # Concorrência moderada para I/O massivo em streaming de 4 MB (evita contenção de banda em NAS/iSCSI e HDDs)
-        deep_workers = min(8, max(2, (os.cpu_count() or 4) // 2))
+        # Concorrência otimizada com streaming contínuo (elimina stragglers e barreiras de sincronização)
+        deep_workers = min(16, max(4, os.cpu_count() or 4))
         new_full_entries: List[Tuple[str, int, float, Optional[str], Optional[str]]] = []
         deep_processed = deep_cached_count
+        last_progress_time = time.perf_counter()
 
-        # Lotes de 64 arquivos para resposta de parada em fração de segundo
-        deep_chunk_size = 64
         executor = ThreadPoolExecutor(max_workers=deep_workers)
+        max_in_flight = deep_workers * 4
+        futures_map: Dict[Any, FileRecord] = {}
+        rec_iter = iter(to_deep_check)
+
         try:
-            for chunk_start in range(0, len(to_deep_check), deep_chunk_size):
+            for r in rec_iter:
                 if stop_check and stop_check():
                     break
-
-                chunk = to_deep_check[chunk_start : chunk_start + deep_chunk_size]
-                task_args = [(r, stop_check) for r in chunk]
-                futures = [executor.submit(_compute_full_hash, arg) for arg in task_args]
-                results = []
-                for f in futures:
-                    if stop_check and stop_check():
-                        for pending in futures:
-                            pending.cancel()
-                        break
-                    try:
-                        results.append(f.result())
-                    except Exception:
-                        results.append(None)
-
-                if stop_check and stop_check():
+                f = executor.submit(_compute_full_hash, (r, stop_check))
+                futures_map[f] = r
+                if len(futures_map) >= max_in_flight:
                     break
 
-                for res in results:
+            while futures_map:
+                if stop_check and stop_check():
+                    for pending in futures_map:
+                        pending.cancel()
+                    break
+
+                done, _ = concurrent.futures.wait(
+                    futures_map.keys(),
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                for f in done:
+                    r = futures_map.pop(f)
                     deep_processed += 1
+                    try:
+                        res = f.result()
+                    except Exception:
+                        res = None
+
                     if res is not None:
                         rec, h = res
                         by_full_hash[(rec.size, h)].append(rec)
                         new_full_entries.append((str(rec.path), rec.size, rec.mtime, None, h))
 
-                if progress_callback:
+                    # Mantém os workers a 100% de utilização submetendo o próximo arquivo imediatamente
+                    if not (stop_check and stop_check()):
+                        next_rec = next(rec_iter, None)
+                        if next_rec is not None:
+                            next_f = executor.submit(_compute_full_hash, (next_rec, stop_check))
+                            futures_map[next_f] = next_rec
+
+                now = time.perf_counter()
+                if progress_callback and (now - last_progress_time >= 0.1 or deep_processed % 128 == 0):
                     progress_callback(
                         f"Computing full hashes ({deep_processed:,}/{total_deep_check:,})...",
                         deep_processed,
                         total_deep_check
                     )
+                    last_progress_time = now
 
                 if len(new_full_entries) >= 512:
                     cache.save_exact_batch(new_full_entries)

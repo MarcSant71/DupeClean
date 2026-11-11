@@ -75,8 +75,8 @@ class ScanWorker(QThread):
 
             if self.mode == ScanMode.EXACT:
                 def _exact_cb(msg: str, curr: int, tot: int):
-                    # Identifica se é estágio de agrupamento por tamanho ou hashing de conteúdo
-                    st_num = 2 if ("size" in msg.lower() or "candidat" in msg.lower()) else 3
+                    msg_lower = msg.lower()
+                    st_num = 3 if ("full hash" in msg_lower or "computing" in msg_lower) else 2
                     self.progress_stage.emit(msg, curr, tot, st_num, 3)
 
                 groups = find_exact_duplicates(

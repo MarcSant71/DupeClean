@@ -65,13 +65,13 @@ def test_large_files_head_tail_filtering():
         tmp_path = Path(tmp_dir)
         cache = CacheManager(tmp_path / "test_cache.db")
 
-        # Arquivos de 32 KB:
+        # Arquivos de 128 KB (> FAST_PATH_SIZE 64 KB):
         # f1 e f2: idênticos
         # f3: mesmo cabeçalho de 4 KB de f1/f2, mas cauda diferente
         header_4k = b"H" * 4096
         tail_same = b"T" * 4096
         tail_diff = b"X" * 4096
-        body = b"M" * (32768 - 8192)
+        body = b"M" * (131072 - 8192)
 
         f1 = tmp_path / "large1.dat"
         f2 = tmp_path / "large2.dat"
@@ -82,9 +82,9 @@ def test_large_files_head_tail_filtering():
         f3.write_bytes(header_4k + body + tail_diff)
 
         recs = [
-            FileRecord(path=f1, size=32768, mtime=10.0),
-            FileRecord(path=f2, size=32768, mtime=20.0),
-            FileRecord(path=f3, size=32768, mtime=30.0),
+            FileRecord(path=f1, size=131072, mtime=10.0),
+            FileRecord(path=f2, size=131072, mtime=20.0),
+            FileRecord(path=f3, size=131072, mtime=30.0),
         ]
 
         # Verifica assinaturas
