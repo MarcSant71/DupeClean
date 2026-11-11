@@ -33,73 +33,123 @@ _format_size = format_size
 
 
 class SortableGroupItem(QTreeWidgetItem):
-    """Item de cabeçalho do grupo com ordenação inteligente por coluna."""
-    def __init__(self, group: DuplicateGroup, parent=None):
+    """Item de cabeçalho do grupo com ordenação inteligente por coluna e chaves pré-cacheadas para alta performance."""
+    _sort_col: int = 1
+    _sort_normal: bool = False
+
+    def __init__(self, group: DuplicateGroup, original_index: int = 0, parent=None):
         super().__init__(parent)
         self.group = group
+        self.original_index: int = original_index
+        self.k_orig: int = original_index
+        self.k_chk: int = 0
+
+        # Pré-cache de chaves de comparação para eliminar chamadas e alocações repetitivas no __lt__
+        if group.files:
+            f0 = group.files[0]
+            self.k_name: str = (f0.name or f0.path.name or "").lower()
+            self.k_size: int = f0.size
+            self.k_path: str = str(f0.path).lower()
+            self.k_mtime: float = max((f.mtime for f in group.files), default=0.0)
+        else:
+            self.k_name = ""
+            self.k_size = 0
+            self.k_path = ""
+            self.k_mtime = 0.0
+
+        self.k_reclaim: int = group.reclaimable_bytes
+        self.k_sim: float = group.similarity
+
+        self.k_name_tuple = (self.k_name, self.k_orig)
+        self.k_size_tuple = (self.k_size, self.k_reclaim, self.k_orig)
+        self.k_mtime_tuple = (self.k_mtime, self.k_orig)
+        self.k_sim_tuple = (self.k_sim, self.k_reclaim, self.k_orig)
+        self.k_path_tuple = (self.k_path, self.k_orig)
+
         self.setFlags(self.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
 
     def __lt__(self, other: 'QTreeWidgetItem') -> bool:
         if not isinstance(other, SortableGroupItem):
             return super().__lt__(other)
-        tree = self.treeWidget()
-        col = tree.sortColumn() if tree else 1
+        if SortableGroupItem._sort_normal:
+            return self.k_orig < other.k_orig
 
-        if col in (0, 1):
-            return self.group.group_id < other.group.group_id
+        col = SortableGroupItem._sort_col
+        if col == 0:
+            return (self.k_chk, self.k_orig) < (other.k_chk, other.k_orig)
+        elif col == 1:
+            return self.k_name_tuple < other.k_name_tuple
         elif col == 2:
-            return self.group.reclaimable_bytes < other.group.reclaimable_bytes
+            return self.k_size_tuple < other.k_size_tuple
         elif col == 3:
-            m_self = max((f.mtime for f in self.group.files), default=0.0)
-            m_other = max((f.mtime for f in other.group.files), default=0.0)
-            return m_self < m_other
+            return self.k_mtime_tuple < other.k_mtime_tuple
         elif col == 4:
-            return self.group.similarity < other.group.similarity
+            return self.k_sim_tuple < other.k_sim_tuple
         elif col == 5:
-            p_self = str(self.group.files[0].path).lower() if self.group.files else ""
-            p_other = str(other.group.files[0].path).lower() if other.group.files else ""
-            return p_self < p_other
+            return self.k_path_tuple < other.k_path_tuple
 
-        return super().__lt__(other)
+        return self.k_orig < other.k_orig
 
 
 class SortableFileItem(QTreeWidgetItem):
-    """Item de arquivo filho com ordenação exata por tipo de dado (bytes, timestamp, texto)."""
-    def __init__(self, file_rec: FileRecord, similarity: float, parent=None):
+    """Item de arquivo filho com ordenação exata por tipo de dado (bytes, timestamp, texto) e chaves cacheadas."""
+    _sort_col: int = 1
+    _sort_normal: bool = False
+
+    def __init__(self, file_rec: FileRecord, similarity: float, original_index: int = 0, parent=None):
         super().__init__(parent)
         self.file_rec = file_rec
         self.similarity = similarity
+        self.original_index: int = original_index
+        self.k_orig: int = original_index
+        self.k_name: str = (file_rec.name or file_rec.path.name or "").lower()
+        self.k_size: int = file_rec.size
+        self.k_mtime: float = file_rec.mtime
+        self.k_sim: float = similarity
+        self.k_path: str = str(file_rec.path).lower()
+
+        self.k_name_tuple = (self.k_name, self.k_orig)
+        self.k_size_tuple = (self.k_size, self.k_orig)
+        self.k_mtime_tuple = (self.k_mtime, self.k_orig)
+        self.k_sim_tuple = (self.k_sim, self.k_orig)
+        self.k_path_tuple = (self.k_path, self.k_orig)
 
     def __lt__(self, other: 'QTreeWidgetItem') -> bool:
         if not isinstance(other, SortableFileItem):
             return super().__lt__(other)
-        tree = self.treeWidget()
-        col = tree.sortColumn() if tree else 1
+        if SortableFileItem._sort_normal:
+            return self.k_orig < other.k_orig
 
+        col = SortableFileItem._sort_col
         if col == 0:
-            is_chk_self = (self.checkState(0) == Qt.CheckState.Checked) if not self.file_rec.is_reference else False
-            is_chk_other = (other.checkState(0) == Qt.CheckState.Checked) if not other.file_rec.is_reference else False
+            chk_self = (self.checkState(0) == Qt.CheckState.Checked) if not self.file_rec.is_reference else False
+            chk_other = (other.checkState(0) == Qt.CheckState.Checked) if not other.file_rec.is_reference else False
             if self.file_rec.is_reference != other.file_rec.is_reference:
                 return self.file_rec.is_reference < other.file_rec.is_reference
-            return is_chk_self < is_chk_other
+            return (chk_self, self.k_orig) < (chk_other, other.k_orig)
         elif col == 1:
-            return self.file_rec.name.lower() < other.file_rec.name.lower()
+            return self.k_name_tuple < other.k_name_tuple
         elif col == 2:
-            return self.file_rec.size < other.file_rec.size
+            return self.k_size_tuple < other.k_size_tuple
         elif col == 3:
-            return self.file_rec.mtime < other.file_rec.mtime
+            return self.k_mtime_tuple < other.k_mtime_tuple
         elif col == 4:
-            return self.similarity < other.similarity
+            return self.k_sim_tuple < other.k_sim_tuple
         elif col == 5:
-            return str(self.file_rec.path).lower() < str(other.file_rec.path).lower()
+            return self.k_path_tuple < other.k_path_tuple
 
-        return super().__lt__(other)
+        return self.k_orig < other.k_orig
 
 
 class ResultsWidget(QWidget):
     """Visualizador em árvore das duplicatas encontradas."""
+    COLUMN_LABELS = [
+        "Selection", "File Name", "Size", "Date Modified",
+        "Similarity", "Full Path"
+    ]
     selection_changed = Signal(int, "qint64")  # (count, total_bytes) - qint64 suporta até 9 Exabytes sem overflow
     selection_progress = Signal(str, int, int) # (title, current, total) para barra de progresso não-bloqueante
+    status_message = Signal(str)               # Mensagem amigável de status para o rodapé
     file_selected = Signal(object)             # Optional[FileRecord]
 
     def __init__(self, parent=None):
@@ -137,11 +187,11 @@ class ResultsWidget(QWidget):
         # Permite rolagem horizontal suave se as colunas excederem o espaço disponível
         tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        # Habilita clique interativo nos cabeçalhos para ordenação instantânea em Python (8ms)
+        # Habilita duplo clique interativo nos cabeçalhos para alternar entre 3 estados: Crescente / Decrescente / Normal
         header.setSectionsClickable(True)
-        header.setSortIndicatorShown(True)
-        header.setSortIndicator(1, Qt.SortOrder.AscendingOrder)
-        header.sectionClicked.connect(self._on_header_clicked)
+        header.setSortIndicatorShown(False)
+        header.setToolTip("Double-click column header to cycle sort: Ascending ▲ / Descending ▼ / Normal")
+        header.sectionDoubleClicked.connect(self._on_header_double_clicked)
 
         tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tree.customContextMenuRequested.connect(self._show_context_menu)
@@ -151,16 +201,6 @@ class ResultsWidget(QWidget):
         tree.itemChanged.connect(self._on_item_changed)
         return tree
 
-    def _reset_tree(self):
-        """Substitui o QTreeWidget instantaneamente (0.0008s), eliminando travamentos de destruição massiva de nós."""
-        if hasattr(self, "tree") and self.tree is not None:
-            old_tree = self.tree
-            self.layout().removeWidget(old_tree)
-            old_tree.setParent(None)
-            old_tree.deleteLater()
-        self.tree = self._create_tree()
-        self.layout().addWidget(self.tree)
-
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -169,16 +209,19 @@ class ResultsWidget(QWidget):
 
     def set_results(self, groups: List[DuplicateGroup]):
         """Popula a árvore com os grupos de duplicatas encontrados em lote de alta performance."""
-        # Se a árvore atual já possui itens, descarta e recria instantaneamente (0.0008s) sem travar a UI
-        if self.tree.topLevelItemCount() > 0:
-            self._reset_tree()
-
-        self.tree.setSortingEnabled(False)
-        self.tree.setUpdatesEnabled(False)
+        self.tree.viewport().setUpdatesEnabled(False)
         self.tree.blockSignals(True)
+        if self.tree.topLevelItemCount() > 0:
+            self.tree.invisibleRootItem().takeChildren()
+
+        self.tree.header().setSectionsClickable(True)
+        self.tree.header().setSortIndicatorShown(False)
         self.groups = groups
         self._selected_count = 0
         self._selected_bytes = 0
+        self._current_sort_col = None
+        self._current_sort_order = None
+        self._reset_header_labels()
         self.file_selected.emit(None)
 
         bold_font = QFont()
@@ -213,7 +256,7 @@ class ResultsWidget(QWidget):
                 f"Similarity: {sim_pct}  •  Reclaimable: {reclaim_str}"
             )
 
-            parent_item = SortableGroupItem(group)
+            parent_item = SortableGroupItem(group, original_index=idx)
             parent_item.setText(1, group_header)
             parent_item.setFirstColumnSpanned(True)
             parent_item.setFont(1, bold_font)
@@ -222,8 +265,8 @@ class ResultsWidget(QWidget):
 
             # Child items: Files in group
             child_items: List[QTreeWidgetItem] = []
-            for file_rec in group.files:
-                child_item = SortableFileItem(file_rec, group.similarity)
+            for file_idx, file_rec in enumerate(group.files):
+                child_item = SortableFileItem(file_rec, group.similarity, original_index=file_idx)
 
                 # Name
                 child_item.setText(1, file_rec.name)
@@ -276,50 +319,133 @@ class ResultsWidget(QWidget):
 
         # Expande automaticamente todos os grupos recém-carregados (0.4s) sem reordenação destrutiva síncrona
         self.tree.expandAll()
+        self.tree.header().setSectionsClickable(True)
         self.tree.blockSignals(False)
-        self.tree.setUpdatesEnabled(True)
+        self.tree.viewport().setUpdatesEnabled(True)
+        self.tree.viewport().update()
         if app:
             app.processEvents()
         self.selection_changed.emit(0, 0)
 
-    def _on_header_clicked(self, col: int):
-        """Ordena os grupos em altíssima velocidade em Python (8ms) sem travar a interface Qt."""
+    def _reset_header_labels(self):
+        """Restaura os títulos limpos dos cabeçalhos sem setas de ordenação."""
+        header_item = self.tree.headerItem()
+        if header_item:
+            for i, title in enumerate(self.COLUMN_LABELS):
+                header_item.setText(i, title)
+            if self.tree.header():
+                self.tree.header().viewport().update()
+
+    def _on_header_double_clicked(self, col: int):
+        """Alterna a ordenação com duplo clique em 3 estados: Crescente -> Decrescente -> Normal (sem ordenação)."""
         if not self.groups:
             return
 
+        root = self.tree.invisibleRootItem()
+        total_items = root.childCount()
+        if total_items == 0:
+            return
+
         header = self.tree.header()
-        current_col = getattr(self, "_current_sort_col", 1)
-        current_order = getattr(self, "_current_sort_order", Qt.SortOrder.AscendingOrder)
+        current_col = getattr(self, "_current_sort_col", None)
+        current_order = getattr(self, "_current_sort_order", None)
 
-        if col == current_col:
-            new_order = Qt.SortOrder.DescendingOrder if current_order == Qt.SortOrder.AscendingOrder else Qt.SortOrder.AscendingOrder
-        else:
+        # Ciclo de 3 estados:
+        # Se coluna diferente ou estado Normal -> 1º clique duplo: Crescente
+        # Se mesma coluna e Crescente -> 2º clique duplo: Decrescente
+        # Se mesma coluna e Decrescente -> 3º clique duplo: Normal (Sem ordenação)
+        if current_col != col or current_order is None:
             new_order = Qt.SortOrder.AscendingOrder
+        elif current_order == Qt.SortOrder.AscendingOrder:
+            new_order = Qt.SortOrder.DescendingOrder
+        else:
+            new_order = None
 
-        self._current_sort_col = col
+        self._current_sort_col = col if new_order is not None else None
         self._current_sort_order = new_order
-        header.setSortIndicator(col, new_order)
-        reverse = (new_order == Qt.SortOrder.DescendingOrder)
 
-        if col in (0, 1):
-            self.groups.sort(key=lambda g: g.group_id, reverse=reverse)
-        elif col == 2:
-            self.groups.sort(key=lambda g: g.reclaimable_bytes, reverse=reverse)
-        elif col == 3:
-            self.groups.sort(key=lambda g: max((f.mtime for f in g.files), default=0.0), reverse=reverse)
-        elif col == 4:
-            self.groups.sort(key=lambda g: g.similarity, reverse=reverse)
-        elif col == 5:
-            self.groups.sort(key=lambda g: str(g.files[0].path).lower() if g.files else "", reverse=reverse)
+        # Feedback visual instantâneo: Cursor de espera + mensagem amigável no rodapé
+        app = QApplication.instance()
+        if app:
+            app.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
-        self.set_results(self.groups)
+        col_name = self.COLUMN_LABELS[col] if 0 <= col < len(self.COLUMN_LABELS) else ""
+        if new_order is None:
+            msg = "Restoring original scan order..."
+        else:
+            order_name = "Ascending" if new_order == Qt.SortOrder.AscendingOrder else "Descending"
+            msg = f"Sorting results by {col_name} ({order_name})..."
+
+        self.status_message.emit(msg)
+        if app:
+            app.processEvents()
+
+        self.tree.viewport().setUpdatesEnabled(False)
+        self.tree.blockSignals(True)
+        try:
+            # Estado 3: Normal / Sem ordenação (restaura a ordem original do scan)
+            if new_order is None:
+                header.setSortIndicatorShown(False)
+                self._reset_header_labels()
+
+                SortableGroupItem._sort_normal = True
+                SortableFileItem._sort_normal = True
+                self.tree.sortItems(0, Qt.SortOrder.AscendingOrder)
+                SortableGroupItem._sort_normal = False
+                SortableFileItem._sort_normal = False
+            else:
+                # Estados 1 e 2: Crescente ou Decrescente (o indicador nativo da grid exibe o sinal de ordenação)
+                header.setSortIndicatorShown(True)
+                header.setSortIndicator(col, new_order)
+                self._reset_header_labels()
+
+                # Se a coluna for Seleção (0), faz uma contagem rápida O(N) dos itens marcados por grupo
+                if col == 0:
+                    for i in range(total_items):
+                        g_it = root.child(i)
+                        g_it.k_chk = sum(
+                            1 for j in range(g_it.childCount())
+                            if g_it.child(j).checkState(0) == Qt.CheckState.Checked
+                        )
+
+                SortableGroupItem._sort_col = col
+                SortableFileItem._sort_col = col
+                SortableGroupItem._sort_normal = False
+                SortableFileItem._sort_normal = False
+                self.tree.sortItems(col, new_order)
+
+            # Sincroniza a lista interna self.groups com a nova ordem da árvore
+            self.groups = [root.child(i).group for i in range(total_items)]
+        finally:
+            self.tree.blockSignals(False)
+            self.tree.viewport().setUpdatesEnabled(True)
+            self.tree.viewport().update()
+            if header:
+                header.viewport().update()
+            self.status_message.emit("")
+            if app:
+                app.restoreOverrideCursor()
+
+    # Alias para compatibilidade e chamadas diretas
+    _on_header_clicked = _on_header_double_clicked
 
     def clear(self):
-        """Limpa completamente os resultados da árvore e reseta a seleção instantaneamente (0.0008s)."""
+        """Limpa os resultados da árvore e reseta a seleção mantendo os títulos e colunas permanentemente visíveis."""
         self.groups = []
         self._selected_count = 0
         self._selected_bytes = 0
-        self._reset_tree()
+        self._current_sort_col = None
+        self._current_sort_order = None
+        self._reset_header_labels()
+        self.tree.viewport().setUpdatesEnabled(False)
+        self.tree.blockSignals(True)
+        try:
+            if self.tree.topLevelItemCount() > 0:
+                self.tree.invisibleRootItem().takeChildren()
+        finally:
+            self.tree.blockSignals(False)
+            self.tree.viewport().setUpdatesEnabled(True)
+        self.tree.viewport().update()
         self.file_selected.emit(None)
         self.selection_changed.emit(0, 0)
 
@@ -371,10 +497,8 @@ class ResultsWidget(QWidget):
         if total_groups == 0:
             return
 
-        was_sorting = self.tree.isSortingEnabled()
-        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
-        self.tree.setUpdatesEnabled(False)
+        self.tree.viewport().setUpdatesEnabled(False)
 
         selected_count = 0
         selected_bytes = 0
@@ -415,10 +539,8 @@ class ResultsWidget(QWidget):
                     QApplication.processEvents()
 
         finally:
-            self.tree.setUpdatesEnabled(True)
+            self.tree.viewport().setUpdatesEnabled(True)
             self.tree.blockSignals(False)
-            if was_sorting:
-                self.tree.setSortingEnabled(True)
             self.selection_progress.emit("", 0, 0)
             self._selected_count = selected_count
             self._selected_bytes = selected_bytes
@@ -434,10 +556,8 @@ class ResultsWidget(QWidget):
         if total_groups == 0:
             return
 
-        was_sorting = self.tree.isSortingEnabled()
-        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
-        self.tree.setUpdatesEnabled(False)
+        self.tree.viewport().setUpdatesEnabled(False)
 
         selected_count = 0
         selected_bytes = 0
@@ -506,10 +626,8 @@ class ResultsWidget(QWidget):
                     QApplication.processEvents()
 
         finally:
-            self.tree.setUpdatesEnabled(True)
+            self.tree.viewport().setUpdatesEnabled(True)
             self.tree.blockSignals(False)
-            if was_sorting:
-                self.tree.setSortingEnabled(True)
             self.selection_progress.emit("", 0, 0)
             self._selected_count = selected_count
             self._selected_bytes = selected_bytes
@@ -522,10 +640,8 @@ class ResultsWidget(QWidget):
         if total_groups == 0:
             return
 
-        was_sorting = self.tree.isSortingEnabled()
-        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
-        self.tree.setUpdatesEnabled(False)
+        self.tree.viewport().setUpdatesEnabled(False)
 
         selected_count = 0
         selected_bytes = 0
@@ -549,10 +665,8 @@ class ResultsWidget(QWidget):
                     self.selection_progress.emit("Inverting selection", i + 1, total_groups)
                     QApplication.processEvents()
         finally:
-            self.tree.setUpdatesEnabled(True)
+            self.tree.viewport().setUpdatesEnabled(True)
             self.tree.blockSignals(False)
-            if was_sorting:
-                self.tree.setSortingEnabled(True)
             self.selection_progress.emit("", 0, 0)
             self._selected_count = selected_count
             self._selected_bytes = selected_bytes
@@ -565,10 +679,8 @@ class ResultsWidget(QWidget):
         if total_groups == 0:
             return
 
-        was_sorting = self.tree.isSortingEnabled()
-        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
-        self.tree.setUpdatesEnabled(False)
+        self.tree.viewport().setUpdatesEnabled(False)
 
         selected_count = 0
         selected_bytes = 0
@@ -589,10 +701,8 @@ class ResultsWidget(QWidget):
                     self.selection_progress.emit("Selecting all duplicates", i + 1, total_groups)
                     QApplication.processEvents()
         finally:
-            self.tree.setUpdatesEnabled(True)
+            self.tree.viewport().setUpdatesEnabled(True)
             self.tree.blockSignals(False)
-            if was_sorting:
-                self.tree.setSortingEnabled(True)
             self.selection_progress.emit("", 0, 0)
             self._selected_count = selected_count
             self._selected_bytes = selected_bytes
@@ -605,10 +715,8 @@ class ResultsWidget(QWidget):
         if total_groups == 0:
             return
 
-        was_sorting = self.tree.isSortingEnabled()
-        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
-        self.tree.setUpdatesEnabled(False)
+        self.tree.viewport().setUpdatesEnabled(False)
         CHUNK_SIZE = 150
 
         try:
@@ -624,10 +732,8 @@ class ResultsWidget(QWidget):
                     self.selection_progress.emit("Unselecting all", i + 1, total_groups)
                     QApplication.processEvents()
         finally:
-            self.tree.setUpdatesEnabled(True)
+            self.tree.viewport().setUpdatesEnabled(True)
             self.tree.blockSignals(False)
-            if was_sorting:
-                self.tree.setSortingEnabled(True)
             self.selection_progress.emit("", 0, 0)
             self._selected_count = 0
             self._selected_bytes = 0
@@ -686,10 +792,8 @@ class ResultsWidget(QWidget):
         if not deleted_paths:
             return
 
-        was_sorting = self.tree.isSortingEnabled()
-        self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
-        self.tree.setUpdatesEnabled(False)
+        self.tree.viewport().setUpdatesEnabled(False)
 
         try:
             cur_item = self.tree.currentItem()
@@ -720,10 +824,8 @@ class ResultsWidget(QWidget):
                     updated_groups.append(g)
             self.groups = updated_groups
 
-            self.tree.setUpdatesEnabled(True)
+            self.tree.viewport().setUpdatesEnabled(True)
             self.tree.blockSignals(False)
-            if was_sorting:
-                self.tree.setSortingEnabled(True)
             self._emit_selection_stats()
 
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int):

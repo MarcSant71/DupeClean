@@ -316,6 +316,7 @@ class MainWindow(QMainWindow):
         self.results_widget = ResultsWidget()
         self.results_widget.selection_changed.connect(self._on_selection_changed)
         self.results_widget.selection_progress.connect(self._on_operation_progress)
+        self.results_widget.status_message.connect(self._on_status_message)
         self.results_widget.file_selected.connect(self._on_file_selected)
         self.h_splitter.addWidget(self.results_widget)
 
@@ -584,6 +585,18 @@ class MainWindow(QMainWindow):
             self.btn_move.setText("📁 Move")
             self.btn_delete_trash.setText("🗑️ Trash")
             self.btn_delete_perm.setText("❌ Delete")
+
+    @Slot(str)
+    def _on_status_message(self, msg: str):
+        """Exibe mensagens temporárias na barra de status durante operações síncronas (ex: ordenação de colunas)."""
+        if msg:
+            if not getattr(self, "_saved_status_text", None):
+                self._saved_status_text = self.lbl_status.text()
+            self.lbl_status.setText(msg)
+        else:
+            if getattr(self, "_saved_status_text", None):
+                self.lbl_status.setText(self._saved_status_text)
+                self._saved_status_text = ""
 
     @Slot()
     def _on_folders_cleared(self):

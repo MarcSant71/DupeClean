@@ -293,7 +293,7 @@ QMenu::separator {
 
 /* Divisores de Splitter (Vertical e Horizontal) */
 QSplitter::handle {
-    background-color: #27272a;
+    background-color: transparent;
 }
 QSplitter::handle:hover {
     background-color: #38bdf8;
