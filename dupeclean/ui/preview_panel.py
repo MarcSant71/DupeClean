@@ -1,7 +1,6 @@
 """
-Painel de visualização lateral (Preview Panel) para imagens e vídeos.
-Inspirado na usabilidade ágil do Krokiet / Czkawka com renderização assíncrona,
-cache LRU em memória e preservação estrita de proporção (aspect ratio).
+Painel de visualização lateral (Preview Panel) para imagens e vídeos
+com renderização assíncrona, cache LRU em memória e preservação estrita de proporção (aspect ratio).
 """
 
 import io

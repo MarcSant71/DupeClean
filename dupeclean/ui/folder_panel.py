@@ -190,7 +190,7 @@ class FolderPanel(QWidget):
         row = self.table_included.rowCount()
         self.table_included.insertRow(row)
 
-        # Checkmark toggle button (Krokiet style)
+        # Checkmark toggle button
         cell_widget = QWidget()
         cell_layout = QHBoxLayout(cell_widget)
         cell_layout.setContentsMargins(0, 0, 0, 0)

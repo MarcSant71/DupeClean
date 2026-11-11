@@ -1,5 +1,5 @@
 """
-Tema Dark Moderno inspirado na estética do Krokiet / Czkawka.
+Tema Dark Moderno com paleta profissional.
 """
 
 DARK_THEME_QSS = """
@@ -127,7 +127,7 @@ QPushButton#helpButton::menu-indicator {
     image: none;
 }
 
-/* Botão Quadradinho com Checkmark da Pasta de Referência (Estilo Krokiet) */
+/* Botão Quadradinho com Checkmark da Pasta de Referência */
 QPushButton#refSquare {
     width: 18px;
     height: 18px;
@@ -225,7 +225,7 @@ QSlider::handle:horizontal:disabled {
     border: 1px solid #3f3f46;
 }
 
-/* Barra de Progresso Geral e Estágios (Estilo Krokiet) */
+/* Barra de Progresso Geral e Estágios */
 QProgressBar {
     border: 1px solid #3f3f46;
     border-radius: 4px;
@@ -310,7 +310,7 @@ QListWidget#sidebarModes::item:focus {
     outline: none;
 }
 
-/* Menus de Seleção e Contexto (Estilo Krokiet) */
+/* Menus de Seleção e Contexto */
 QMenu {
     background-color: #202024;
     color: #f4f4f5;

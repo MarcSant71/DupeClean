@@ -36,8 +36,8 @@ When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools 
 
 * **Zero CPU Bottlenecks:** Frequency feature extraction, normalizations, and similarity comparisons execute directly in GPU **VRAM** and **Tensor Cores** via PyTorch CUDA.
 * **Parallel Multi-Process Extraction:** Multi-threaded image decoding feeds the GPU, while temporal video keyframe extraction pinpoints 5 distinct timeline samples without reading full files.
-* **Reference Folder Protection (`Ref`):** Designate any master/backup folder as a **Reference**. DupeClean matches duplicate files against it, while ensuring reference files are strictly locked and never marked for deletion (following industry best practices established by tools like Czkawka).
-* **Krokiet-Inspired Ergonomics:**
+* **Reference Folder Protection (`Ref`):** Designate any master/backup folder as a **Reference**. DupeClean matches duplicate files against it, while ensuring reference files are strictly locked and never marked for deletion.
+* **Modern Ergonomics & Usability:**
   * Clean, native Dark Theme (KISS principle).
   * Drag & Drop folder support from Windows Explorer.
   * Similarity threshold slider (70% to 100%) for perceptual image and video matching.

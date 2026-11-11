@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QFont
 
 
 class SplashScreen(QWidget):
-    """Splash Screen com design Krokiet/Dark moderno e feedback de carregamento."""
+    """Splash Screen com design Dark moderno e feedback de carregamento."""
 
     def __init__(self):
         super().__init__()

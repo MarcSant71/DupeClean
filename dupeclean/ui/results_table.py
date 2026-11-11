@@ -548,7 +548,7 @@ class ResultsWidget(QWidget):
 
     def select_custom(self, rule: str):
         """
-        Aplica regras de seleção avançadas por grupo (estilo Krokiet).
+        Aplica regras de seleção avançadas por grupo.
         Arquivos de referência são 100% protegidos e nunca marcados.
         """
         root = self.tree.invisibleRootItem()

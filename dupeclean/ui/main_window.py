@@ -237,7 +237,7 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(15, 15, 15, 15)
         right_layout.setSpacing(10)
 
-        # 2.1 Action Bar (Krokiet Style - Compacto e Responsivo)
+        # 2.1 Action Bar (Compacto e Responsivo)
         top_bar = QHBoxLayout()
         top_bar.setSpacing(6)
 
@@ -315,7 +315,7 @@ class MainWindow(QMainWindow):
 
         right_layout.addLayout(top_bar)
 
-        # 2.2 Splitter vertical: Resultados+Preview (cima) e Pastas (baixo) - Padrão Krokiet
+        # 2.2 Splitter vertical: Resultados+Preview (cima) e Pastas (baixo)
         self.v_splitter = QSplitter(Qt.Orientation.Vertical)
 
         # Splitter horizontal no topo: Tabela de Resultados (esquerda) e Preview (direita)
@@ -346,7 +346,7 @@ class MainWindow(QMainWindow):
         self.v_splitter.setSizes([520, 240])
         right_layout.addWidget(self.v_splitter)
 
-        # 2.3 Status Bar, Telemetry and Progress (Dois Estágios - Estilo Krokiet)
+        # 2.3 Status Bar, Telemetry and Progress (Dois Estágios)
         status_container = QVBoxLayout()
         status_container.setSpacing(6)
         status_container.setContentsMargins(0, 4, 0, 0)

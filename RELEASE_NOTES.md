@@ -88,7 +88,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
   - Safe folder state clearing and preview reset when comparison sources are cleared.
 
 ### What's New in v1.1.0
-- **Responsive Media Preview Panel (Krokiet-Style):**
+- **Responsive Media Preview Panel:**
   - Integrated horizontal splitter on results table with a dedicated side preview panel that stays hidden until a media file is selected.
   - Single-click or keyboard navigation smoothly activates the preview panel for both photos and videos.
   - Preserves 100% of double-click functionality to launch files in default Windows applications (`os.startfile`), as well as right-click context menu options (`Open File`, `Open Containing Folder`).
@@ -111,7 +111,7 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
   - Added automatic black bar detection and cropping (`crop_letterbox`) before 2D DCT calculation, preventing aspect ratio black bars from dominating visual hashes.
   - Introduced GPU tensor duration filter (maximum 8% duration difference for duplicates), preventing videos of different runtimes from matching.
   - Upgraded duplicate clustering to **Strict Mutual Similarity Grouping**, guaranteeing that every item in a group shares direct mutual similarity ≥ threshold.
-- **Two-Tier Progress Architecture (Krokiet-Style):**
+- **Two-Tier Progress Architecture:**
   - Independent progress tracking for `Current Stage` and cumulative `All Stages` with cyan (`#38bdf8`) and blue (`#0284c7`) styling.
   - Eliminated UI signal flickering during directory crawling. ETA and processing throughput (`it/s`) activate deterministically from Stage 2 onward once exact file counts are known.
 
