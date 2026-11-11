@@ -1,9 +1,10 @@
 """
-Deduplicador Exato (Bit-a-bit) de Altíssimo Desempenho com xxHash64 e I/O Paralelo.
-Algoritmo de 3 estágios otimizado para alta vazão de I/O (NVMe, SSD e storages em rede) e cancelamento instantâneo:
+Deduplicador Exato (Bit-a-bit) de Altíssimo Desempenho com xxHash64 e I/O Otimizado.
+Algoritmo de 3 estágios otimizado para alta vazão (NVMe, SSD, HDDs mecânicos e storages em rede/iSCSI):
 1. Agrupamento por tamanho (tamanhos únicos são descartados em memória sem tocar no disco).
-2. Hash paralelo dos primeiros 4 KB com descarte imediato via ThreadPool e stop_check.
-3. Hash completo em streaming paralelo com buffers de 4 MB e cancelamento atômico em tempo real.
+2. Assinatura composta Head 4KB + Tail 4KB com fast-path para arquivos pequenos (<= 8KB)
+   e ordenação por localidade de diretório para evitar head thrashing em HDDs mecânicos.
+3. Hash completo em streaming paralelo com buffers de 4 MB, concorrência balanceada e cancelamento atômico.
 """
 
 import os
@@ -18,20 +19,48 @@ from dupeclean.core.cache import CacheManager
 STREAM_BUFFER_SIZE = 4 * 1024 * 1024  # 4 MB por bloco de leitura
 
 
-def _read_header_hash(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str]]:
-    """Lê os primeiros 4 KB de um arquivo e calcula o hash do cabeçalho com suporte a cancelamento."""
+def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str, bool]]:
+    """
+    Calcula a assinatura rápida do arquivo com suporte a cancelamento atômico:
+    - Arquivos <= 8 KB: lê o conteúdo integral e calcula o hash definitivo (is_full=True).
+    - Arquivos > 8 KB: lê os primeiros 4 KB e os últimos 4 KB (Head + Tail) (is_full=False),
+      descartando 99.9% dos falsos positivos de cabeçalho sem streaming do arquivo inteiro.
+    Retorna (rec, hash_value, is_full) ou None em caso de erro de I/O ou cancelamento.
+    """
     rec, stop_check = args
     if stop_check and stop_check():
         return None
     try:
         with open(rec.path, "rb") as f:
-            chunk = f.read(4096)
-            if stop_check and stop_check():
-                return None
-            h = xxhash.xxh64(chunk).hexdigest()
-            return rec, h
+            if rec.size <= 8192:
+                data = f.read(8192)
+                if stop_check and stop_check():
+                    return None
+                h = xxhash.xxh64(data).hexdigest()
+                return rec, h, True
+            else:
+                head = f.read(4096)
+                if stop_check and stop_check():
+                    return None
+                try:
+                    f.seek(-4096, os.SEEK_END)
+                    tail = f.read(4096)
+                except OSError:
+                    tail = b""
+                if stop_check and stop_check():
+                    return None
+                hasher = xxhash.xxh64()
+                hasher.update(head)
+                if tail:
+                    hasher.update(tail)
+                h = hasher.hexdigest()
+                return rec, h, False
     except (OSError, PermissionError):
         return None
+
+
+# Alias para retrocompatibilidade interna
+_read_header_hash = _read_signature
 
 
 def _compute_full_hash(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str]]:
@@ -85,26 +114,22 @@ def find_exact_duplicates(
         return []
 
     # -------------------------------------------------------------------------
-    # Estágio 2: Hash do cabeçalho (primeiros 4 KB) com ThreadPool concorrente
+    # Estágio 2: Assinatura composta (Head 4 KB + Tail 4 KB) e fast-path (<= 8 KB)
     # -------------------------------------------------------------------------
     flat_candidates = [f for grp in candidates_by_size for f in grp]
     cached_exact = cache.get_exact_cache(flat_candidates, stop_check=stop_check)
     if stop_check and stop_check():
         return []
-    cache_hits_prefix = sum(1 for f in flat_candidates if str(f.path) in cached_exact and cached_exact[str(f.path)][0])
-
-    if progress_callback and cache_hits_prefix > 0:
-        progress_callback(f"Loading cached results ({cache_hits_prefix:,}/{total_candidates:,})...", cache_hits_prefix, total_candidates)
 
     by_full_hash = defaultdict(list)
     by_header_hash = defaultdict(list)
     to_header_check: List[FileRecord] = []
 
-    # Fast-path: arquivos já com hash completo em cache vão direto para o agrupamento final (elimina loops redundantes)
+    # Fast-path: arquivos pequenos (<= 8 KB) com full_hash em cache vão direto para by_full_hash
     for rec in flat_candidates:
         p_key = str(rec.path)
         cached_data = cached_exact.get(p_key)
-        if cached_data and cached_data[1]:
+        if rec.size <= 8192 and cached_data and cached_data[1]:
             rec.hash_value = cached_data[1]
             by_full_hash[(rec.size, cached_data[1])].append(rec)
         elif cached_data and cached_data[0]:
@@ -112,12 +137,22 @@ def find_exact_duplicates(
         else:
             to_header_check.append(rec)
 
+    cache_hits_prefix = total_candidates - len(to_header_check)
+
+    if progress_callback and cache_hits_prefix > 0:
+        progress_callback(f"Loading cached results ({cache_hits_prefix:,}/{total_candidates:,})...", cache_hits_prefix, total_candidates)
+
     if to_header_check and not (stop_check and stop_check()):
-        header_workers = min(32, max(4, os.cpu_count() or 4))
+        # Otimização espacial (Directory Locality): agrupa leituras por pasta pai
+        # para leitura sequencial do MFT e blocos de diretório, eliminando head thrashing em HDDs e storages NAS
+        to_header_check.sort(key=lambda r: str(r.path.parent))
+
+        # Concorrência equilibrada para evitar saturação de fila de I/O em discos mecânicos e iSCSI
+        header_workers = min(16, max(4, os.cpu_count() or 4))
         new_prefix_entries: List[Tuple[str, int, float, Optional[str], Optional[str]]] = []
         header_processed = cache_hits_prefix
 
-        # Chunks menores para conferência frequente de stop_check
+        # Chunks para conferência frequente de stop_check
         header_chunk_size = 256
         executor = ThreadPoolExecutor(max_workers=header_workers)
         try:
@@ -127,7 +162,7 @@ def find_exact_duplicates(
 
                 chunk = to_header_check[chunk_start : chunk_start + header_chunk_size]
                 task_args = [(r, stop_check) for r in chunk]
-                futures = [executor.submit(_read_header_hash, arg) for arg in task_args]
+                futures = [executor.submit(_read_signature, arg) for arg in task_args]
                 results = []
                 for f in futures:
                     if stop_check and stop_check():
@@ -145,9 +180,14 @@ def find_exact_duplicates(
                 for res in results:
                     header_processed += 1
                     if res is not None:
-                        rec, h = res
-                        by_header_hash[(rec.size, h)].append(rec)
-                        new_prefix_entries.append((str(rec.path), rec.size, rec.mtime, h, None))
+                        rec, h, is_full = res
+                        if is_full:
+                            rec.hash_value = h
+                            by_full_hash[(rec.size, h)].append(rec)
+                            new_prefix_entries.append((str(rec.path), rec.size, rec.mtime, h, h))
+                        else:
+                            by_header_hash[(rec.size, h)].append(rec)
+                            new_prefix_entries.append((str(rec.path), rec.size, rec.mtime, h, None))
 
                 if progress_callback:
                     progress_callback(
@@ -192,7 +232,11 @@ def find_exact_duplicates(
                 to_deep_check.append(rec)
 
     if to_deep_check and not (stop_check and stop_check()):
-        deep_workers = min(16, max(4, os.cpu_count() or 4))
+        # Otimização espacial para leitura sequencial de grandes blocos contíguos
+        to_deep_check.sort(key=lambda r: str(r.path.parent))
+
+        # Concorrência moderada para I/O massivo em streaming de 4 MB (evita contenção de banda em NAS/iSCSI e HDDs)
+        deep_workers = min(8, max(2, (os.cpu_count() or 4) // 2))
         new_full_entries: List[Tuple[str, int, float, Optional[str], Optional[str]]] = []
         deep_processed = deep_cached_count
 

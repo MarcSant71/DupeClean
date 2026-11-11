@@ -127,6 +127,18 @@ class CacheManager:
             # Purga embeddings de versões obsoletas (preserva tombstones com duration == -1.0)
             conn.execute("DELETE FROM cache_images WHERE length(embedding) != 1536 AND length(embedding) != 0;")
             conn.execute("DELETE FROM cache_videos WHERE length(embedding) != 7680 AND duration != -1.0;")
+
+            # Migração de versão da assinatura exata (v1 4KB head -> v2 Head 4KB + Tail 4KB):
+            # Invalida prefix_hash uma única vez para recalcular assinaturas compostas sem perder nenhum full_hash
+            cur = conn.execute("SELECT value FROM app_settings WHERE key = 'signature_version';")
+            row = cur.fetchone()
+            if not row or row[0] != "v2_head_tail":
+                conn.execute("UPDATE cache_exact SET prefix_hash = NULL;")
+                conn.execute("""
+                    INSERT INTO app_settings (key, value) VALUES ('signature_version', 'v2_head_tail')
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                """)
+
             conn.commit()
         finally:
             conn.close()
