@@ -405,11 +405,10 @@ class MainWindow(QMainWindow):
         self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.lbl_status.setMinimumWidth(0)
 
-        # Telemetry Badge (Elapsed Time / Iteration Rate)
-        self.lbl_timer = QLabel("⏱️ 00:00")
+        # Telemetry Label (Elapsed Time / Iteration Rate) - sem moldura para coerência com lbl_status
+        self.lbl_timer = QLabel("00:00")
         self.lbl_timer.setStyleSheet(
-            "font-weight: bold; font-family: 'Consolas', monospace; color: #38bdf8; "
-            "background-color: #202024; border: 1px solid #2e2e33; border-radius: 4px; padding: 2px 8px;"
+            "font-weight: bold; font-family: 'Consolas', monospace; color: #38bdf8;"
         )
         self.lbl_timer.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         sp_timer = self.lbl_timer.sizePolicy()
@@ -533,6 +532,15 @@ class MainWindow(QMainWindow):
                     self.progress_all.setRange(0, 100)
                 self.progress_all.setValue(overall_pct)
                 self.lbl_pct_all.setText(f"{overall_pct}%")
+
+                # Atualiza telemetria contínua com taxa de montagem e tempo decorrido total em andamento
+                if getattr(self, "start_time", None):
+                    now = time.time()
+                    elapsed = now - self.start_time
+                    elapsed_str = self._format_duration(elapsed)
+                    mount_elapsed = max(0.001, now - getattr(self, "_mounting_start_time", now))
+                    rate = current / mount_elapsed
+                    self.lbl_timer.setText(f"{rate:,.0f} it/s • {elapsed_str}")
             else:
                 self.lbl_stage_all.setVisible(False)
                 self.progress_all.setVisible(False)
@@ -663,7 +671,7 @@ class MainWindow(QMainWindow):
         self.start_time = time.time()
         self.latest_current = 0
         self.latest_total = 0
-        self.lbl_timer.setText("⏱️ 00:00")
+        self.lbl_timer.setText("00:00")
         self.lbl_timer.setVisible(True)
         self.ui_timer.start(250)
 
@@ -723,6 +731,8 @@ class MainWindow(QMainWindow):
     @Slot()
     def _update_telemetry_tick(self):
         """Autonomous telemetry update every 250ms with sliding-window instantaneous rate."""
+        if getattr(self, "_is_scan_mounting", False):
+            return
         if not self.start_time:
             return
         now = time.time()
@@ -751,15 +761,9 @@ class MainWindow(QMainWindow):
                 stage_elapsed = max(0.001, now - getattr(self, "stage_start_time", self.start_time))
                 rate = self.latest_current / stage_elapsed
 
-            remaining = max(0, self.latest_total - self.latest_current)
-            if rate > 0 and remaining > 0:
-                eta_sec = remaining / rate
-                eta_str = self._format_duration(eta_sec)
-                self.lbl_timer.setText(f"⏱️ {elapsed_str} (ETA: {eta_str}) • {rate:,.0f} it/s")
-            else:
-                self.lbl_timer.setText(f"⏱️ {elapsed_str} ({rate:,.0f} it/s)")
+            self.lbl_timer.setText(f"{rate:,.0f} it/s • {elapsed_str}")
         else:
-            self.lbl_timer.setText(f"⏱️ {elapsed_str}")
+            self.lbl_timer.setText(f"{elapsed_str}")
 
     @Slot(str, "qint64", "qint64", int, int)
     def _on_stage_progress(self, msg: str, current: int, total: int, stage_num: int, total_stages: int):
@@ -807,12 +811,6 @@ class MainWindow(QMainWindow):
     @Slot(list)
     def _on_scan_finished(self, groups: List[DuplicateGroup]):
         self._was_cancelled = False
-        self.ui_timer.stop()
-        total_time_str = ""
-        if self.start_time:
-            total_elapsed = time.time() - self.start_time
-            total_time_str = self._format_duration(total_elapsed)
-            self.lbl_timer.setText(f"⏱️ Total Time: {total_time_str}")
 
         if groups:
             self.lbl_status.setText(f"Loading results ({len(groups):,} duplicate groups)...")
@@ -821,10 +819,21 @@ class MainWindow(QMainWindow):
                 app.processEvents()
 
         self._is_scan_mounting = bool(groups)
+        self._mounting_start_time = time.time()
         try:
             self.results_widget.set_results(groups)
         finally:
             self._is_scan_mounting = False
+
+        # Finaliza temporizador e estado de scan somente após os dados estarem totalmente montados
+        self.ui_timer.stop()
+        self._set_scanning_state(False)
+
+        total_time_str = ""
+        if self.start_time:
+            total_elapsed = time.time() - self.start_time
+            total_time_str = self._format_duration(total_elapsed)
+            self.lbl_timer.setText(f"Total Time: {total_time_str}")
 
         # Garante 100% em ambas as barras ao concluir o scan com visualização perfeita
         self.progress_current.setRange(0, 100)
@@ -869,6 +878,8 @@ class MainWindow(QMainWindow):
         msg_box.exec()
 
     def _finalize_scan_ui(self):
+        if getattr(self, "_is_scan_mounting", False):
+            return
         self.ui_timer.stop()
         self._set_scanning_state(False)
         if getattr(self, "_was_cancelled", False):
@@ -876,7 +887,7 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("Scan cancelled by user.")
             if self.start_time:
                 elapsed = time.time() - self.start_time
-                self.lbl_timer.setText(f"⏱️ Cancelled in {self._format_duration(elapsed)}")
+                self.lbl_timer.setText(f"Cancelled in {self._format_duration(elapsed)}")
             self._was_cancelled = False
 
     def _delete_selected_to_trash(self):
@@ -990,7 +1001,7 @@ class MainWindow(QMainWindow):
             elapsed = time.time() - self._action_start_time
             rate = current / max(0.001, elapsed)
             elapsed_str = self._format_duration(elapsed)
-            self.lbl_timer.setText(f"⏱️ {elapsed_str} ({rate:.0f} files/s)")
+            self.lbl_timer.setText(f"{rate:.0f} files/s • {elapsed_str}")
 
     @Slot(set, list)
     def _on_file_action_finished(self, deleted_set: set, errors: list):
@@ -1003,7 +1014,7 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "_action_start_time") and self._action_start_time:
             elapsed = time.time() - self._action_start_time
-            self.lbl_timer.setText(f"⏱️ Done in {self._format_duration(elapsed)}")
+            self.lbl_timer.setText(f"Done in {self._format_duration(elapsed)}")
 
         self.results_widget.remove_deleted_files(deleted_set)
 

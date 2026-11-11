@@ -17,8 +17,9 @@ import xxhash
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
 from dupeclean.core.cache import CacheManager
 
-# Tamanho limite para resolução imediata no Estágio 2 (elimina reabertura de ~78% dos arquivos no Estágio 3)
-FAST_PATH_SIZE = 1024 * 1024  # 1 MB
+# Tamanho limite para arquivos pequenos (lidos integralmente no Estágio 2, como no Czkawka/Krokiet)
+PREHASH_CHUNK = 4096  # 4 KB (Head 4 KB + Tail 4 KB; arquivos <= 8 KB lidos inteiros)
+FAST_PATH_SIZE = PREHASH_CHUNK * 2  # 8 KB
 
 # Buffer de leitura streaming otimizado para alta vazão contínua sem fragmentação de memória
 STREAM_BUFFER_SIZE = 512 * 1024  # 512 KB por bloco de leitura
@@ -26,9 +27,9 @@ STREAM_BUFFER_SIZE = 512 * 1024  # 512 KB por bloco de leitura
 
 def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str, bool]]:
     """
-    Calcula a assinatura rápida do arquivo com suporte a cancelamento atômico:
-    - Arquivos <= 1 MB: lê o conteúdo integral e já calcula o hash definitivo (is_full=True).
-    - Arquivos > 1 MB: lê os primeiros 64 KB e os últimos 64 KB (Head + Tail) (is_full=False),
+    Calcula a assinatura rápida (pre-hash) do arquivo com suporte a cancelamento atômico:
+    - Arquivos <= 8 KB: lê o conteúdo integral e já calcula o hash definitivo (is_full=True).
+    - Arquivos > 8 KB: lê os primeiros 4 KB e os últimos 4 KB (Head + Tail) (is_full=False),
       descartando 99.9% dos falsos positivos de cabeçalho sem streaming do arquivo inteiro.
     Retorna (rec, hash_value, is_full) ou None em caso de erro de I/O ou cancelamento.
     """
@@ -44,12 +45,12 @@ def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Op
                 h = xxhash.xxh64(data).hexdigest()
                 return rec, h, True
             else:
-                head = f.read(65536)
+                head = f.read(PREHASH_CHUNK)
                 if stop_check and stop_check():
                     return None
                 try:
-                    f.seek(-65536, os.SEEK_END)
-                    tail = f.read(65536)
+                    f.seek(-PREHASH_CHUNK, os.SEEK_END)
+                    tail = f.read(PREHASH_CHUNK)
                 except OSError:
                     tail = b""
                 if stop_check and stop_check():
@@ -130,17 +131,21 @@ def find_exact_duplicates(
     by_header_hash = defaultdict(list)
     to_header_check: List[FileRecord] = []
 
-    # Fast-path: arquivos pequenos (<= FAST_PATH_SIZE) com full_hash em cache vão direto para by_full_hash
+    # Separação estrita: arquivos <= FAST_PATH_SIZE nunca entram em by_header_hash (são resolvidos no Estágio 2)
     for rec in flat_candidates:
         p_key = str(rec.path)
         cached_data = cached_exact.get(p_key)
-        if rec.size <= FAST_PATH_SIZE and cached_data and cached_data[1]:
-            rec.hash_value = cached_data[1]
-            by_full_hash[(rec.size, cached_data[1])].append(rec)
-        elif cached_data and cached_data[0]:
-            by_header_hash[(rec.size, cached_data[0])].append(rec)
+        if rec.size <= FAST_PATH_SIZE:
+            if cached_data and cached_data[1]:
+                rec.hash_value = cached_data[1]
+                by_full_hash[(rec.size, cached_data[1])].append(rec)
+            else:
+                to_header_check.append(rec)
         else:
-            to_header_check.append(rec)
+            if cached_data and cached_data[0]:
+                by_header_hash[(rec.size, cached_data[0])].append(rec)
+            else:
+                to_header_check.append(rec)
 
     cache_hits_prefix = total_candidates - len(to_header_check)
 

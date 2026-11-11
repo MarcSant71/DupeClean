@@ -1,9 +1,16 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
 ### What's New in v1.1.2
-- **Streamlined Telemetry (Volatile ETA Calculation Removed):**
-  - Removed volatile and jumping ETA time estimations during scanning and bulk file actions.
-  - Telemetry badge now displays pure elapsed time and stable instantaneous iteration rate (`⏱️ MM:SS (XX it/s)`), providing clean and distraction-free progress feedback.
+- **High-Throughput Exact Duplicate Engine (Krokiet Multi-Stage Architecture):**
+  - Standardized multi-stage hashing pipeline with 4 KB head + 4 KB tail composite pre-hash and 8 KB single-pass fast-path.
+  - Spatial directory locality sorting to maximize OS disk cache hits and sequential I/O on SSD RAID arrays, HDDs, and network storage.
+  - Asynchronous continuous sliding-window worker pipeline eliminating chunk barrier stalls.
+  - 512 KB stream read buffering delivering sustained sequential read speeds up to 1,400+ MB/s.
+  - Strict small-file cache isolation preventing small-file leakage into the full-hash stage.
+- **Clean & Minimalist Visual Telemetry (KISS):**
+  - Removed volatile ETA calculations, decorative badges, and timer emojis for a clean, cohesive look matching left status indicators.
+  - Display format standardized to `{rate} it/s • {elapsed}` during scans and `{rate} files/s • {elapsed}` during file operations.
+  - Continuous telemetry throughout the results mounting stage (`Loading results...`), with final `Total Time` and dual 100% progress bars synchronized to the exact completion moment.
 - **Visual Grid Cleanliness & Protected Reference Rows:**
   - Removed the redundant "Origin" column from the duplicate results tree, streamlining results into 6 focused columns.
   - Protected Reference files are now visually distinguished across the entire row with a muted background style and protective tooltip, removing lock icons and keeping the selection column clean.
