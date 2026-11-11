@@ -28,7 +28,7 @@ if not app:
 
 class TestPreviewIntegration(unittest.TestCase):
     def setUp(self):
-        self.tmp_dir = Path("W:/Projetos/Pessoal/DupeClean/data/test_preview_tmp")
+        self.tmp_dir = Path(__file__).resolve().parent.parent / "data" / "test_preview_tmp"
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
 
         # Cria imagens sintéticas para teste

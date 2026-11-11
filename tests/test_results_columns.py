@@ -33,7 +33,7 @@ def test_results_columns():
 
     # 2. Cria grupo com 1 arquivo de referência e 1 duplicata normal
     ref_file = FileRecord(
-        path=Path("W:/Temp/SET1/photo.jpg"),
+        path=Path("C:/demo_folder/SET1/photo.jpg"),
         size=1024,
         mtime=1700000000.0,
         is_reference=True,
@@ -41,7 +41,7 @@ def test_results_columns():
         ext=".jpg"
     )
     dup_file = FileRecord(
-        path=Path("W:/Temp/SET2/photo.jpg"),
+        path=Path("C:/demo_folder/SET2/photo.jpg"),
         size=1024,
         mtime=1700000000.0,
         is_reference=False,
