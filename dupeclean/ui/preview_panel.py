@@ -404,7 +404,7 @@ class PreviewPanel(QFrame):
             self.lbl_image.set_pixmap(None)
             self.lbl_status.setText(f"Preview unavailable ({err})")
             self.lbl_status.setVisible(True)
-            self.lbl_resolution.setText("—")
+            self.lbl_resolution.setText("-")
             self.meta_card.setVisible(True)
 
     def clear(self):

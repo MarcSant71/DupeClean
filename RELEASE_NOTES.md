@@ -119,7 +119,7 @@ Traditional tools are lightweight (~15 MB) because they run basic pixel math on 
 - Full **NVIDIA CUDA 12 hardware runtimes** (`torch_cuda`, `cublas`, `cudnn`, `cusolver`, `cufft`).
 - **PyTorch deep learning vision models** (MobileNetV3).
 - Hardware-accelerated **FFmpeg NVDEC** binaries.
-- Completely isolated Python 3 runtime — **zero installation or setup required**.
+- Completely isolated Python 3 runtime - **zero installation or setup required**.
 
 ### 💡 Prefer a lightweight download? Run from source!
 If you already have Python and an NVIDIA CUDA-enabled PyTorch environment on your machine (e.g., for ComfyUI, Stable Diffusion, or AI development), you don't need to download this 1.7 GB standalone bundle. The repository source code is **under 1 MB**.

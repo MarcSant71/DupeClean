@@ -17,7 +17,7 @@ High-performance duplicate file, image, and video finder engineered and optimize
 
 Most popular deduplicators (Czkawka, dupeGuru, Duplicate Cleaner, etc.) were built for a previous computing era: they run all image hashing, vector calculations, and video decoding on the **CPU**. 
 
-When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools spike CPU usage to 100%, trigger thermal throttling, spin fans at maximum speed, and take **hours or days** — while your multi-thousand-dollar GPU sits completely idle.
+When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools spike CPU usage to 100%, trigger thermal throttling, spin fans at maximum speed, and take **hours or days** - while your multi-thousand-dollar GPU sits completely idle.
 
 **DupeClean changes the paradigm by moving the entire workload into dedicated NVIDIA silicon:**
 
@@ -110,7 +110,7 @@ Yes. The `get_optimal_gpu_budgets()` engine inspects VRAM capacity and free head
 
 ## 📦 Package Size & Architecture Transparency
 
-Users often ask: **"Traditional tools like Czkawka are only ~15 MB — why is DupeClean's portable download ~1.7 GB (extracting to ~4.7 GB)?"**
+Users often ask: **"Traditional tools like Czkawka are only ~15 MB - why is DupeClean's portable download ~1.7 GB (extracting to ~4.7 GB)?"**
 
 Traditional deduplicators are lightweight single-binary executables because they run basic CPU-only pixel arithmetic using standard OS routines.
 
@@ -130,11 +130,11 @@ Traditional deduplicators are lightweight single-binary executables because they
 
 > [!TIP]
 > **Prefer a lightweight download? Run from source!**  
-> If you already have Python and PyTorch installed (e.g., for ComfyUI, Stable Diffusion, or development), you don't need to download the 1.7 GB standalone bundle. Simply clone the repository (`git clone`) and run locally — the entire source code is **under 1 MB**! See [Running from Source](#-running-from-source-developers--advanced-users) below.
+> If you already have Python and PyTorch installed (e.g., for ComfyUI, Stable Diffusion, or development), you don't need to download the 1.7 GB standalone bundle. Simply clone the repository (`git clone`) and run locally - the entire source code is **under 1 MB**! See [Running from Source](#-running-from-source-developers--advanced-users) below.
 
 ---
 
-## ⚡ Quick Start (Portable — Recommended)
+## ⚡ Quick Start (Portable - Recommended)
 
 For 99% of users, **no installation, no Python, and no command line setup is required**:
 

@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
 
         right_layout.addLayout(top_bar)
 
-        # 2.2 Splitter vertical: Resultados+Preview (cima) e Pastas (baixo) — Padrão Krokiet
+        # 2.2 Splitter vertical: Resultados+Preview (cima) e Pastas (baixo) - Padrão Krokiet
         self.v_splitter = QSplitter(Qt.Orientation.Vertical)
 
         # Splitter horizontal no topo: Tabela de Resultados (esquerda) e Preview (direita)
