@@ -1,5 +1,17 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.4
+- **Pixel-Perfect Smooth Progress Bar (`SmoothProgressBar`):**
+  - Replaced Qt's native `QProgressBar` with a custom anti-aliased `SmoothProgressBar` adhering strictly to rounded pill geometry (`border-radius: 4px` groove, `3px` inner chunk).
+  - Fixed Qt Stylesheet rendering defect where indeterminate chunks lost border radius and bled outside the groove as unrounded 90-degree rectangles.
+  - Indeterminate scanning mode features an elegant pill chunk gliding continuously from left to right with seamless marquee wrapping at 50 FPS.
+  - Determinate mode utilizes strict inner clipping (`QPainterPath.setClipPath`) to guarantee zero overflow or visual bleeding at any percentage.
+- **Accurate & Transparent Telemetry (Stage 3):**
+  - Updated Stage 3 progress description to `Reading & calculating file hashes ({current}/{total})...`.
+  - Transparently communicates high-throughput parallel disk reading and CPU hashing in progress before duplicate grouping and results rendering.
+- **Automated Test Coverage:**
+  - Added dedicated unit test suite for `SmoothProgressBar` in `tests/test_progress_bar.py`, bringing the automated test suite to 15 passing tests.
+
 ### What's New in v1.1.3
 - **Interactive High-Performance Column Sorting (3-State Cycle):**
   - Instantaneous column header double-click sorting across all results columns with a clean 3-state cycle:

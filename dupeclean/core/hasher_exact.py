@@ -316,7 +316,7 @@ def find_exact_duplicates(
                 now = time.perf_counter()
                 if progress_callback and (now - last_progress_time >= 0.1 or deep_processed % 128 == 0):
                     progress_callback(
-                        f"Computing full hashes ({deep_processed:,}/{total_deep_check:,})...",
+                        f"Reading & calculating file hashes ({deep_processed:,}/{total_deep_check:,})...",
                         deep_processed,
                         total_deep_check
                     )

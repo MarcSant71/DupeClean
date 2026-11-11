@@ -28,6 +28,7 @@ from dupeclean.core.cache import CacheManager
 from dupeclean.ui.folder_panel import FolderPanel
 from dupeclean.ui.results_table import ResultsWidget, format_size
 from dupeclean.ui.preview_panel import PreviewPanel
+from dupeclean.ui.progress_bar import SmoothProgressBar
 from dupeclean.worker import ScanWorker, FileActionWorker
 
 
@@ -352,7 +353,7 @@ class MainWindow(QMainWindow):
         self.lbl_stage_current.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
         self.lbl_stage_current.setFixedWidth(84)
 
-        self.progress_current = QProgressBar()
+        self.progress_current = SmoothProgressBar()
         self.progress_current.setObjectName("progCurrent")
         self.progress_current.setFixedHeight(8)
         self.progress_current.setTextVisible(False)
@@ -373,7 +374,7 @@ class MainWindow(QMainWindow):
         self.lbl_stage_all.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
         self.lbl_stage_all.setFixedWidth(84)
 
-        self.progress_all = QProgressBar()
+        self.progress_all = SmoothProgressBar()
         self.progress_all.setObjectName("progAll")
         self.progress_all.setFixedHeight(8)
         self.progress_all.setTextVisible(False)
