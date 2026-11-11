@@ -96,6 +96,37 @@ QPushButton#dangerButton:disabled {
     border: 1px solid #27272a;
 }
 
+/* Botão Circular de Ajuda (?) - Inspirado na Identidade do RadarEleitoral */
+QPushButton#helpButton {
+    background-color: #202024;
+    border: 1px solid #3f3f46;
+    border-radius: 14px;
+    color: #f4f4f5;
+    font-size: 13px;
+    font-weight: bold;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0px;
+    text-align: center;
+}
+QPushButton#helpButton:hover {
+    background-color: #27272a;
+    border-color: #38bdf8;
+    color: #38bdf8;
+}
+QPushButton#helpButton:pressed {
+    background-color: #18181b;
+    border-color: #0284c7;
+    color: #0284c7;
+}
+QPushButton#helpButton::menu-indicator {
+    width: 0px;
+    height: 0px;
+    image: none;
+}
+
 /* Botão Quadradinho com Checkmark da Pasta de Referência (Estilo Krokiet) */
 QPushButton#refSquare {
     width: 18px;
@@ -142,6 +173,10 @@ QTreeWidget::item:selected, QTableWidget::item:selected {
 }
 
 /* Cabeçalhos de Tabela */
+QHeaderView {
+    background-color: transparent;
+    border: none;
+}
 QHeaderView::section {
     background-color: #1f1f23;
     color: #a1a1aa;
@@ -150,6 +185,13 @@ QHeaderView::section {
     border-right: 1px solid #3f3f46;
     border-bottom: 1px solid #3f3f46;
     font-weight: bold;
+}
+QHeaderView::section:first {
+    border-top-left-radius: 5px;
+}
+QHeaderView::section:last {
+    border-top-right-radius: 5px;
+    border-right: none;
 }
 QHeaderView::section:hover {
     background-color: #27272a;

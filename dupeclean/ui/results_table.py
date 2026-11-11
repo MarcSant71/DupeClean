@@ -169,20 +169,20 @@ class ResultsWidget(QWidget):
         ])
 
         header = tree.header()
-        # Todas as 6 colunas em modo Interactive e stretch desativado para permitir redimensionamento 100% livre com o mouse
-        header.setStretchLastSection(False)
+        # Colunas interativas com stretch na última seção (Full Path) para preencher a largura sem quebrar os cantos
+        header.setStretchLastSection(True)
         header.setMinimumSectionSize(50)
         for col_idx in range(6):
             header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
 
         # Calibragem de indentação e larguras iniciais
         tree.setIndentation(12)
-        tree.setColumnWidth(0, 80)   # Selection
-        tree.setColumnWidth(1, 280)  # File Name
-        tree.setColumnWidth(2, 95)   # Size
-        tree.setColumnWidth(3, 140)  # Date Modified
-        tree.setColumnWidth(4, 85)   # Similarity
-        tree.setColumnWidth(5, 480)  # Full Path
+        tree.setColumnWidth(0, 75)   # Selection
+        tree.setColumnWidth(1, 260)  # File Name
+        tree.setColumnWidth(2, 90)   # Size
+        tree.setColumnWidth(3, 135)  # Date Modified
+        tree.setColumnWidth(4, 80)   # Similarity
+        tree.setColumnWidth(5, 200)  # Full Path (expande para preencher o espaço restante)
 
         # Permite rolagem horizontal suave se as colunas excederem o espaço disponível
         tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)

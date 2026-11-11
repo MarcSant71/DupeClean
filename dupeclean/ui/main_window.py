@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import send2trash
 
-from PySide6.QtCore import Qt, Slot, QTimer, QSize
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont, QPen, QColor
+from PySide6.QtCore import Qt, Slot, QTimer, QSize, QUrl
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont, QPen, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QListWidget,
     QListWidgetItem, QPushButton, QLabel, QSlider, QProgressBar,
@@ -29,6 +29,7 @@ from dupeclean.ui.folder_panel import FolderPanel
 from dupeclean.ui.results_table import ResultsWidget, format_size
 from dupeclean.ui.preview_panel import PreviewPanel
 from dupeclean.ui.progress_bar import SmoothProgressBar
+from dupeclean.ui.help_dialog import HelpDialog
 from dupeclean.worker import ScanWorker, FileActionWorker
 
 
@@ -303,6 +304,14 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.btn_delete_perm)
         top_bar.addWidget(self.btn_save)
         top_bar.addStretch()
+
+        # Botão Circular de Ajuda (?) - Alinhado no extremo direito (Identidade RadarEleitoral)
+        self.btn_help = QPushButton("?")
+        self.btn_help.setObjectName("helpButton")
+        self.btn_help.setToolTip("Help & Technical Documentation")
+        self.btn_help.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_help.clicked.connect(self._open_help_dialog)
+        top_bar.addWidget(self.btn_help)
 
         right_layout.addLayout(top_bar)
 
@@ -1124,3 +1133,37 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText(f"Report saved to: {Path(file_path).name}")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file:\n{str(e)}")
+
+    def _open_help_dialog(self):
+        """Abre a janela de Ajuda e Documentação Técnica diretamente com as abas."""
+        dlg = HelpDialog(self.gpu_info, parent=self)
+        dlg.exec()
+
+    def _open_help_tab(self, tab_idx: int = 0):
+        """Abre a janela de Ajuda e Arquitetura Técnica na aba correspondente."""
+        dlg = HelpDialog(self.gpu_info, parent=self)
+        dlg.open_tab(tab_idx)
+
+    def _show_about_dialog(self):
+        """Exibe o diálogo compacto Sobre o DupeClean."""
+        gpu_name = self.gpu_info.get("name", "NVIDIA GPU")
+        arch = self.gpu_info.get("arch", "RTX")
+        vram = self.gpu_info.get("vram_gb", 0)
+        text = (
+            f"<h3 style='color: #38bdf8; margin-top: 0px;'>⚡ DupeClean v{__version__}</h3>"
+            f"<p><b>GPU-Accelerated Duplicate File, Image & Video Finder</b></p>"
+            f"<p>Engineered and optimized exclusively for NVIDIA GeForce RTX GPUs "
+            f"leveraging Tensor Cores, half-precision spatial matrices, and NVDEC hardware acceleration.</p>"
+            f"<hr style='border: none; border-top: 1px solid #3f3f46;'>"
+            f"<p><b>GPU Hardware:</b> {gpu_name} ({arch}, {vram} GB VRAM)<br>"
+            f"<b>Developer:</b> Marcelo Santos &bull; Dominio Digital<br>"
+            f"<b>Contact:</b> <a style='color: #38bdf8;' href='mailto:contato@dominiodigital.dev.br'>contato@dominiodigital.dev.br</a><br>"
+            f"<b>Platform:</b> Windows 10 / 11 x64 (Standalone)<br>"
+            f"<b>License:</b> MIT License</p>"
+        )
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("About DupeClean")
+        msg_box.setTextFormat(Qt.TextFormat.RichText)
+        msg_box.setText(text)
+        msg_box.setIcon(QMessageBox.Icon.Information)
+        msg_box.exec()

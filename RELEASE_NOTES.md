@@ -1,5 +1,21 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.5
+- **Comprehensive Help & Technical Documentation Dialog (`HelpDialog`):**
+  - Integrated full technical architecture and user guide directly into the application, accessible via the top-bar `?` button.
+  - Divided into 5 structured, rich-text tabs:
+    1. **Product Overview:** Value proposition of GPU acceleration vs legacy CPU deduplicators, safety guarantees with `Send2Trash`, and protected reference folders (`Ref`).
+    2. **Technical Pipeline & Stages:** In-depth breakdown of Stage 1 (size grouping), Stage 2 (4 KB head+tail composite sieve), Stage 3 (512 KB stream hashing & disk saturation), and GPU clustering, plus hardware allocation FAQ.
+    3. **Scan Modes & Algorithms:** Technical mechanics of Exact Duplicates (xxHash64), Similar Images (2D DCT on PyTorch CUDA FP16), and Similar Videos (NVDEC hardware acceleration, keyframe sampling, and mutual similarity).
+    4. **Shortcuts & Tips:** Guide to 3-state interactive column sorting, spacebar preview, smart selection tools, and drag-and-drop.
+    5. **Contact Information:** Official developer and business information for **Dominio Digital** (`contato@dominiodigital.dev.br`) and GitHub links.
+- **Direct 1-Click Help Access:**
+  - Modern circular `?` button on the top toolbar styled with custom dark theme palette (`#202024` bg, `#38bdf8` hover/active).
+  - Opens the Help Dialog directly in a single click, eliminating extra navigation menus.
+- **Refined Results Table Header Geometry:**
+  - Fixed Qt header styling where table header sections had unrounded square corners that bled outside the parent table's `border-radius: 6px`.
+  - Configured last section stretch (`setStretchLastSection(True)`) and calibrated column widths to guarantee full horizontal divider line continuity without gaps across all display resolutions.
+
 ### What's New in v1.1.4
 - **Pixel-Perfect Smooth Progress Bar (`SmoothProgressBar`):**
   - Replaced Qt's native `QProgressBar` with a custom anti-aliased `SmoothProgressBar` adhering strictly to rounded pill geometry (`border-radius: 4px` groove, `3px` inner chunk).
