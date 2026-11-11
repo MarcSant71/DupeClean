@@ -57,11 +57,9 @@ DupeClean achieves extreme deduplication throughput by strictly assigning each t
          │
   Stage 2: Cache Check       Instant lookup in SQLite WAL database (<5 ms per 10k items)
          │
-  Stage 3: Frame Sampling    Multi-process CPU workers pinpoint 5 keyframes (Fast Seek)
-         │                   Batched directly into GPU VRAM for frequency signatures (FP16)
+  Stage 3: Frame Sampling    Multi-process keyframe extraction & GPU frequency signatures
          │
-  Stage 4: GPU Grouping      Pairwise Cosine Similarity & Mutual Similarity Grouping
-                             executed 100% inside RTX VRAM via Tensor Cores
+  Stage 4: GPU Grouping      All-to-all similarity math & Mutual Similarity Grouping (VRAM)
 ```
 
 ### The 4-Stage Breakdown
