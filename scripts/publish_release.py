@@ -140,54 +140,25 @@ for old_archive in (ROOT_DIR / "dist").glob("*.7z"):
 if not ARCHIVE_PATH.exists():
     raise FileNotFoundError(f"Archive {ARCHIVE_PATH} does not exist!")
 
-class ProgressFileReader:
-    def __init__(self, file_path):
-        self.file_path = Path(file_path)
-        self.total_size = self.file_path.stat().st_size
-        self.f = open(self.file_path, 'rb')
-        self.bytes_read = 0
-        self.last_pct = -1
-        self.start_time = time.time()
-
-    def read(self, size=-1):
-        chunk = self.f.read(size)
-        if chunk:
-            self.bytes_read += len(chunk)
-            pct = int((self.bytes_read / self.total_size) * 100)
-            if pct != self.last_pct and pct % 5 == 0:
-                self.last_pct = pct
-                elapsed = time.time() - self.start_time
-                mb = self.bytes_read / (1024 * 1024)
-                total_mb = self.total_size / (1024 * 1024)
-                speed = mb / elapsed if elapsed > 0 else 0
-                print(f"Uploading asset: {pct}% ({mb:.1f} / {total_mb:.1f} MB) - {speed:.1f} MB/s", flush=True)
-        return chunk
-
-    def close(self):
-        self.f.close()
-
-reader = ProgressFileReader(ARCHIVE_PATH)
-file_size = reader.total_size
-print(f"Uploading asset: {ARCHIVE_NAME} ({file_size / (1024*1024):.2f} MB)...")
-
+file_size_mb = ARCHIVE_PATH.stat().st_size / (1024 * 1024)
 upload_url = f"https://uploads.github.com/repos/{REPO}/releases/{rel_id}/assets?name={ARCHIVE_NAME}"
+print(f"Uploading asset via high-speed curl: {ARCHIVE_NAME} ({file_size_mb:.2f} MB)...")
 
-upload_req = urllib.request.Request(
-    upload_url,
-    data=reader,
-    headers={
-        **headers,
-        'Content-Type': 'application/x-7z-compressed',
-        'Content-Length': str(file_size)
-    },
-    method='POST'
-)
+curl_cmd = [
+    "curl.exe",
+    "-L",
+    "-X", "POST",
+    "-H", f"Authorization: Bearer {token}",
+    "-H", "Accept: application/vnd.github+json",
+    "-H", "X-GitHub-Api-Version: 2022-11-28",
+    "-H", "Content-Type: application/x-7z-compressed",
+    "--data-binary", f"@{str(ARCHIVE_PATH)}",
+    upload_url
+]
 
-try:
-    with urllib.request.urlopen(upload_req, timeout=1800) as resp:
-        asset_data = json.loads(resp.read().decode('utf-8'))
-        print(f"SUCCESS: Uploaded {ARCHIVE_NAME} (ID: {asset_data['id']})!")
-finally:
-    reader.close()
+proc = subprocess.run(curl_cmd)
+if proc.returncode != 0:
+    raise RuntimeError(f"curl upload failed with exit code {proc.returncode}")
 
+print(f"\nSUCCESS: Uploaded {ARCHIVE_NAME} successfully!")
 print(f"=== Release {VERSION} published successfully! ===")
