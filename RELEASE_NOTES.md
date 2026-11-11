@@ -19,14 +19,14 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
   - Enforces that every file within a duplicate group must directly match all other files in that group (pairwise mutual similarity ≥ threshold).
   - Eliminates false-positive chaining, where dissimilar files (such as an empty room and a clip with people) could previously be merged into the same group through intermediate similar frames.
 - **Robust Video Feature Extraction & PyAV Demuxing:**
-  - Multi-slice keyframe extraction across temporal keypoints with 2D DCT and spectral whitening.
+  - Multi-point keyframe sampling across the video timeline with frequency hashing (2D DCT) and adaptive frequency filtering.
   - Fixed dynamic stream descriptor demux errors on surveillance `.dav` video clips.
   - Enforced strict RGB array normalization, resolving shape mismatch crashes (`ValueError: all input arrays must have the same shape`) when infrared night-vision clips are processed in batches alongside daytime clips.
-- **Instant Tombstone Caching:**
-  - Unreadable, 0-frame, or corrupted video files are persistently tombstoned in SQLite cache (`duration = -1.0, embedding = b""`).
+- **Corrupted File Auto-Skipping (Zero-Churn Cache):**
+  - Unreadable, 0-frame, or corrupted video files are automatically cached as permanently unreadable (`duration = -1.0`).
   - Subsequent scans instantly skip unreadable files in ~2ms from RAM/cache, eliminating redundant disk I/O, CPU decompression cycles, and scan churn.
 - **Instantaneous Telemetry & Sliding-Window Throughput:**
-  - Replaced cumulative average rate with a 3-second sliding window for instantaneous throughput (`it/s`) and dynamic, accurate ETA calculations during long scans.
+  - Replaced cumulative average rate with a 3-second sliding window for instantaneous throughput (`it/s`) during long scans.
 - **Crash Diagnostics & Clean Error Dialogs:**
   - Added timestamped error diagnostics to `data/logs/` with sensitive path and username sanitization.
   - Refined error presentation ("An error report has been saved in data/logs.").
@@ -55,9 +55,9 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
   - Smart selection (`Select Duplicates (Smart)`) is now available on-demand under the `📋 Select ▾` menu.
 - **Calibrated Video Similarity Engine:**
   - Replaced single-slice frame extraction with multi-point keyframe sampling across the video timeline (15%, 35%, 50%, 65%, 85%), capturing true visual content rather than adjacent frames.
-  - Added automatic letterbox/pillarbox detection and cropping (`crop_letterbox`) before 2D DCT calculation, preventing aspect ratio black bars from dominating visual hashes.
+  - Added automatic black bar detection and cropping (`crop_letterbox`) before 2D DCT calculation, preventing aspect ratio black bars from dominating visual hashes.
   - Introduced GPU tensor duration filter (maximum 8% duration difference for duplicates), preventing videos of different runtimes from matching.
-  - Upgraded clustering from single-linkage Union-Find to Complete Linkage (cliques), guaranteeing that every item in a group shares mutual similarity $\ge$ threshold.
+  - Upgraded duplicate clustering to **Strict Mutual Similarity Grouping**, guaranteeing that every item in a group shares direct mutual similarity ≥ threshold.
 - **Two-Tier Progress Architecture (Krokiet-Style):**
   - Independent progress tracking for `Current Stage` and cumulative `All Stages` with cyan (`#38bdf8`) and blue (`#0284c7`) styling.
   - Eliminated UI signal flickering during directory crawling. ETA and processing throughput (`it/s`) activate deterministically from Stage 2 onward once exact file counts are known.
@@ -81,10 +81,10 @@ Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 ### What's New in v1.0.5
 - **Zero-Layout-Shift Persistent Status Bar:** Engineered permanent two-row telemetry footer with retained geometry (`setRetainSizeWhenHidden(True)`). Eliminates horizontal dancing and vertical layout shifts when starting or completing scans. The full-width progress bar dynamically scales to window dimensions and full-screen maximization without shifting content or tables.
 - **Instant Application Startup (<100ms):** PyTorch and CUDA 12 runtimes are lazily imported and verified exclusively within the background `HardwareInitWorker` thread, cutting cold-start launch latency from 12 seconds to under 100 milliseconds and instantly displaying the splash screen.
-- **Organic Splash Animation:** Re-architected splash screen progress indicator with dynamic asymptotic acceleration, smoothly advancing while the GPU Gatekeeper validates Ampere/Ada Lovelace/Blackwell hardware.
+- **Organic Splash Animation:** Re-architected splash screen progress indicator with dynamic natural acceleration, smoothly advancing while the GPU Gatekeeper validates Ampere/Ada Lovelace/Blackwell hardware.
 
 ### What's New in v1.0.4
-- **Block GEMM Memory Architecture (~40 GB to ~500 MB):** Replaced dense $N \times N$ matrix similarity calculation with chunked Block GEMM (2048-row blocks) on GPU. Reduced memory footprint from ~40 GB to ~500 MB for 140k+ files, eliminating OS memory swap freezes and checking `stop_check` every 5ms.
+- **Chunked GPU Matrix Memory Architecture (~40 GB to ~500 MB):** Replaced massive full-matrix calculations with memory-friendly GPU blocks (2,048 rows at a time). Reduced memory footprint from ~40 GB to ~500 MB for 140k+ files, eliminating OS memory swap freezes and checking `stop_check` every 5ms.
 - **Deterministic Progress & Instant Estimations:** SQLite-backed file count estimation (`estimate_file_count`) querying recent crawl history and persistent metadata in <1ms without redundant disk I/O, replacing bouncing marquee animations with smooth 0–100% progress bars.
 - **Live Indexing Telemetry:** Real-time crawler telemetry reporting active subfolder names, live speed (`files/s`), and continuous ETA calculations.
 - **Instant Cancellation Latency (20ms):** Active thread pool future cancellation (`pending.cancel()`) and atomic loops, reducing abort latency from 40s+ to 20ms.
