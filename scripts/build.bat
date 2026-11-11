@@ -57,23 +57,11 @@ set "OUTPUT_7Z=dist\DupeClean-v%APP_VERSION%-windows-cuda.7z"
 if exist "%OUTPUT_7Z%" del /f /q "%OUTPUT_7Z%"
 
 set "SEVEN_ZIP="
-where 7z.exe >nul 2>&1
-if %ERRORLEVEL% equ 0 set "SEVEN_ZIP=7z.exe"
-
+if exist "%ProgramFiles%\7-Zip\7z.exe" set "SEVEN_ZIP=%ProgramFiles%\7-Zip\7z.exe"
+if not defined SEVEN_ZIP if exist "C:\Program Files\7-Zip\7z.exe" set "SEVEN_ZIP=C:\Program Files\7-Zip\7z.exe"
 if not defined SEVEN_ZIP (
-    if defined ProgramFiles if exist "%ProgramFiles%\7-Zip\7z.exe" set "SEVEN_ZIP=%ProgramFiles%\7-Zip\7z.exe"
-)
-if not defined SEVEN_ZIP (
-    if defined ProgramFiles(x86) if exist "%ProgramFiles(x86)%\7-Zip\7z.exe" set "SEVEN_ZIP=%ProgramFiles(x86)%\7-Zip\7z.exe"
-)
-if not defined SEVEN_ZIP (
-    if defined ProgramW6432 if exist "%ProgramW6432%\7-Zip\7z.exe" set "SEVEN_ZIP=%ProgramW6432%\7-Zip\7z.exe"
-)
-if not defined SEVEN_ZIP (
-    if defined LocalAppData if exist "%LocalAppData%\Programs\7-Zip\7z.exe" set "SEVEN_ZIP=%LocalAppData%\Programs\7-Zip\7z.exe"
-)
-if not defined SEVEN_ZIP (
-    if defined SystemDrive if exist "%SystemDrive%\Program Files\7-Zip\7z.exe" set "SEVEN_ZIP=%SystemDrive%\Program Files\7-Zip\7z.exe"
+    where 7z.exe >nul 2>&1
+    if %ERRORLEVEL% equ 0 set "SEVEN_ZIP=7z.exe"
 )
 
 if defined SEVEN_ZIP (
