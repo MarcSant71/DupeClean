@@ -130,26 +130,36 @@ Traditional deduplicators are lightweight single-binary executables because they
 
 > [!TIP]
 > **Prefer a lightweight download? Run from source!**  
-> If you already have Python and PyTorch installed (e.g., for ComfyUI, Stable Diffusion, or development), you don't need to download the 1.7 GB standalone bundle. Simply clone the repository (`git clone`) and run locally — the entire source code is **under 1 MB**! See [Installation & Setup](#-installation--setup) below.
+> If you already have Python and PyTorch installed (e.g., for ComfyUI, Stable Diffusion, or development), you don't need to download the 1.7 GB standalone bundle. Simply clone the repository (`git clone`) and run locally — the entire source code is **under 1 MB**! See [Running from Source](#-running-from-source-developers--advanced-users) below.
 
 ---
 
-## 💻 Hardware & Software Requirements
+## ⚡ Quick Start (Portable — Recommended)
 
-### Hardware
+For 99% of users, **no installation, no Python, and no command line setup is required**:
+
+1. Download [**`DupeClean-v1.1.2-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
+2. Extract the archive using [7-Zip](https://www.7-zip.org/) or WinRAR.
+3. Launch **`DupeClean.exe`** directly. Everything (Python runtime, CUDA 12 libraries, and GPU models) is pre-bundled and runs out of the box.
+
+---
+
+## 💻 System Requirements
+
 * **GPU:** Dedicated NVIDIA GeForce RTX (30, 40, or 50 Series) with Compute Capability ≥ 8.6 (Ampere, Ada Lovelace, or Blackwell).
-* **VRAM:** 4 GB minimum (8 GB+ recommended for massive photo and video datasets).
-
-### Software & Environment
+* **VRAM:** 4 GB minimum (8 GB+ recommended for massive photo and video libraries).
 * **Operating System:** Windows 10 or Windows 11 (64-bit).
 * **NVIDIA Driver:** Driver version **550.xx or higher** (supporting CUDA 12.4+ / 12.8+).
-* **Python:** Python **3.10, 3.11, or 3.12** (64-bit).
-* **PyTorch:** PyTorch 2.4+ compiled with CUDA support.
-* **FFmpeg (for Video Deduplication):** `ffmpeg` and `ffprobe` with NVIDIA NVDEC/CUDA hardware acceleration enabled (placed in the project `bin/` directory or available in system `PATH`).
+
+*(Note: Python and PyTorch are **not** required if you use the pre-built portable package above).*
 
 ---
 
-## 🛠️ Installation & Setup
+## 🛠️ Running from Source (Developers & Advanced Users)
+
+> [!NOTE]
+> **This section is strictly optional!**  
+> If you prefer not to download the ~1.7 GB standalone release and already have Python and CUDA on your system (e.g., for AI/ML development, Stable Diffusion, or ComfyUI), you can run directly from the source code. The repository source download is **under 1 MB**.
 
 ### 1. Clone the Repository
 ```powershell

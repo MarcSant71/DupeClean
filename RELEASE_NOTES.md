@@ -125,4 +125,4 @@ Traditional tools are lightweight (~15 MB) because they run basic pixel math on 
 If you already have Python and an NVIDIA CUDA-enabled PyTorch environment on your machine (e.g., for ComfyUI, Stable Diffusion, or AI development), you don't need to download this 1.7 GB standalone bundle. The repository source code is **under 1 MB**.
 
 Follow the step-by-step setup in the repository documentation:  
-👉 **[Installation & Setup Guide](https://github.com/MarcSant71/DupeClean#-installation--setup)** (includes virtual environment configuration, PyTorch CUDA builds for RTX 30/40/50, and hardware FFmpeg NVDEC binaries).
+👉 **[Running from Source Guide](https://github.com/MarcSant71/DupeClean#-running-from-source-developers--advanced-users)** (includes virtual environment configuration, PyTorch CUDA builds for RTX 30/40/50, and hardware FFmpeg NVDEC binaries).
