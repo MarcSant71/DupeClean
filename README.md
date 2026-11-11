@@ -24,9 +24,9 @@ When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools 
 | Feature | 🐢 Traditional Tools (Czkawka, dupeGuru, etc.) | ⚡ DupeClean (GPU-Accelerated) |
 | :--- | :--- | :--- |
 | **Compute Engine** | CPU-bound (Software loop, high thermal load) | **GPU Tensor Cores & CUDA** (Batches executed in VRAM) |
-| **Similarity Intelligence** | Basic low-res pixel hashes (Gradient/Blockhash) | **Deep Neural Embeddings (MobileNetV3)** via PyTorch |
+| **Similarity Intelligence** | Basic low-res pixel hashes (Gradient/Blockhash) | **GPU Frequency Signatures (2D DCT)** via PyTorch |
 | **Throughput & Speed** | ~20–50 images/second (CPU bottlenecked) | **600+ images/second** (Parallel decoding + GPU compute) |
-| **Video Frame Extraction** | Software CPU decoding (Slow, heavy lag) | **Hardware NVDEC** via dedicated NVIDIA silicon decoders |
+| **Video Keyframe Extraction** | Full sequential decoding (Slow, heavy lag) | **Fast Keyframe Seek + GPU Signatures** (150+ videos/s) |
 | **UI Design Philosophy** | Crowded interfaces with dozens of technical options | **KISS Principle**: Clean dark mode, zero fluff, instant feedback |
 | **Caching Pipeline** | In-memory or fragile cache | **SQLite WAL Engine**: Resumable, crash-safe, instant rescans |
 
@@ -34,8 +34,8 @@ When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools 
 
 ## 🚀 Engineering Highlights
 
-* **Zero CPU Bottlenecks:** Image processing, neural feature extraction, and vector similarity comparisons execute directly in GPU **VRAM** and **Tensor Cores** via PyTorch CUDA.
-* **Parallel Decoding & NVDEC:** High-throughput multi-threaded image decoding feeds the GPU, while temporal video frame extraction utilizes dedicated NVIDIA silicon decoders via FFmpeg Hardware Acceleration (`-hwaccel cuda`).
+* **Zero CPU Bottlenecks:** Frequency feature extraction, normalizations, and similarity comparisons execute directly in GPU **VRAM** and **Tensor Cores** via PyTorch CUDA.
+* **Parallel Multi-Process Extraction:** Multi-threaded image decoding feeds the GPU, while temporal video keyframe extraction pinpoints 5 distinct timeline samples without reading full files.
 * **Reference Folder Protection (`Ref`):** Designate any master/backup folder as a **Reference**. DupeClean matches duplicate files against it, while ensuring reference files are strictly locked and never marked for deletion (following industry best practices established by tools like Czkawka).
 * **Krokiet-Inspired Ergonomics:**
   * Clean, native Dark Theme (KISS principle).
@@ -51,7 +51,7 @@ DupeClean achieves extreme deduplication throughput by strictly assigning each t
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   DUPACLEAN PIPELINE                                   │
+│                                   DUPECLEAN PIPELINE                                   │
 └────────────────────────────────────────────────────────────────────────────────────────┘
   Stage 1: Discovery         Fast multi-threaded directory crawl & metadata indexing (CPU)
          │
@@ -118,10 +118,10 @@ Traditional deduplicators are lightweight single-binary executables because they
 
 1. **Complete NVIDIA CUDA 12 Runtimes (~3.5 GB uncompressed):**  
    Bundles compiled C++ hardware libraries (`torch_cuda.dll`, `cublas`, `cudnn`, `cusolver`, `cufft`) with pre-compiled kernel microcode engineered for NVIDIA RTX Ampere, Ada Lovelace, and Blackwell Tensor Cores.
-2. **Deep Learning Vision Engine (PyTorch & Torchvision):**  
-   Pre-trained MobileNetV3 neural network architectures and tensor processing pipelines that extract semantic perceptual embeddings directly in GPU VRAM.
-3. **Hardware NVDEC Video Pipeline (FFmpeg GPU Binaries):**  
-   Bundles custom `ffmpeg` and `ffprobe` binaries built with NVIDIA NVDEC/CUDA hardware acceleration for direct silicon video frame extraction.
+2. **GPU Vision Engine (PyTorch CUDA):**  
+   High-performance tensor processing pipelines that compute 2D DCT frequency signatures directly in GPU VRAM.
+3. **High-Performance Video Pipeline:**  
+   Built-in PyAV and FFmpeg libraries optimized for rapid multi-point keyframe sampling across video timelines.
 4. **Self-Contained Python & PySide6 Environment:**  
    You do **not** need Python installed, no pip packages, no MSVC runtimes, and no 3+ GB NVIDIA CUDA Toolkit. Everything runs out of the box.
 
