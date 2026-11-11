@@ -17,7 +17,7 @@ import xxhash
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
 from dupeclean.core.cache import CacheManager
 
-# Tamanho limite para arquivos pequenos (lidos integralmente no Estágio 2, como no Czkawka/Krokiet)
+# Tamanho limite para arquivos pequenos (lidos integralmente no Estágio 2 via fast-path padrão)
 PREHASH_CHUNK = 4096  # 4 KB (Head 4 KB + Tail 4 KB; arquivos <= 8 KB lidos inteiros)
 FAST_PATH_SIZE = PREHASH_CHUNK * 2  # 8 KB
 

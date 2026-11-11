@@ -1,7 +1,7 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
 ### What's New in v1.1.2
-- **High-Throughput Exact Duplicate Engine (Krokiet Multi-Stage Architecture):**
+- **High-Throughput Exact Duplicate Engine (Multi-Stage Sieve Architecture):**
   - Standardized multi-stage hashing pipeline with 4 KB head + 4 KB tail composite pre-hash and 8 KB single-pass fast-path.
   - Spatial directory locality sorting to maximize OS disk cache hits and sequential I/O on SSD RAID arrays, HDDs, and network storage.
   - Asynchronous continuous sliding-window worker pipeline eliminating chunk barrier stalls.
