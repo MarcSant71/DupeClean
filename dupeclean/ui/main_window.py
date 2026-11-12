@@ -262,11 +262,9 @@ class MainWindow(QMainWindow):
         actions_layout.setSpacing(2)
 
         self.btn_scan = QPushButton("🔍 Scan")
-        self.btn_scan.setObjectName("primaryButton")
         self.btn_scan.clicked.connect(self._start_scan)
 
         self.btn_stop = QPushButton("⏹ Stop")
-        self.btn_stop.setObjectName("stopButton")
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_scan)
 
@@ -309,7 +307,6 @@ class MainWindow(QMainWindow):
         self.btn_delete_trash.clicked.connect(self._delete_selected_to_trash)
 
         self.btn_delete_perm = QPushButton("❌ Delete")
-        self.btn_delete_perm.setObjectName("dangerButton")
         self.btn_delete_perm.setToolTip("Permanently deletes selected files from disk.")
         self.btn_delete_perm.setEnabled(False)
         self.btn_delete_perm.clicked.connect(self._delete_selected_permanently)

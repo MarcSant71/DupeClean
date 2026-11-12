@@ -127,103 +127,33 @@ QPushButton#helpButton::menu-indicator {
     image: none;
 }
 
-/* Barra de Ações Superior (Container Unificado - Estilo Card do Menu Lateral) */
+/* Barra de Ações Superior (Container Unificado - Cópia Fiel dos Elementos Visuais do Menu Lateral) */
 QFrame#topActionBarContainer {
     background-color: #202024;
     border: 1px solid #2e2e33;
     border-radius: 6px;
-    padding: 2px;
+    padding: 3px;
 }
 QFrame#topActionBarContainer QPushButton {
     background-color: transparent;
     border: none;
     border-radius: 4px;
-    padding: 6px 12px;
+    padding: 8px 14px;
     color: #e4e4e7;
     font-size: 13px;
     font-weight: 500;
+    margin: 0px 1px;
 }
 QFrame#topActionBarContainer QPushButton:hover {
     background-color: #27272a;
     color: #ffffff;
-    border: none;
 }
 QFrame#topActionBarContainer QPushButton:pressed {
-    background-color: #1c1c20;
+    background-color: #242429;
     color: #ffffff;
-    border: none;
 }
 QFrame#topActionBarContainer QPushButton:disabled {
     background-color: transparent;
-    border: none;
-    color: #52525b;
-}
-
-/* Botão de Ação Primária (Scan) */
-QFrame#topActionBarContainer QPushButton#primaryButton {
-    background-color: transparent;
-    border: none;
-    color: #38bdf8;
-    font-weight: bold;
-}
-QFrame#topActionBarContainer QPushButton#primaryButton:hover {
-    background-color: #0369a1;
-    color: #ffffff;
-    border: none;
-}
-QFrame#topActionBarContainer QPushButton#primaryButton:pressed {
-    background-color: #0284c7;
-    color: #ffffff;
-    border: none;
-}
-QFrame#topActionBarContainer QPushButton#primaryButton:disabled {
-    background-color: transparent;
-    border: none;
-    color: #52525b;
-}
-
-/* Botão de Parar (Stop) */
-QFrame#topActionBarContainer QPushButton#stopButton {
-    background-color: transparent;
-    border: none;
-    color: #e4e4e7;
-    font-weight: bold;
-}
-QFrame#topActionBarContainer QPushButton#stopButton:hover {
-    background-color: #27272a;
-    color: #ffffff;
-    border: none;
-}
-QFrame#topActionBarContainer QPushButton#stopButton:disabled {
-    background-color: transparent;
-    border: none;
-    color: #52525b;
-}
-
-/* Botão de Exclusão Permanente (Delete) */
-QFrame#topActionBarContainer QPushButton#dangerButton {
-    background-color: transparent;
-    border: none;
-}
-QFrame#topActionBarContainer QPushButton#dangerButton:enabled {
-    background-color: transparent;
-    border: none;
-    color: #f87171;
-    font-weight: bold;
-}
-QFrame#topActionBarContainer QPushButton#dangerButton:enabled:hover {
-    background-color: #991b1b;
-    color: #ffffff;
-    border: none;
-}
-QFrame#topActionBarContainer QPushButton#dangerButton:enabled:pressed {
-    background-color: #7f1d1d;
-    color: #ffffff;
-    border: none;
-}
-QFrame#topActionBarContainer QPushButton#dangerButton:disabled {
-    background-color: transparent;
-    border: none;
     color: #52525b;
 }
 
