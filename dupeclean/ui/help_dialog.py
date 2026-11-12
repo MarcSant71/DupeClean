@@ -8,12 +8,15 @@ from typing import Dict, Any, Optional
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QTabWidget,
+    QTabBar,
+    QStackedWidget,
     QScrollArea,
     QWidget,
     QFrame,
@@ -23,6 +26,134 @@ from PySide6.QtWidgets import (
 import dupeclean
 
 
+class HelpTabWidget(QWidget):
+    """Container de abas moderno com bordas contínuas e sem artefatos de renderização do QTabWidget."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.tab_bar = QTabBar(self)
+        self.tab_bar.setDrawBase(False)
+        self.tab_bar.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tab_bar.currentChanged.connect(self._on_tab_changed)
+
+        self.container = QFrame(self)
+        self.container.setObjectName("helpContentFrame")
+        c_layout = QVBoxLayout(self.container)
+        c_layout.setContentsMargins(2, 2, 2, 2)
+
+        self.stack = QStackedWidget(self.container)
+        self.stack.setStyleSheet("background: transparent; border: none;")
+        c_layout.addWidget(self.stack)
+
+        layout.addWidget(self.tab_bar)
+        layout.addWidget(self.container)
+
+    def addTab(self, widget: QWidget, text: str) -> int:
+        idx = self.tab_bar.addTab(text)
+        self.stack.addWidget(widget)
+        return idx
+
+    def insertTab(self, index: int, widget: QWidget, text: str) -> int:
+        idx = self.tab_bar.insertTab(index, text)
+        self.stack.insertWidget(index, widget)
+        return idx
+
+    def removeTab(self, index: int):
+        self.tab_bar.removeTab(index)
+        w = self.stack.widget(index)
+        if w:
+            self.stack.removeWidget(w)
+
+    def count(self) -> int:
+        return self.tab_bar.count()
+
+    def tabText(self, index: int) -> str:
+        return self.tab_bar.tabText(index)
+
+    def setTabText(self, index: int, text: str):
+        self.tab_bar.setTabText(index, text)
+
+    def widget(self, index: int) -> Optional[QWidget]:
+        return self.stack.widget(index)
+
+    def currentWidget(self) -> Optional[QWidget]:
+        return self.stack.currentWidget()
+
+    def currentIndex(self) -> int:
+        return self.tab_bar.currentIndex()
+
+    def setCurrentIndex(self, index: int):
+        self.tab_bar.setCurrentIndex(index)
+        self.stack.setCurrentIndex(index)
+
+    def indexOf(self, widget: QWidget) -> int:
+        return self.stack.indexOf(widget)
+
+    def tabBar(self) -> QTabBar:
+        return self.tab_bar
+
+    def _on_tab_changed(self, index: int):
+        self.stack.setCurrentIndex(index)
+
+
+class ZoomableBrowser(QTextBrowser):
+    """Visualizador rich-text com suporte a zoom via Ctrl + Scroll e Ctrl +/-."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._zoom_level = 0
+        self.setOpenExternalLinks(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.zoom_in()
+            elif delta < 0:
+                self.zoom_out()
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self.zoom_in()
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_Minus:
+                self.zoom_out()
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_0:
+                self.reset_zoom()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def zoom_in(self):
+        if self._zoom_level < 8:
+            self._zoom_level += 1
+            self.zoomIn(1)
+
+    def zoom_out(self):
+        if self._zoom_level > -4:
+            self._zoom_level -= 1
+            self.zoomOut(1)
+
+    def reset_zoom(self):
+        if self._zoom_level > 0:
+            self.zoomOut(self._zoom_level)
+        elif self._zoom_level < 0:
+            self.zoomIn(-self._zoom_level)
+        self._zoom_level = 0
+
+
 class HelpDialog(QDialog):
     """Diálogo completo de ajuda, arquitetura técnica e atalhos do DupeClean."""
 
@@ -30,8 +161,29 @@ class HelpDialog(QDialog):
         super().__init__(parent)
         self.gpu_info = gpu_info or {}
         self.setWindowTitle(f"DupeClean v{dupeclean.__version__} - Help & Technical Guide")
-        self.resize(920, 660)
-        self.setMinimumSize(780, 540)
+
+        # Habilita botões nativos de Maximizar, Minimizar e Restaurar do Windows
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+        )
+
+        # Dimensionamento Proporcional Dinâmico (~82% da largura e ~86% da altura)
+        if parent:
+            pw = parent.width()
+            ph = parent.height()
+        else:
+            screen = QApplication.primaryScreen()
+            s_geo = screen.availableGeometry() if screen else None
+            pw = s_geo.width() if s_geo else 1280
+            ph = s_geo.height() if s_geo else 800
+
+        w = max(880, int(pw * 0.82))
+        h = max(620, int(ph * 0.86))
+        self.resize(w, h)
+        self.setMinimumSize(780, 520)
+
         self._init_ui()
 
     def _init_ui(self):
@@ -40,34 +192,38 @@ class HelpDialog(QDialog):
                 background-color: #151518;
                 color: #f4f4f5;
             }
-            QTabWidget::pane {
-                border: 1px solid #2e2e33;
-                background-color: #18181b;
-                border-radius: 6px;
-                top: -1px;
-            }
             QTabBar::tab {
                 background-color: #202024;
                 color: #a1a1aa;
-                border: 1px solid #2e2e33;
-                border-bottom: none;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                padding: 9px 18px;
-                margin-right: 3px;
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                padding: 8px 14px;
+                margin-right: 6px;
                 font-weight: 500;
                 font-size: 13px;
             }
+            QTabBar::tab:last {
+                margin-right: 0px;
+            }
             QTabBar::tab:selected {
-                background-color: #18181b;
+                background-color: #27272a;
                 color: #38bdf8;
-                border-color: #2e2e33;
-                border-bottom: 2px solid #38bdf8;
+                border-color: #38bdf8;
                 font-weight: bold;
             }
             QTabBar::tab:hover:!selected {
                 background-color: #27272a;
                 color: #f4f4f5;
+                border-color: #52525b;
+            }
+            QFrame#helpContentFrame {
+                background-color: #18181b;
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+            }
+            QTextBrowser {
+                border: none;
+                background-color: transparent;
             }
             QScrollArea {
                 border: none;
@@ -75,21 +231,33 @@ class HelpDialog(QDialog):
             }
             QScrollBar:vertical {
                 border: none;
-                background-color: #18181b;
-                width: 10px;
-                margin: 0px;
-                border-radius: 5px;
+                background: transparent;
+                width: 8px;
+                margin: 8px 6px 8px 0px;
             }
             QScrollBar::handle:vertical {
                 background-color: #3f3f46;
                 min-height: 25px;
-                border-radius: 5px;
+                border-radius: 4px;
             }
             QScrollBar::handle:vertical:hover {
                 background-color: #52525b;
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                border: none;
+                background: none;
                 height: 0px;
+                width: 0px;
+            }
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
+                border: none;
+                background: none;
+                width: 0px;
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                border: none;
+                background: none;
             }
         """)
 
@@ -125,7 +293,7 @@ class HelpDialog(QDialog):
         # Version Badge
         lbl_ver = QLabel(f"v{dupeclean.__version__}")
         lbl_ver.setStyleSheet(
-            "background-color: #202024; color: #38bdf8; border: 1px solid #2e2e33; "
+            "background-color: #202024; color: #38bdf8; border: 1px solid #3f3f46; "
             "border-radius: 12px; padding: 4px 12px; font-weight: bold; font-size: 12px;"
         )
         header.addWidget(lbl_ver)
@@ -135,7 +303,7 @@ class HelpDialog(QDialog):
         # -------------------------------------------------------------
         # 2. Main Tabs
         # -------------------------------------------------------------
-        self.tabs = QTabWidget()
+        self.tabs = HelpTabWidget(self)
         self.tabs.addTab(self._create_overview_tab(), "📘 Product Overview")
         self.tabs.addTab(self._create_pipeline_tab(), "🔬 Technical Pipeline & Stages")
         self.tabs.addTab(self._create_modes_tab(), "🎯 Scan Modes")
@@ -148,7 +316,7 @@ class HelpDialog(QDialog):
         # 3. Footer (GitHub link, Close button)
         # -------------------------------------------------------------
         footer = QHBoxLayout()
-        footer.setContentsMargins(4, 0, 4, 0)
+        footer.setContentsMargins(0, 0, 0, 0)
 
         btn_repo = QPushButton("🌐 View on GitHub")
         btn_repo.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -184,9 +352,11 @@ class HelpDialog(QDialog):
     # Tab Builders with Rich Text HTML
     # -----------------------------------------------------------------
     def _create_browser(self, html: str) -> QWidget:
-        """Cria um visualizador rich-text com suporte a rolagem suave."""
-        browser = QTextBrowser()
-        browser.setOpenExternalLinks(True)
+        """Cria um visualizador rich-text com suporte a rolagem suave e zoom."""
+        browser = ZoomableBrowser()
+        browser.setFrameShape(QFrame.Shape.NoFrame)
+        browser.setStyleSheet("border: none; background-color: transparent;")
+
         browser.setHtml(f"""
         <html>
         <head>
@@ -197,33 +367,33 @@ class HelpDialog(QDialog):
                     line-height: 1.6;
                     color: #d4d4d8;
                     background-color: #18181b;
-                    margin: 14px;
+                    margin: 16px 24px;
                 }}
                 h2 {{
                     color: #38bdf8;
                     font-size: 17px;
                     margin-top: 0px;
-                    margin-bottom: 10px;
+                    margin-bottom: 12px;
                     border-bottom: 1px solid #2e2e33;
-                    padding-bottom: 5px;
+                    padding-bottom: 6px;
                 }}
                 h3 {{
-                    color: #fafafa;
+                    color: #38bdf8;
                     font-size: 14.5px;
-                    margin-top: 16px;
+                    margin-top: 18px;
                     margin-bottom: 8px;
                 }}
                 p {{
                     margin-top: 0px;
-                    margin-bottom: 10px;
+                    margin-bottom: 12px;
                 }}
                 ul, ol {{
-                    margin-top: 0px;
-                    margin-bottom: 12px;
+                    margin-top: 4px;
+                    margin-bottom: 14px;
                     padding-left: 22px;
                 }}
                 li {{
-                    margin-bottom: 5px;
+                    margin-bottom: 6px;
                 }}
                 code {{
                     font-family: 'Consolas', 'Cascadia Code', monospace;
@@ -252,11 +422,16 @@ class HelpDialog(QDialog):
                     border: 1px solid #16a34a;
                 }}
                 .card {{
-                    background-color: #202024;
-                    border: 1px solid #2e2e33;
-                    border-radius: 6px;
-                    padding: 12px 16px;
-                    margin-bottom: 14px;
+                    background-color: transparent;
+                    border: none;
+                    padding: 0px;
+                    margin-bottom: 18px;
+                }}
+                .callout {{
+                    background-color: transparent;
+                    border-left: 3px solid #38bdf8;
+                    padding: 4px 14px;
+                    margin: 14px 0px;
                 }}
                 table {{
                     width: 100%;
@@ -279,13 +454,6 @@ class HelpDialog(QDialog):
                 }}
                 tr:nth-child(even) {{
                     background-color: #1b1b1e;
-                }}
-                .callout {{
-                    background-color: #182230;
-                    border-left: 4px solid #38bdf8;
-                    padding: 10px 14px;
-                    margin: 10px 0px;
-                    border-radius: 0 4px 4px 0;
                 }}
             </style>
         </head>

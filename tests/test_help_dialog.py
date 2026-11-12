@@ -43,6 +43,29 @@ class TestHelpDialog(unittest.TestCase):
             win.btn_help.click()
             mock_exec.assert_called_once()
 
+    def test_help_dialog_proportional_and_zoom(self):
+        win = MainWindow(gpu_info={"name": "RTX"})
+        win.resize(1920, 1080)
+        dlg = HelpDialog(parent=win)
+
+        # Maximize and minimize hints enabled
+        from PySide6.QtCore import Qt
+        self.assertTrue(bool(dlg.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint))
+        self.assertTrue(bool(dlg.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint))
+
+        # Proportional size check (~82% width, ~86% height)
+        self.assertAlmostEqual(dlg.width(), int(1920 * 0.82), delta=5)
+        self.assertAlmostEqual(dlg.height(), int(1080 * 0.86), delta=5)
+
+        # Zoom functionality
+        from dupeclean.ui.help_dialog import ZoomableBrowser
+        browser = dlg.tabs.widget(0)
+        self.assertIsInstance(browser, ZoomableBrowser)
+        browser.zoom_in()
+        self.assertEqual(browser._zoom_level, 1)
+        browser.zoom_out()
+        self.assertEqual(browser._zoom_level, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
