@@ -17,10 +17,12 @@ class SplashScreen(QWidget):
 
     def __init__(self):
         super().__init__()
+        # Usar Window + FramelessWindowHint para vincular a splash ao Virtual Desktop ativo do Windows.
+        # Evita flags como WindowStaysOnTopHint e SplashScreen (WS_EX_TOOLWINDOW) que fazem o Windows
+        # propagar a janela como overlay global em todos os workspaces/desktops virtuais.
         self.setWindowFlags(
-            Qt.WindowType.SplashScreen |
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.Window |
+            Qt.WindowType.FramelessWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(490, 250)
