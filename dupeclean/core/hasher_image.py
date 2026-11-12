@@ -51,6 +51,62 @@ def _get_dct_matrix(n: int, device: str = "cuda", dtype=torch.float16) -> torch.
     return torch.tensor(matrix, device=device, dtype=dtype)
 
 
+class _AsyncImageCacheWriter:
+    """
+    Escritor assíncrono em background para persistência do cache de imagens (SQLite WAL).
+    Desacopla totalmente a GPU e os workers de decodificação do banco de dados,
+    acumulando lotes em memória e commitando em uma thread dedicada sem pausar os Tensor Cores.
+    """
+    def __init__(self, cache_manager: CacheManager, batch_size: int = 1024, flush_interval: float = 0.5):
+        self.cache_manager = cache_manager
+        self.batch_size = batch_size
+        self.flush_interval = flush_interval
+        self._queue: queue.Queue = queue.Queue(maxsize=50000)
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="AsyncImageCacheWriter")
+        self._thread.start()
+
+    def add_batch(self, entries: List[Tuple[str, int, float, bytes]]):
+        for e in entries:
+            try:
+                self._queue.put_nowait(e)
+            except queue.Full:
+                try:
+                    self._queue.put(e, timeout=0.1)
+                except queue.Full:
+                    pass
+
+    def _run(self):
+        batch = []
+        last_flush = time.perf_counter()
+        while not self._stop_event.is_set() or not self._queue.empty():
+            try:
+                entry = self._queue.get(timeout=0.05)
+                batch.append(entry)
+            except queue.Empty:
+                pass
+
+            now = time.perf_counter()
+            if batch and (len(batch) >= self.batch_size or now - last_flush >= self.flush_interval or self._stop_event.is_set()):
+                try:
+                    self.cache_manager.save_image_batch(batch)
+                except Exception:
+                    pass
+                batch.clear()
+                last_flush = now
+
+        if batch:
+            try:
+                self.cache_manager.save_image_batch(batch)
+            except Exception:
+                pass
+
+    def close(self):
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5.0)
+
+
 def extract_image_embeddings(
     records: List[FileRecord],
     batch_size: int = 1024,
@@ -119,6 +175,8 @@ def extract_image_embeddings(
     # 3. Processamento de Altíssimo Throughput: Streaming Producer-Consumer Concorrente
     # Threads de CPU decodificam continuamente para uma fila delimitada em RAM,
     # enquanto a GPU (Tensor Cores) e o SQLite operam sem tempo ocioso em paralelo.
+    to_process.sort(key=lambda r: str(r.path.parent))
+
     dct_mat = _get_dct_matrix(IMG_SIZE, device=device, dtype=dtype)
     dct_mat_t = dct_mat.t()
     u = torch.arange(LOW_FREQ_SIZE, device=device).unsqueeze(1)
@@ -132,6 +190,7 @@ def extract_image_embeddings(
 
     img_queue: queue.Queue = queue.Queue(maxsize=2048)
     stop_event = threading.Event()
+    cache_writer = _AsyncImageCacheWriter(cache)
 
     def _worker_producer(records_slice: List[FileRecord]):
         for rec in records_slice:
@@ -142,9 +201,18 @@ def extract_image_embeddings(
                     img.draft("RGB", (IMG_SIZE, IMG_SIZE))
                     rgb = img.convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.Resampling.BILINEAR)
                     arr = np.asarray(rgb, dtype=np.uint8)
-                    img_queue.put((rec, arr))
+                    item = (rec, arr)
             except Exception:
-                img_queue.put((rec, None))
+                item = (rec, None)
+
+            while not stop_event.is_set():
+                if stop_check and stop_check():
+                    break
+                try:
+                    img_queue.put(item, timeout=0.05)
+                    break
+                except queue.Full:
+                    continue
 
     # Distribui os arquivos uniformemente entre as threads produtoras
     slice_size = (uncached_total + num_workers - 1) // num_workers
@@ -158,8 +226,7 @@ def extract_image_embeddings(
             t.start()
             worker_threads.append(t)
 
-    # Consumidor: Alimenta a GPU em blocos e agrupa commits no SQLite
-    pending_cache_entries: List[Tuple[str, int, float, bytes]] = []
+    # Consumidor: Alimenta a GPU em blocos contínuos e delega persistência para o AsyncCacheWriter
     batch_records: List[FileRecord] = []
     batch_images: List[np.ndarray] = []
     processed_count = 0
@@ -203,18 +270,11 @@ def extract_image_embeddings(
                             valid_records.extend(batch_records)
 
                             norm_cpu_np = normalized.cpu().numpy()
-                            for b_idx, b_rec in enumerate(batch_records):
-                                pending_cache_entries.append((
-                                    str(b_rec.path),
-                                    b_rec.size,
-                                    b_rec.mtime,
-                                    norm_cpu_np[b_idx:b_idx + 1].tobytes()
-                                ))
-
-                            # Gravação em lote massivo no SQLite (WAL): reduz transações de I/O em até 8x
-                            if len(pending_cache_entries) >= 1024 or processed_count == uncached_total:
-                                cache.save_image_batch(pending_cache_entries)
-                                pending_cache_entries.clear()
+                            new_entries = [
+                                (str(b_rec.path), b_rec.size, b_rec.mtime, norm_cpu_np[b_idx:b_idx + 1].tobytes())
+                                for b_idx, b_rec in enumerate(batch_records)
+                            ]
+                            cache_writer.add_batch(new_entries)
 
                             batch_records.clear()
                             batch_images.clear()
@@ -233,13 +293,9 @@ def extract_image_embeddings(
                         break
     finally:
         stop_event.set()
-        if pending_cache_entries and not (stop_check and stop_check()):
-            try:
-                cache.save_image_batch(pending_cache_entries)
-            except Exception:
-                pass
+        cache_writer.close()
         for t in worker_threads:
-            t.join(timeout=0.1)
+            t.join(timeout=0.5)
 
     if not all_embeddings_list:
         return [], torch.empty((0, DIM_SIZE), device=device, dtype=dtype)

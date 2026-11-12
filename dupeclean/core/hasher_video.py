@@ -7,6 +7,8 @@ alimenta em fluxo contínuo a RTX 5090 e processa tensores DCT 2D diretamente em
 import sys
 import os
 import time
+import queue
+import threading
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import List, Optional, Tuple, Callable, Dict, Any
@@ -182,6 +184,65 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
         return path_str, -1.0, None
 
 
+class _AsyncVideoCacheWriter:
+    """
+    Escritor assíncrono em background para persistência do cache de vídeos (SQLite WAL).
+    Desacopla totalmente a decodificação de vídeo e a GPU do banco de dados,
+    acumulando lotes e tombstones em memória e commitando em segundo plano.
+    """
+    def __init__(self, cache_manager: CacheManager, batch_size: int = 512, flush_interval: float = 0.5):
+        self.cache_manager = cache_manager
+        self.batch_size = batch_size
+        self.flush_interval = flush_interval
+        self._queue: queue.Queue = queue.Queue(maxsize=50000)
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="AsyncVideoCacheWriter")
+        self._thread.start()
+
+    def add(self, entry: Tuple[str, int, float, float, bytes]):
+        try:
+            self._queue.put_nowait(entry)
+        except queue.Full:
+            try:
+                self._queue.put(entry, timeout=0.1)
+            except queue.Full:
+                pass
+
+    def add_batch(self, entries: List[Tuple[str, int, float, float, bytes]]):
+        for e in entries:
+            self.add(e)
+
+    def _run(self):
+        batch = []
+        last_flush = time.perf_counter()
+        while not self._stop_event.is_set() or not self._queue.empty():
+            try:
+                entry = self._queue.get(timeout=0.05)
+                batch.append(entry)
+            except queue.Empty:
+                pass
+
+            now = time.perf_counter()
+            if batch and (len(batch) >= self.batch_size or now - last_flush >= self.flush_interval or self._stop_event.is_set()):
+                try:
+                    self.cache_manager.save_video_batch(batch)
+                except Exception:
+                    pass
+                batch.clear()
+                last_flush = now
+
+        if batch:
+            try:
+                self.cache_manager.save_video_batch(batch)
+            except Exception:
+                pass
+
+    def close(self):
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5.0)
+
+
 def extract_video_embeddings(
     records: List[FileRecord],
     progress_callback: Optional[Callable[[str, int, int], None]] = None,
@@ -250,6 +311,8 @@ def extract_video_embeddings(
         return valid_records, all_embeddings
 
     # 3. Preparação das transformadas DCT na GPU com Spectral Whitening
+    to_process.sort(key=lambda r: str(r.path.parent))
+
     dct_mat = _get_dct_matrix(VIDEO_IMG_SIZE, device=device, dtype=dtype)
     dct_mat_t = dct_mat.t()
 
@@ -258,8 +321,8 @@ def extract_video_embeddings(
     spectral_weight = (u + v + 1.0).pow(2.0)
     spectral_weight[0, 0] = 0.0  # Zero DC
 
-    new_cache_entries: List[Tuple[str, int, float, float, bytes]] = []
     uncached_total = len(to_process)
+    cache_writer = _AsyncVideoCacheWriter(cache)
 
     # Mapeamento rápido de caminhos para objetos FileRecord
     path_to_rec = {str(r.path): r for r in to_process}
@@ -297,7 +360,7 @@ def extract_video_embeddings(
                             expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
                             if frames_arr is None or duration == -1.0 or getattr(frames_arr, "shape", None) != expected_shape:
                                 # Grava tombstone no SQLite para nunca mais tentar reprocessar este arquivo corrompido
-                                new_cache_entries.append((
+                                cache_writer.add((
                                     str(rec.path),
                                     rec.size,
                                     rec.mtime,
@@ -309,11 +372,6 @@ def extract_video_embeddings(
                                 batch_records.append(rec)
                                 batch_frames.append(frames_arr)
                                 batch_durations.append(duration)
-
-                    # Salva periodicamente no SQLite (inclui tombstones mesmo se batch_records for pequeno)
-                    if len(new_cache_entries) >= 512 or processed_count == uncached_total:
-                        cache.save_video_batch(new_cache_entries)
-                        new_cache_entries.clear()
 
                     # Processa em lotes matriciais na RTX 5090 (128 itens por lote)
                     target_batch = 128
@@ -337,7 +395,7 @@ def extract_video_embeddings(
                             norm_cpu_np = normalized.cpu().numpy()
                             for b_i, b_rec in enumerate(batch_records):
                                 b_dur = batch_durations[b_i]
-                                new_cache_entries.append((
+                                cache_writer.add((
                                     str(b_rec.path),
                                     b_rec.size,
                                     b_rec.mtime,
@@ -345,21 +403,13 @@ def extract_video_embeddings(
                                     norm_cpu_np[b_i:b_i + 1].tobytes()
                                 ))
 
-                            if len(new_cache_entries) >= 512 or processed_count == uncached_total:
-                                cache.save_video_batch(new_cache_entries)
-                                new_cache_entries.clear()
-
                             batch_records.clear()
                             batch_frames.clear()
                             batch_durations.clear()
 
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
-            if new_cache_entries:
-                try:
-                    cache.save_video_batch(new_cache_entries)
-                except Exception:
-                    pass
+            cache_writer.close()
 
     if not embeddings_list:
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
