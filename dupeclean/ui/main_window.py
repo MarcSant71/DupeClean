@@ -250,7 +250,10 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(10)
 
         # 2.1 Action Bar (Compacto e Responsivo)
-        top_bar = QHBoxLayout()
+        top_bar_widget = QWidget()
+        top_bar_widget.setObjectName("topActionBar")
+        top_bar = QHBoxLayout(top_bar_widget)
+        top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.setSpacing(6)
 
         self.btn_scan = QPushButton("🔍 Scan")
@@ -320,12 +323,13 @@ class MainWindow(QMainWindow):
         # Botão Circular de Ajuda (?) - Alinhado no extremo direito (Identidade RadarEleitoral)
         self.btn_help = QPushButton("?")
         self.btn_help.setObjectName("helpButton")
+        self.btn_help.setFixedSize(28, 28)
         self.btn_help.setToolTip("Help & Technical Documentation")
         self.btn_help.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_help.clicked.connect(self._open_help_dialog)
         top_bar.addWidget(self.btn_help)
 
-        right_layout.addLayout(top_bar)
+        right_layout.addWidget(top_bar_widget)
 
         # 2.2 Splitter vertical: Resultados+Preview (cima) e Pastas (baixo)
         self.v_splitter = QSplitter(Qt.Orientation.Vertical)
