@@ -1,5 +1,16 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.8
+- **Refined Action Bar & Unified Card Aesthetics:**
+  - Restyled the top action bar into a single framed container matching the exact visual styling of the sidebar modes (`#202024` surface, `#2e2e33` subtle border, 6px radius).
+  - Polished action buttons with transparent backgrounds, 500-weight typography, and rounded hover highlights (`#27272a`).
+  - Standardized the Select dropdown button to use Qt's native menu indicator arrow, eliminating redundant double-arrow artifacts.
+- **Intuitive Stop Control Icon:**
+  - Replaced generic square stop icon with a clear red stop sign (`🛑 Stop`) for instant visual distinction from other toolbar actions.
+- **Optimized Workspace & Sidebar Dimensions:**
+  - Slimmed the left navigation sidebar width from 260px down to 220px, reclaiming 40px of valuable horizontal space for duplicate file listings, metadata columns, and similarity scores.
+  - Preserved circular help button (`?`) positioning and functionality in top-right corner.
+
 ### What's New in v1.1.7
 - **Massive I/O Performance Surge on Modern Solid-State Storage (NVMe / SSD):**
   - Eliminated ThreadPoolExecutor synchronization barriers and waiter registration GIL overhead, replacing them with a zero-friction producer-consumer queue pipeline (`queue.Queue`) sustaining over 20,000 files/sec.
