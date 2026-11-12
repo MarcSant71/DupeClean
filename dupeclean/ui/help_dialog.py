@@ -502,8 +502,8 @@ class HelpDialog(QDialog):
                 <b>512 KB parallel streaming blocks</b> and computes cryptographic <code>xxHash64</code> digests.
             </p>
             <p>
-                <b>Hardware Saturation:</b> Saturates the sequential bandwidth of modern NVMe and solid-state storage (<b>1,000+ MB/s</b>) 
-                across up to 32 concurrent worker threads, ensuring the physical reading phase finishes in the minimum possible time.
+                <b>Hardware Saturation:</b> Saturates the physical sequential read speed of modern NVMe and solid-state storage (<b>up to 3.4+ GB/s</b>) 
+                using zero-copy unbuffered DMA buffers (<code>readinto</code>) across 32 concurrent worker threads, ensuring the physical reading phase finishes in the minimum possible time.
             </p>
         </div>
 
@@ -517,14 +517,20 @@ class HelpDialog(QDialog):
 
         <h2>💡 Hardware Telemetry FAQ</h2>
         <div class="callout">
-            <b>Why is my Disk usage at 100% (~1 GB/s) during Stage 3?</b><br>
-            To be mathematically certain that two files are 100% identical byte-for-byte, the operating system must read their 
-            bytes from the physical disk into memory. DupeClean reads data at maximum hardware capability so this stage finishes as fast as possible.
+            <b>Why is my Disk read speed at 100% (~1–3+ GB/s) during Duplicate Files Stage 3?</b><br>
+            To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses zero-copy direct DMA streaming to saturate your drive's physical sequential read speed, ensuring this unavoidable reading phase finishes as fast as humanly possible.
         </div>
         <div class="callout">
-            <b>Why does my RTX GPU show near 0% in Task Manager during Stage 3?</b><br>
-            The GPU processes batches of frequency tensors in fractions of a millisecond (<0.5 ms). Because the GPU finishes 
-            almost instantaneously and waits for the next disk I/O batch, Windows Task Manager's 1-second average sampler reports near 0% until the mass matrix multiplication phase starts.
+            <b>Why does my RTX GPU stay near 0% in Task Manager during Stage 2 & 3 of Image/Video scans?</b><br>
+            During Stage 2, CPU workers decode images and extract video keyframes from disk. Once a batch of 128 frames is ready, the RTX GPU processes it in <b>fractions of a millisecond</b> (&lt;0.5 ms) and immediately waits for the next disk/CPU batch. Because the GPU compute finishes so quickly, Windows Task Manager's 1-second average sampler shows near 0% until the all-to-all mass matrix multiplication in Stage 3 begins.
+        </div>
+        <div class="callout">
+            <b>How does DupeClean adapt to different CPUs (e.g., Core i9 vs. Ryzen 5)?</b><br>
+            Worker thread allocation scales dynamically based on logical processor count (up to 32 concurrent workers on high-core CPUs). A dedicated percentage of CPU headroom is always preserved so Windows, background audio, and the UI remain completely fluid and responsive.
+        </div>
+        <div class="callout">
+            <b>Does it automatically optimize for different RTX GPUs (RTX 3070 vs. 3090 vs. 5090)?</b><br>
+            Yes. The engine inspects VRAM capacity and free headroom in real time via <code>torch.cuda.mem_get_info()</code>: on 8 GB cards (e.g., RTX 3070/4060), calculation blocks are capped at <b>256 MB</b> to prevent Windows WDDM paging overhead; on 24 GB / 32 GB GPUs (e.g., RTX 3090/4090/5090), it automatically scales up to <b>2.0 GB blocks</b> and 1,024-item batches to fully saturate memory bandwidth and Tensor Cores.
         </div>
         """
         return self._create_browser(html)
@@ -607,6 +613,10 @@ class HelpDialog(QDialog):
                     <td>Navigate between duplicate groups and files in the results tree.</td>
                 </tr>
                 <tr>
+                    <td><code>Ctrl + Scroll</code> / <code>Ctrl + / -</code></td>
+                    <td>Dynamic zoom in / out on help and documentation reader (<code>Ctrl 0</code> to reset).</td>
+                </tr>
+                <tr>
                     <td><code>Esc</code></td>
                     <td>Close open dialogs (Help, Confirmation dialogs, Previews).</td>
                 </tr>
@@ -614,7 +624,7 @@ class HelpDialog(QDialog):
         </div>
 
         <div class="card">
-            <h3 style="margin-top:0px; color:#38bdf8;">Smart Selection Tools (<code>Select ▾</code>)</h3>
+            <h3 style="margin-top:0px; color:#38bdf8;">Smart Selection Tools (<code>Select</code>)</h3>
             <p>
                 Quickly select duplicates across thousands of groups with one click:
             </p>

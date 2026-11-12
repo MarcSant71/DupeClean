@@ -131,24 +131,6 @@ Yes. The `get_optimal_gpu_budgets()` engine inspects VRAM capacity and free head
 
 ---
 
-### 💡 Frequently Asked Questions on Hardware Usage
-
-#### *"Why is my CPU usage high (~50–60%) while my RTX GPU stays near 0% during Stage 3?"*
-During Stage 3, multiple CPU workers are concurrently opening containers and extracting keyframes from disk. The RTX GPU processes each batch of 128 frames in **fractions of a millisecond** (<0.5 ms). Because the GPU finishes almost instantly and waits for the next disk/CPU batch, Windows Task Manager's 1-second average sampler reports ~0% utilization until Stage 4 begins.
-
-#### *"How does DupeClean adapt to different CPUs (e.g., Core i9 vs. Ryzen 5)?"*
-Worker allocation scales dynamically based on logical processor count:
-* **Intel Core i9-14900K (32 threads):** 16 workers (~50–60 videos/s on raw DVR files, 250+ videos/s on MP4).
-* **AMD Ryzen 5 4500 (12 threads):** 6 workers (~15 videos/s on raw DVR files, 70+ videos/s on MP4).
-* Half of your CPU threads are always kept free so Windows, desktop audio, and the UI never freeze or stutter.
-
-#### *"Does it automatically optimize for different RTX GPUs (RTX 3070 vs. 3090 vs. 5090)?"*
-Yes. The `get_optimal_gpu_budgets()` engine inspects VRAM capacity and free headroom in real time via `torch.cuda.mem_get_info()`:
-* **8 GB GPUs (e.g., RTX 3070, 4060):** Restricts GPU calculation blocks to **256 MB** to prevent Windows WDDM from swapping VRAM into system RAM (zero out-of-memory crashes).
-* **24 GB / 32 GB GPUs (e.g., RTX 3090, 4090, 5090):** Automatically scales up to **2.0 GB blocks** and 1,024-item batches, saturating memory bandwidth and 3rd/4th/5th Gen Tensor Cores.
-
----
-
 ## 📦 Package Size & Architecture Transparency
 
 Users often ask: **"Traditional tools like Czkawka are only ~15 MB - why is DupeClean's portable download ~1.7 GB (extracting to ~4.7 GB)?"**
