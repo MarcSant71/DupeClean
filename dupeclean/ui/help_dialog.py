@@ -15,89 +15,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTabWidget,
-    QTabBar,
-    QStackedWidget,
-    QScrollArea,
     QWidget,
     QFrame,
     QTextBrowser,
 )
 
 import dupeclean
-
-
-class HelpTabWidget(QWidget):
-    """Container de abas moderno com bordas contínuas e sem artefatos de renderização do QTabWidget."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        self.tab_bar = QTabBar(self)
-        self.tab_bar.setDrawBase(False)
-        self.tab_bar.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tab_bar.currentChanged.connect(self._on_tab_changed)
-
-        self.container = QFrame(self)
-        self.container.setObjectName("helpContentFrame")
-        c_layout = QVBoxLayout(self.container)
-        c_layout.setContentsMargins(2, 2, 2, 2)
-
-        self.stack = QStackedWidget(self.container)
-        self.stack.setStyleSheet("background: transparent; border: none;")
-        c_layout.addWidget(self.stack)
-
-        layout.addWidget(self.tab_bar)
-        layout.addWidget(self.container)
-
-    def addTab(self, widget: QWidget, text: str) -> int:
-        idx = self.tab_bar.addTab(text)
-        self.stack.addWidget(widget)
-        return idx
-
-    def insertTab(self, index: int, widget: QWidget, text: str) -> int:
-        idx = self.tab_bar.insertTab(index, text)
-        self.stack.insertWidget(index, widget)
-        return idx
-
-    def removeTab(self, index: int):
-        self.tab_bar.removeTab(index)
-        w = self.stack.widget(index)
-        if w:
-            self.stack.removeWidget(w)
-
-    def count(self) -> int:
-        return self.tab_bar.count()
-
-    def tabText(self, index: int) -> str:
-        return self.tab_bar.tabText(index)
-
-    def setTabText(self, index: int, text: str):
-        self.tab_bar.setTabText(index, text)
-
-    def widget(self, index: int) -> Optional[QWidget]:
-        return self.stack.widget(index)
-
-    def currentWidget(self) -> Optional[QWidget]:
-        return self.stack.currentWidget()
-
-    def currentIndex(self) -> int:
-        return self.tab_bar.currentIndex()
-
-    def setCurrentIndex(self, index: int):
-        self.tab_bar.setCurrentIndex(index)
-        self.stack.setCurrentIndex(index)
-
-    def indexOf(self, widget: QWidget) -> int:
-        return self.stack.indexOf(widget)
-
-    def tabBar(self) -> QTabBar:
-        return self.tab_bar
-
-    def _on_tab_changed(self, index: int):
-        self.stack.setCurrentIndex(index)
 
 
 class ZoomableBrowser(QTextBrowser):
@@ -192,34 +115,34 @@ class HelpDialog(QDialog):
                 background-color: #151518;
                 color: #f4f4f5;
             }
+            QTabWidget::pane {
+                border: 1px solid #3f3f46;
+                background-color: #18181b;
+                top: -1px;
+            }
             QTabBar::tab {
                 background-color: #202024;
                 color: #a1a1aa;
                 border: 1px solid #3f3f46;
-                border-radius: 6px;
-                padding: 8px 14px;
-                margin-right: 6px;
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 8px 16px;
+                margin-right: 3px;
                 font-weight: 500;
                 font-size: 13px;
             }
-            QTabBar::tab:last {
-                margin-right: 0px;
-            }
             QTabBar::tab:selected {
-                background-color: #27272a;
+                background-color: #18181b;
                 color: #38bdf8;
-                border-color: #38bdf8;
+                border-color: #3f3f46;
+                border-bottom: 2px solid #38bdf8;
                 font-weight: bold;
             }
             QTabBar::tab:hover:!selected {
                 background-color: #27272a;
                 color: #f4f4f5;
                 border-color: #52525b;
-            }
-            QFrame#helpContentFrame {
-                background-color: #18181b;
-                border: 1px solid #3f3f46;
-                border-radius: 6px;
             }
             QTextBrowser {
                 border: none;
@@ -303,7 +226,8 @@ class HelpDialog(QDialog):
         # -------------------------------------------------------------
         # 2. Main Tabs
         # -------------------------------------------------------------
-        self.tabs = HelpTabWidget(self)
+        self.tabs = QTabWidget(self)
+        self.tabs.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tabs.addTab(self._create_overview_tab(), "📘 Product Overview")
         self.tabs.addTab(self._create_pipeline_tab(), "🔬 Technical Pipeline & Stages")
         self.tabs.addTab(self._create_modes_tab(), "🎯 Scan Modes")
