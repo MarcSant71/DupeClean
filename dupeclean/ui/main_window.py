@@ -139,9 +139,12 @@ class MainWindow(QMainWindow):
         lbl_subtitle.setStyleSheet("font-size: 11px; color: #71717a;")
         sidebar_layout.addWidget(lbl_subtitle)
 
-        # GPU Badge (KISS: Minimalist, single line)
+        # GPU Badge (KISS: Minimalist, moldura única externa, sem bordas internas)
         gpu_box = QFrame()
-        gpu_box.setStyleSheet("background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 4px 6px;")
+        gpu_box.setStyleSheet(
+            "QFrame { background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 4px 6px; } "
+            "QLabel { border: none; background: transparent; }"
+        )
         gpu_box.setToolTip(f"{self.gpu_info.get('arch', 'RTX')} • {self.gpu_info.get('vram_gb', 0)} GB VRAM")
         gpu_layout = QHBoxLayout(gpu_box)
         gpu_layout.setContentsMargins(4, 4, 4, 4)
