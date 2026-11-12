@@ -250,11 +250,16 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(10)
 
         # 2.1 Action Bar (Compacto e Responsivo)
-        top_bar_widget = QWidget()
-        top_bar_widget.setObjectName("topActionBar")
-        top_bar = QHBoxLayout(top_bar_widget)
-        top_bar.setContentsMargins(0, 0, 0, 0)
-        top_bar.setSpacing(6)
+        top_bar_layout = QHBoxLayout()
+        top_bar_layout.setContentsMargins(0, 0, 0, 0)
+        top_bar_layout.setSpacing(8)
+
+        # Container Unificado de Ações (Estilo Segmented Card - Idêntico ao Menu Lateral)
+        actions_container = QFrame()
+        actions_container.setObjectName("topActionBarContainer")
+        actions_layout = QHBoxLayout(actions_container)
+        actions_layout.setContentsMargins(3, 3, 3, 3)
+        actions_layout.setSpacing(2)
 
         self.btn_scan = QPushButton("🔍 Scan")
         self.btn_scan.setObjectName("primaryButton")
@@ -265,8 +270,8 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_scan)
 
-        top_bar.addWidget(self.btn_scan)
-        top_bar.addWidget(self.btn_stop)
+        actions_layout.addWidget(self.btn_scan)
+        actions_layout.addWidget(self.btn_stop)
 
         # Selection Dropdown Menu
         self.btn_select_menu = QPushButton("📋 Select ▾")
@@ -313,12 +318,14 @@ class MainWindow(QMainWindow):
         self.btn_save.setToolTip("Exports duplicate list to a text file.")
         self.btn_save.clicked.connect(self._export_results)
 
-        top_bar.addWidget(self.btn_select_menu)
-        top_bar.addWidget(self.btn_move)
-        top_bar.addWidget(self.btn_delete_trash)
-        top_bar.addWidget(self.btn_delete_perm)
-        top_bar.addWidget(self.btn_save)
-        top_bar.addStretch()
+        actions_layout.addWidget(self.btn_select_menu)
+        actions_layout.addWidget(self.btn_move)
+        actions_layout.addWidget(self.btn_delete_trash)
+        actions_layout.addWidget(self.btn_delete_perm)
+        actions_layout.addWidget(self.btn_save)
+
+        top_bar_layout.addWidget(actions_container)
+        top_bar_layout.addStretch()
 
         # Botão Circular de Ajuda (?) - Alinhado no extremo direito (Identidade RadarEleitoral)
         self.btn_help = QPushButton("?")
@@ -327,9 +334,9 @@ class MainWindow(QMainWindow):
         self.btn_help.setToolTip("Help & Technical Documentation")
         self.btn_help.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_help.clicked.connect(self._open_help_dialog)
-        top_bar.addWidget(self.btn_help)
+        top_bar_layout.addWidget(self.btn_help)
 
-        right_layout.addWidget(top_bar_widget)
+        right_layout.addLayout(top_bar_layout)
 
         # 2.2 Splitter vertical: Resultados+Preview (cima) e Pastas (baixo)
         self.v_splitter = QSplitter(Qt.Orientation.Vertical)

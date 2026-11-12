@@ -127,125 +127,104 @@ QPushButton#helpButton::menu-indicator {
     image: none;
 }
 
-/* Barra de Ações Superior (Botões de Ação do Topo - Estilo Czkawka) */
-QWidget#topActionBar {
+/* Barra de Ações Superior (Container Unificado - Estilo Card do Menu Lateral) */
+QFrame#topActionBarContainer {
+    background-color: #202024;
+    border: 1px solid #2e2e33;
+    border-radius: 6px;
+    padding: 2px;
+}
+QFrame#topActionBarContainer QPushButton {
     background-color: transparent;
     border: none;
-}
-QWidget#topActionBar QPushButton {
-    background-color: #202024;
-    color: #e4e4e7;
-    border: 1px solid #333338;
-    border-radius: 5px;
+    border-radius: 4px;
     padding: 6px 12px;
+    color: #e4e4e7;
+    font-size: 13px;
     font-weight: 500;
 }
-QWidget#topActionBar QPushButton:hover {
-    background-color: #2a2a30;
-    border-color: #484852;
+QFrame#topActionBarContainer QPushButton:hover {
+    background-color: #27272a;
     color: #ffffff;
+    border: none;
 }
-QWidget#topActionBar QPushButton:pressed {
-    background-color: #18181b;
-    border-color: #2a2a30;
+QFrame#topActionBarContainer QPushButton:pressed {
+    background-color: #1c1c20;
+    color: #ffffff;
+    border: none;
 }
-QWidget#topActionBar QPushButton:disabled {
-    background-color: #18181b;
-    border: 1px solid #242428;
+QFrame#topActionBarContainer QPushButton:disabled {
+    background-color: transparent;
+    border: none;
     color: #52525b;
 }
 
-/* Botão de Ação Primária (Escanear) */
-QWidget#topActionBar QPushButton#primaryButton {
-    background-color: #0284c7;
-    border: 1px solid #0369a1;
-    color: #ffffff;
+/* Botão de Ação Primária (Scan) */
+QFrame#topActionBarContainer QPushButton#primaryButton {
+    background-color: transparent;
+    border: none;
+    color: #38bdf8;
     font-weight: bold;
 }
-QWidget#topActionBar QPushButton#primaryButton:hover {
-    background-color: #0ea5e9;
-    border-color: #38bdf8;
-}
-QWidget#topActionBar QPushButton#primaryButton:pressed {
+QFrame#topActionBarContainer QPushButton#primaryButton:hover {
     background-color: #0369a1;
-    border-color: #0284c7;
+    color: #ffffff;
+    border: none;
 }
-QWidget#topActionBar QPushButton#primaryButton:disabled {
-    background-color: #18181b;
-    border: 1px solid #242428;
+QFrame#topActionBarContainer QPushButton#primaryButton:pressed {
+    background-color: #0284c7;
+    color: #ffffff;
+    border: none;
+}
+QFrame#topActionBarContainer QPushButton#primaryButton:disabled {
+    background-color: transparent;
+    border: none;
     color: #52525b;
 }
 
 /* Botão de Parar (Stop) */
-QWidget#topActionBar QPushButton#stopButton {
-    background-color: #202024;
-    border: 1px solid #333338;
-    color: #f4f4f5;
+QFrame#topActionBarContainer QPushButton#stopButton {
+    background-color: transparent;
+    border: none;
+    color: #e4e4e7;
     font-weight: bold;
 }
-QWidget#topActionBar QPushButton#stopButton:hover {
-    background-color: #2a2a30;
-    border-color: #52525b;
+QFrame#topActionBarContainer QPushButton#stopButton:hover {
+    background-color: #27272a;
+    color: #ffffff;
+    border: none;
 }
-QWidget#topActionBar QPushButton#stopButton:pressed {
-    background-color: #18181b;
-}
-QWidget#topActionBar QPushButton#stopButton:disabled {
-    background-color: #18181b;
-    border: 1px solid #242428;
+QFrame#topActionBarContainer QPushButton#stopButton:disabled {
+    background-color: transparent;
+    border: none;
     color: #52525b;
 }
 
 /* Botão de Exclusão Permanente (Delete) */
-QWidget#topActionBar QPushButton#dangerButton {
-    background-color: #b91c1c;
-    border: 1px solid #991b1b;
-    color: #ffffff;
+QFrame#topActionBarContainer QPushButton#dangerButton {
+    background-color: transparent;
+    border: none;
+}
+QFrame#topActionBarContainer QPushButton#dangerButton:enabled {
+    background-color: transparent;
+    border: none;
+    color: #f87171;
     font-weight: bold;
 }
-QWidget#topActionBar QPushButton#dangerButton:hover {
-    background-color: #dc2626;
-    border-color: #ef4444;
-}
-QWidget#topActionBar QPushButton#dangerButton:pressed {
+QFrame#topActionBarContainer QPushButton#dangerButton:enabled:hover {
     background-color: #991b1b;
-    border-color: #7f1d1d;
+    color: #ffffff;
+    border: none;
 }
-QWidget#topActionBar QPushButton#dangerButton:disabled {
-    background-color: #18181b;
-    border: 1px solid #242428;
+QFrame#topActionBarContainer QPushButton#dangerButton:enabled:pressed {
+    background-color: #7f1d1d;
+    color: #ffffff;
+    border: none;
+}
+QFrame#topActionBarContainer QPushButton#dangerButton:disabled {
+    background-color: transparent;
+    border: none;
     color: #52525b;
-}
-
-/* Botão Circular de Ajuda (?) no TopActionBar */
-QWidget#topActionBar QPushButton#helpButton {
-    background-color: #202024;
-    border: 1px solid #333338;
-    border-radius: 14px;
-    color: #a1a1aa;
-    font-size: 13px;
-    font-weight: bold;
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 28px;
-    max-height: 28px;
-    padding: 0px;
-    text-align: center;
-}
-QWidget#topActionBar QPushButton#helpButton:hover {
-    background-color: #2a2a30;
-    border-color: #38bdf8;
-    color: #38bdf8;
-}
-QWidget#topActionBar QPushButton#helpButton:pressed {
-    background-color: #18181b;
-    border-color: #0284c7;
-    color: #0284c7;
-}
-QWidget#topActionBar QPushButton#helpButton::menu-indicator {
-    width: 0px;
-    height: 0px;
-    image: none;
 }
 
 /* Botão Quadradinho com Checkmark da Pasta de Referência */
