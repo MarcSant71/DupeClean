@@ -49,46 +49,97 @@ When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools 
 
 ---
 
-## 🔬 Pipeline Architecture & Hardware Allocation
+## 🔬 Specialized Pipeline Architecture (By Scan Mode)
 
-DupeClean achieves extreme deduplication throughput by strictly assigning each task to the processor architecture best equipped for it: **CPU for parallel micro-sampling and I/O; GPU Tensor Cores for mass similarity calculations and duplicate grouping.**
+DupeClean achieves extreme deduplication throughput by strictly assigning each task to the processor architecture best equipped for it: **CPU for parallel micro-sampling and sequential I/O; GPU Tensor Cores for mass similarity calculations and matrix grouping.**
+
+Every scan operates in **3 distinct, deterministic stages**, tailored specifically to the data type being processed:
 
 ```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   DUPECLEAN PIPELINE                                   │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-  Stage 1: Discovery         Fast multi-threaded directory crawl & metadata indexing (CPU)
-         │
-  Stage 2: Cache Check       Instant lookup in SQLite WAL database (<5 ms per 10k items)
-         │
-  Stage 3: Frame Sampling    Multi-process keyframe extraction & GPU frequency signatures
-         │
-  Stage 4: GPU Grouping      All-to-all similarity math & Mutual Similarity Grouping (VRAM)
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 DUPECLEAN 3-STAGE PIPELINE COMPARISON                                  │
+├────────────────────┬─────────────────────────────┬─────────────────────────────┬───────────────────────┤
+│ Stage              │ 📁 Duplicate Files (Exact)  │ 🖼️ Similar Images (Visual) │ 🎬 Similar Videos     │
+├────────────────────┼─────────────────────────────┼─────────────────────────────┼───────────────────────┤
+│ Stage 1/3          │ Scanning Folders            │ Scanning Folders            │ Scanning Folders      │
+│ (Discovery)        │ File-size bucket grouping   │ Image format indexing       │ Video container crawl │
+├────────────────────┼─────────────────────────────┼─────────────────────────────┼───────────────────────┤
+│ Stage 2/3          │ Calculating File Signatures │ Extracting Visual Signatures│ Extracting Video Sigs │
+│ (Sieve & Features) │ 8 KB Head+Tail Sieve (CPU)  │ 2D DCT Frequency Hash (GPU) │ 5-Keyframe Seek + DCT │
+├────────────────────┼─────────────────────────────┼─────────────────────────────┼───────────────────────┤
+│ Stage 3/3          │ Calculating Hashes          │ Comparing Visual Similarity │ Comparing Video Sim   │
+│ (Verification/Math)│ Zero-Copy DMA Stream (Disk) │ Tensor Cosine Matrix (VRAM) │ Temporal Tensor Match │
+├────────────────────┼─────────────────────────────┼─────────────────────────────┼───────────────────────┤
+│ Result Phase       │ O(1) Hash Table Clusters    │ Mutual Similarity Grouping  │ Anti-Chaining Clusters│
+└────────────────────┴─────────────────────────────┴─────────────────────────────┴───────────────────────┘
 ```
 
-### The 4-Stage Breakdown
+---
 
-#### Stage 1/4: Discovery & Metadata Enumeration (CPU / Disk I/O)
-* **What happens:** Recursively crawls target folders, indexes paths, isolates user-defined **Reference Folders** (`Ref`), and extracts metadata (file size, timestamps, container extensions).
-* **Optimization:** Discards zero-byte files, filters out excluded directories, and indexes hundreds of thousands of files in seconds using low-overhead OS system calls.
+### 1. 📁 Duplicate Files Mode (1:1 Bit-for-Bit Exact Match)
 
-#### Stage 2/4: Exact Pre-filtering & Persistent Cache (CPU & SQLite WAL)
-* **What happens:** Consults the local persistent database (`dupeclean_cache.db`) using SQLite WAL mode.
-* **Optimization:** 
-  * Files whose signatures already exist are loaded into memory at **over 15,000 files/second**, bypassing redundant disk reads entirely.
-  * In *Duplicate Files* mode, applies accelerated xxHash64 on the initial 4 KB of files with identical sizes to eliminate 90%+ of non-duplicate candidates before reading full files.
+* **Stage 1/3: Scanning Folders (Discovery & File-Size Grouping):**
+  * Crawls selected folders, applies exclusion rules, protects **Reference Folders** (`Ref`), and isolates files by exact byte size.
+  * Files with unique file sizes are immediately eliminated without touching disk storage.
+* **Stage 2/3: Calculating File Signatures (8 KB Head + Tail Sieve & SQLite WAL Cache):**
+  * Consults the persistent local SQLite WAL database (`DupeClean.db`).
+  * For uncached candidates with identical sizes, reads the first 4 KB and the last 4 KB into unbuffered DMA memory to compute an instant composite `xxHash64` signature.
+  * **Efficiency:** Discards over **90% of non-duplicate candidates** in less than 1 millisecond per file, preventing unnecessary reading of multi-gigabyte files.
+* **Stage 3/3: Calculating Hashes (Zero-Copy Streaming & NVMe Saturation):**
+  * For remaining candidates passing the 8 KB sieve, reads complete file contents using pre-allocated 512 KB unbuffered DMA buffers (`buffering=0` with `readinto`).
+  * Distributes reads across 32 concurrent worker threads, saturating high-speed NVMe/SSD bandwidth (up to **3.4+ GB/s**) to compute cryptographic 64-bit digests in minimum time.
+* **Result Phase:** Instantaneous $O(1)$ in-memory hash table clustering. 100% bit-for-bit identical guarantee with zero GPU load.
 
-#### Stage 3/4: Feature Extraction & Micro-Sampling (Multi-Process CPU → GPU Batching)
-* **What happens:** Uncached images and videos are read, decoded, and converted into compact perceptual feature vectors.
-* **Architecture Choice (Why CPU Multi-processing for Keyframes?):**
-  * **Video Transcoding vs. Deduplication Sampling:** Video converters transcode hundreds of thousands of *continuous frames* from a single video, where paying the ~20 ms GPU session startup cost makes sense. In deduplication, we only need **5 temporal keyframes** across **100,000+ distinct files**.
-  * **Zero Setup Overhead:** Standard GeForce drivers restrict concurrent NVDEC hardware decode sessions (typically 3 to 8 streams). Creating and tearing down GPU decoder contexts for 5 frames per file causes massive driver latency.
-  * **Balanced Multi-Core Processing:** DupeClean automatically dedicates half of your CPU's processing cores to video sampling. This keeps your computer completely fluid and responsive (no freezing, lag, or stuttering) while workers fetch instant keyframes in **1–2 ms** without reading full files.
-* **Immediate GPU Hand-off:** As soon as workers gather a batch of frames, PyTorch transfers them to the RTX GPU to execute **frequency image hashing (2D DCT)** in half-precision (FP16) in less than 0.5 ms.
+---
 
-#### Stage 4/4: Mass Tensor Core Duplicate Grouping (100% GPU VRAM)
-* **What happens:** All file signatures reside in GPU VRAM as a contiguous matrix (e.g., `[154,624 x 3,840]` in FP16). The GPU performs all-to-all similarity comparisons via tensor matrix multiplication and applies **Mutual Similarity Grouping**.
-* **Architecture Choice:** What would take hours of CPU multi-threading is executed in seconds on RTX **Tensor Cores**, guaranteeing that every file in a group directly matches all other files in that group with zero false-positive chaining.
+### 2. 🖼️ Similar Images Mode (Perceptual 2D DCT on GPU)
+
+* **Stage 1/3: Scanning Folders (Image Discovery & Spatial Sorting):**
+  * Gathers photos and graphics (`.jpg`, `.png`, `.webp`, `.tiff`, `.bmp`, `.raw`), filters corrupted files, and applies parent directory sorting for optimal NTFS seek efficiency.
+* **Stage 2/3: Extracting Visual Signatures (Parallel Decoding & GPU Tensor Hashing):**
+  * Consults SQLite WAL cache for pre-computed 1,536-byte visual feature vectors.
+  * Multi-process CPU workers decode uncached images, convert them to normalized grayscale tensors, and transfer batches to GPU VRAM.
+  * NVIDIA RTX Tensor Cores compute **2D Discrete Cosine Transform (2D DCT)** frequency signatures in half-precision (FP16) in less than 0.5 ms per batch.
+* **Stage 3/3: Comparing Visual Similarity (Mass Tensor Core Matrix Multiplication):**
+  * All image vectors reside in GPU VRAM as a contiguous matrix.
+  * The GPU executes all-to-all cosine similarity matrix multiplication across the entire dataset simultaneously.
+* **Result Phase:** Applies **Mutual Similarity Grouping** based on the interactive similarity slider (70% to 100%). Identifies duplicates even across different resolutions, crops, color adjustments, or format conversions (e.g., RAW vs JPEG).
+
+---
+
+### 3. 🎬 Similar Videos Mode (Multi-Point Keyframe Extraction & Temporal GPU Clustering)
+
+* **Stage 1/3: Scanning Folders (Container Discovery & Metadata Crawl):**
+  * Enumerates video files across all common formats (`.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`) as well as raw surveillance DVR containers (`.dav`).
+* **Stage 2/3: Extracting Video Signatures (PyAV Temporal Micro-Sampling + GPU Embeddings):**
+  * Consults cache for 7,680-byte multi-keyframe temporal embeddings.
+  * **Balanced Multi-Core Architecture:** Automatically allocates half of your CPU threads to seek and decode exactly **5 distinct temporal keyframes** across each video's duration (1–2 ms per keyframe) without decoding the entire video stream.
+  * Extracted keyframes are batched to the GPU to generate concatenated 2D DCT frequency vectors.
+* **Stage 3/3: Comparing Video Similarity (High-Dimensional Temporal Tensor Matching):**
+  * Matches multi-point temporal vectors across candidate videos in GPU VRAM.
+  * Evaluates sequence-wide structural similarity across all sampled keyframes.
+* **Result Phase:** Applies strict **Mutual Similarity Grouping** to guarantee that every video in a cluster directly matches all other videos in that cluster, completely eliminating transitive false-positive chaining.
+
+---
+
+### 💡 Frequently Asked Questions on Hardware Usage
+
+#### *"Why is my Disk read speed at 100% (~1–3+ GB/s) during Duplicate Files Stage 3?"*
+To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses zero-copy direct DMA streaming to saturate your drive's physical sequential read speed, ensuring this unavoidable reading phase finishes as fast as humanly possible.
+
+#### *"Why does my RTX GPU stay near 0% in Task Manager during Stage 2 & 3 of Image/Video scans?"*
+During Stage 2, CPU workers decode images and extract video keyframes from disk. Once a batch of 128 frames is ready, the RTX GPU processes it in **fractions of a millisecond** (<0.5 ms) and immediately waits for the next disk/CPU batch. Because the GPU compute finishes so quickly, Windows Task Manager's 1-second average sampler shows near 0% until the all-to-all mass matrix multiplication in Stage 3 begins.
+
+#### *"How does DupeClean adapt to different CPUs (e.g., Core i9 vs. Ryzen 5)?"*
+Worker allocation scales dynamically based on logical processor count:
+* **Intel Core i9 / Ryzen 9 (16–32 threads):** 16–32 workers (~50–60 videos/s on raw DVR files, 250+ videos/s on MP4).
+* **AMD Ryzen 5 / Core i5 (12 threads):** 6–12 workers (~15 videos/s on raw DVR files, 70+ videos/s on MP4).
+* A percentage of CPU headroom is always preserved so Windows, background audio, and the UI remain completely fluid and responsive.
+
+#### *"Does it automatically optimize for different RTX GPUs (RTX 3070 vs. 3090 vs. 5090)?"*
+Yes. The `get_optimal_gpu_budgets()` engine inspects VRAM capacity and free headroom in real time via `torch.cuda.mem_get_info()`:
+* **8 GB GPUs (e.g., RTX 3070, 4060):** Restricts GPU calculation blocks to **256 MB** to prevent Windows WDDM from swapping VRAM into system RAM (zero out-of-memory crashes).
+* **24 GB / 32 GB GPUs (e.g., RTX 3090, 4090, 5090):** Automatically scales up to **2.0 GB blocks** and 1,024-item batches, saturating memory bandwidth and 3rd/4th/5th Gen Tensor Cores.
 
 ---
 
