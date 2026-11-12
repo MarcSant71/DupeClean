@@ -74,9 +74,7 @@ class ScanWorker(QThread):
             groups: List[DuplicateGroup] = []
 
             if self.mode == ScanMode.EXACT:
-                def _exact_cb(msg: str, curr: int, tot: int):
-                    msg_lower = msg.lower()
-                    st_num = 3 if ("full hash" in msg_lower or "computing" in msg_lower) else 2
+                def _exact_cb(msg: str, curr: int, tot: int, st_num: int = 2):
                     self.progress_stage.emit(msg, curr, tot, st_num, 3)
 
                 groups = find_exact_duplicates(

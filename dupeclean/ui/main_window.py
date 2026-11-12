@@ -520,11 +520,13 @@ class MainWindow(QMainWindow):
             fraction = min(1.0, max(0.0, current / total))
             pct = 100 if current >= total else min(99, int(fraction * 100))
 
+            display_title = title
             if title == "Loading results" and getattr(self, "_is_scan_mounting", False):
                 # Mantém a coerência visual estrita do scan:
                 # Linha de cima: 'Current Stage:' avança de 0% a 100% da montagem
                 # Linha intermediária: 'All Stages:' avança proporcionalmente dos estágios anteriores até 100%
                 # Linha de baixo: 'Loading results (X / Y)...'
+                display_title = "Loading results"
                 self.lbl_stage_current.setText("Current Stage:")
                 self.lbl_stage_all.setVisible(True)
                 self.progress_all.setVisible(True)

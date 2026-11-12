@@ -57,7 +57,7 @@ def excepthook(exc_type, exc_value, exc_tb):
             None,
             "Unexpected Error - DupeClean",
             f"An unexpected critical error occurred:\n\n{exc_value}\n\n"
-            f"A sanitized error report (LGPD compliant) has been recorded in {log_file_str}."
+            f"An error report has been recorded in {log_file_str}."
         )
     except Exception:
         pass

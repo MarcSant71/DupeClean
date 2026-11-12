@@ -484,7 +484,7 @@ class HelpDialog(QDialog):
         </div>
 
         <div class="card">
-            <h3>Stage 2/3: Comparing File Signatures (Fast Sieve)</h3>
+            <h3>Stage 2/3: Calculating File Signatures (Fast Sieve)</h3>
             <p>
                 <b>What happens:</b> Reads only the initial <b>8 KB (composite prefix/suffix)</b> of files sharing identical sizes, 
                 consulting the persistent local SQLite WAL cache.
@@ -496,14 +496,14 @@ class HelpDialog(QDialog):
         </div>
 
         <div class="card">
-            <h3>Stage 3/3: Reading & Calculating File Hashes (Deep Verification)</h3>
+            <h3>Stage 3/3: Calculating Hashes (Deep Verification)</h3>
             <p>
                 <b>What happens:</b> For remaining candidates passing the 8 KB sieve, DupeClean reads file data in 
                 <b>512 KB parallel streaming blocks</b> and computes cryptographic <code>xxHash64</code> digests.
             </p>
             <p>
                 <b>Hardware Saturation:</b> Satures the sequential bandwidth of SSD RAID arrays and NVMe drives (<b>1,000+ MB/s</b>) 
-                across up to 24 concurrent worker threads, ensuring the physical reading phase finishes in the minimum possible time.
+                across up to 32 concurrent worker threads, ensuring the physical reading phase finishes in the minimum possible time.
             </p>
         </div>
 
