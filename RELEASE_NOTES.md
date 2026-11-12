@@ -1,5 +1,22 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.6
+- **Proportional Window Sizing & Window Controls for Help Dialog:**
+  - Dynamic sizing scaled to ~82% width and ~86% height of the screen/parent window (minimum 780x520), ensuring spacious reading without cramped text areas.
+  - Enabled native Windows maximize, minimize, and restore window buttons (`WindowMaximizeButtonHint`, `WindowMinimizeButtonHint`).
+- **Interactive Multi-Level Dynamic Zoom:**
+  - Added full zooming capabilities via `Ctrl + Mouse Wheel` and keyboard shortcuts (`Ctrl +`, `Ctrl -`, `Ctrl 0` to reset).
+  - Added helpful status indicator in top-bar informing users of zoom controls.
+- **Enhanced Typography & Readability:**
+  - Upgraded font sizes (`13.5px` body, `14.5px` - `17px` headings), improved line height (`1.6`), generous paragraph and section margins, and clean, high-contrast syntax highlighting for code snippets.
+  - Eliminated nested card backgrounds for clean, unified dark surfaces conforming strictly to the KISS design principle.
+- **Pixel-Perfect Authentic Connected Tabs & Grid Alignment:**
+  - Restored genuine, connected notebook tabs attached directly to the content frame with flat bases and top rounded corners.
+  - Eliminated Qt `QTabWidget::pane` corner clipping artifacts with solid, continuous 90-degree border rendering.
+  - Guaranteed 100% horizontal grid alignment across all visual elements (logo, tabs, content pane, and footer action buttons align precisely on the 18px / 862px margins).
+- **License & Documentation Refinements:**
+  - Formalized GNU General Public License v3.0 (GPLv3) licensing across headers and repository documentation.
+
 ### What's New in v1.1.5
 - **Comprehensive Help & Technical Documentation Dialog (`HelpDialog`):**
   - Integrated full technical architecture and user guide directly into the application, accessible via the top-bar `?` button.
