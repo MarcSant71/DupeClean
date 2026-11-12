@@ -272,7 +272,7 @@ class MainWindow(QMainWindow):
         actions_layout.addWidget(self.btn_stop)
 
         # Selection Dropdown Menu
-        self.btn_select_menu = QPushButton("📋 Select ▾")
+        self.btn_select_menu = QPushButton("📋 Select")
         menu_select = QMenu(self)
         menu_select.addAction("Select Duplicates (Smart)", lambda: self.results_widget.select_smart_duplicates())
         menu_select.addSeparator()
