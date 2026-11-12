@@ -122,7 +122,7 @@ class MainWindow(QMainWindow):
         # -------------------------------------------------------------
         sidebar_widget = QWidget()
         sidebar_widget.setObjectName("sidebarContainer")
-        sidebar_widget.setFixedWidth(260)
+        sidebar_widget.setFixedWidth(220)
         sidebar_layout = QVBoxLayout(sidebar_widget)
         sidebar_layout.setContentsMargins(10, 15, 10, 15)
         sidebar_layout.setSpacing(10)
@@ -264,7 +264,7 @@ class MainWindow(QMainWindow):
         self.btn_scan = QPushButton("🔍 Scan")
         self.btn_scan.clicked.connect(self._start_scan)
 
-        self.btn_stop = QPushButton("⏹ Stop")
+        self.btn_stop = QPushButton("🛑 Stop")
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_scan)
 
