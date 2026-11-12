@@ -1,5 +1,10 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.10
+- **Polished Portable Distribution Layout (`lib/`):**
+  - Customized PyInstaller's internal contents directory structure from the default `_internal` to standard `lib/` (`contents_directory='lib'`).
+  - Standalone portable archive now presents a clean, elegant two-item top-level structure: `DupeClean.exe` alongside the `lib/` dependencies directory.
+
 ### What's New in v1.1.9
 - **Technical Documentation & In-App Help Synchronization:**
   - Synchronized in-app Help Dialog with latest physical NVMe benchmark performance, documenting sustained sequential read speeds up to **3.4+ GB/s** via unbuffered zero-copy DMA streaming (`buffering=0` with `readinto`).
