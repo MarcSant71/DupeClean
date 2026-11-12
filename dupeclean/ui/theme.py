@@ -261,12 +261,12 @@ QWidget#sidebarContainer {
     border-right: 1px solid #2e2e33;
 }
 
-/* Barra Lateral de Modos (Caixa Única Envolvendo os 3 Modos) */
+/* Barra Lateral de Modos (Caixa Única Envolvendo os 3 Modos - Estilo Czkawka) */
 QListWidget#sidebarModes {
     background-color: #202024;
     border: 1px solid #2e2e33;
     border-radius: 6px;
-    padding: 2px;
+    padding: 3px;
     outline: none;
     font-size: 13px;
     font-weight: 500;
@@ -280,22 +280,26 @@ QListWidget#sidebarModes:focus {
     outline: none;
 }
 QListWidget#sidebarModes::item {
-    padding: 9px 12px;
+    padding: 8px 10px 8px 14px;
     background-color: transparent;
     border: none;
     border-radius: 4px;
     color: #e4e4e7;
-    margin: 1px;
+    margin: 1px 0px;
 }
 QListWidget#sidebarModes::item:hover {
     background-color: #27272a;
     color: #ffffff;
 }
 QListWidget#sidebarModes::item:selected {
-    background-color: #2c2c34;
-    color: #38bdf8;
+    background-color: #242429;
+    color: #ffffff;
     border: none;
     font-weight: bold;
+}
+QListWidget#sidebarModes::item:selected:hover {
+    background-color: #28282e;
+    color: #ffffff;
 }
 QListWidget#sidebarModes::item:disabled {
     color: #52525b;

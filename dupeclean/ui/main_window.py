@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import send2trash
 
-from PySide6.QtCore import Qt, Slot, QTimer, QSize, QUrl
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont, QPen, QColor, QDesktopServices
+from PySide6.QtCore import Qt, Slot, QTimer, QSize, QUrl, QRectF
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont, QPen, QColor, QDesktopServices, QBrush
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QListWidget,
     QListWidgetItem, QPushButton, QLabel, QSlider, QProgressBar,
     QMessageBox, QFileDialog, QSplitter, QFrame, QSizePolicy, QMenu,
-    QApplication, QStyledItemDelegate
+    QApplication, QStyledItemDelegate, QStyle, QStyleOptionViewItem
 )
 
 from dupeclean import __version__
@@ -34,17 +34,26 @@ from dupeclean.worker import ScanWorker, FileActionWorker
 
 
 class ModeItemDelegate(QStyledItemDelegate):
-    """Desenha divisores sutis entre os modos de escaneamento, exceto no último item."""
+    """Renderiza a pílula vertical cinza de seleção ativa (estilo Czkawka) na margem esquerda."""
 
     def paint(self, painter, option, index):
-        super().paint(painter, option, index)
-        # Se não for o último elemento da lista, desenha a linha divisória sutil
-        if index.row() < index.model().rowCount() - 1:
+        opt = QStyleOptionViewItem(option)
+        # Suprime o indicador nativo do Windows 11 para desenhar a pílula limpa
+        opt.state &= ~QStyle.StateFlag.State_HasFocus
+        super().paint(painter, opt, index)
+
+        # Se o item estiver selecionado, desenha a pílula vertical cinza sutil na margem esquerda
+        if option.state & QStyle.StateFlag.State_Selected:
             painter.save()
-            divider_color = QColor("#222226") if (option.widget and not option.widget.isEnabled()) else QColor("#2e2e33")
-            painter.setPen(QPen(divider_color, 1))
-            y = option.rect.bottom()
-            painter.drawLine(option.rect.left() + 6, y, option.rect.right() - 6, y)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            indicator_color = QColor("#71717a") if (option.widget and option.widget.isEnabled()) else QColor("#3f3f46")
+            painter.setBrush(QBrush(indicator_color))
+            pill_width = 3.0
+            pill_height = max(14.0, float(option.rect.height() - 14.0))
+            pill_x = float(option.rect.left() + 2)
+            pill_y = float(option.rect.top() + (option.rect.height() - pill_height) / 2.0)
+            painter.drawRoundedRect(QRectF(pill_x, pill_y, pill_width, pill_height), 1.5, 1.5)
             painter.restore()
 
 
