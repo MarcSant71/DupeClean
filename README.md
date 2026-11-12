@@ -55,24 +55,12 @@ DupeClean achieves extreme deduplication throughput by strictly assigning each t
 
 Every scan operates in **3 distinct, deterministic stages**, tailored specifically to the data type being processed:
 
-```
-┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                 DUPECLEAN 3-STAGE PIPELINE COMPARISON                                  │
-├────────────────────┬─────────────────────────────┬─────────────────────────────┬───────────────────────┤
-│ Stage              │ 📁 Duplicate Files (Exact)  │ 🖼️ Similar Images (Visual) │ 🎬 Similar Videos     │
-├────────────────────┼─────────────────────────────┼─────────────────────────────┼───────────────────────┤
-│ Stage 1/3          │ Scanning Folders            │ Scanning Folders            │ Scanning Folders      │
-│ (Discovery)        │ File-size bucket grouping   │ Image format indexing       │ Video container crawl │
-├────────────────────┼─────────────────────────────┼─────────────────────────────┼───────────────────────┤
-│ Stage 2/3          │ Calculating File Signatures │ Extracting Visual Signatures│ Extracting Video Sigs │
-│ (Sieve & Features) │ 8 KB Head+Tail Sieve (CPU)  │ 2D DCT Frequency Hash (GPU) │ 5-Keyframe Seek + DCT │
-├────────────────────┼─────────────────────────────┼─────────────────────────────┼───────────────────────┤
-│ Stage 3/3          │ Calculating Hashes          │ Comparing Visual Similarity │ Comparing Video Sim   │
-│ (Verification/Math)│ Zero-Copy DMA Stream (Disk) │ Tensor Cosine Matrix (VRAM) │ Temporal Tensor Match │
-├────────────────────┼─────────────────────────────┼─────────────────────────────┼───────────────────────┤
-│ Result Phase       │ O(1) Hash Table Clusters    │ Mutual Similarity Grouping  │ Anti-Chaining Clusters│
-└────────────────────┴─────────────────────────────┴─────────────────────────────┴───────────────────────┘
-```
+| Stage | 📁 Duplicate Files (Exact) | 🖼️ Similar Images (Visual) | 🎬 Similar Videos (Temporal) |
+| :--- | :--- | :--- | :--- |
+| **Stage 1/3**<br>*(Discovery)* | **Scanning Folders**<br>Exact file-size bucket grouping | **Scanning Folders**<br>Image format indexing & spatial sort | **Scanning Folders**<br>Video container & DVR crawl |
+| **Stage 2/3**<br>*(Sieve & Signatures)* | **Calculating File Signatures**<br>8 KB Head+Tail composite sieve | **Extracting Visual Signatures**<br>2D DCT Frequency Hash (GPU FP16) | **Extracting Video Signatures**<br>5-Keyframe Micro-Seek (PyAV + GPU) |
+| **Stage 3/3**<br>*(Verification & Math)* | **Calculating Hashes**<br>Streaming DMA reads (up to 3.4+ GB/s) | **Comparing Visual Similarity**<br>All-to-all Cosine Matrix (VRAM) | **Comparing Video Similarity**<br>Temporal Tensor Core Matching |
+| **Result Phase** | **$O(1)$ Hash Table Grouping**<br>Bit-for-bit identical clusters | **Mutual Similarity Grouping**<br>Perceptual clusters (70%–100% slider)| **Mutual Similarity Grouping**<br>Strict anti-chaining cluster isolation |
 
 ---
 
