@@ -319,10 +319,10 @@ def find_exact_duplicates(
                         if is_full:
                             rec.hash_value = h
                             by_full_hash[(rec.size, h)].append(rec)
-                            cache_writer.add((str(rec.path), rec.size, rec.mtime, h, h))
+                            cache_writer.add((str(rec.path), rec.size, rec.mtime, h, h, rec.volume_id, rec.file_id))
                         else:
                             by_header_hash[(rec.size, h)].append(rec)
-                            cache_writer.add((str(rec.path), rec.size, rec.mtime, h, None))
+                            cache_writer.add((str(rec.path), rec.size, rec.mtime, h, None, rec.volume_id, rec.file_id))
 
                     now = time.perf_counter()
                     if progress_callback and (now - last_progress_time >= 0.1 or header_processed % 256 == 0):
@@ -446,7 +446,7 @@ def find_exact_duplicates(
                     if res is not None:
                         rec, h = res
                         by_full_hash[(rec.size, h)].append(rec)
-                        cache_writer.add((str(rec.path), rec.size, rec.mtime, None, h))
+                        cache_writer.add((str(rec.path), rec.size, rec.mtime, None, h, rec.volume_id, rec.file_id))
 
                     now = time.perf_counter()
                     if progress_callback and (now - last_progress_time >= 0.1 or deep_processed % 128 == 0):

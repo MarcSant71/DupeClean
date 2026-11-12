@@ -21,7 +21,7 @@ av.logging.set_level(av.logging.PANIC)
 
 from dupeclean.core.models import FileRecord
 from dupeclean.core.hasher_image import _get_dct_matrix
-from dupeclean.core.cache import CacheManager
+from dupeclean.core.cache import CacheManager, compute_prefix_hash
 
 # Dimensão dos quadros e frequência para assinatura temporal de vídeos
 VIDEO_IMG_SIZE = 64
@@ -357,6 +357,8 @@ def extract_video_embeddings(
                         p_str, duration, frames_arr = res
                         rec = path_to_rec.get(p_str)
                         if rec is not None:
+                            if rec.prefix_hash is None:
+                                rec.prefix_hash = compute_prefix_hash(rec.path, rec.size)
                             expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
                             if frames_arr is None or duration == -1.0 or getattr(frames_arr, "shape", None) != expected_shape:
                                 # Grava tombstone no SQLite para nunca mais tentar reprocessar este arquivo corrompido
@@ -365,7 +367,10 @@ def extract_video_embeddings(
                                     rec.size,
                                     rec.mtime,
                                     -1.0,
-                                    b""
+                                    b"",
+                                    rec.volume_id,
+                                    rec.file_id,
+                                    rec.prefix_hash
                                 ))
                             else:
                                 rec.duration = duration
@@ -400,7 +405,10 @@ def extract_video_embeddings(
                                     b_rec.size,
                                     b_rec.mtime,
                                     b_dur,
-                                    norm_cpu_np[b_i:b_i + 1].tobytes()
+                                    norm_cpu_np[b_i:b_i + 1].tobytes(),
+                                    b_rec.volume_id,
+                                    b_rec.file_id,
+                                    b_rec.prefix_hash
                                 ))
 
                             batch_records.clear()

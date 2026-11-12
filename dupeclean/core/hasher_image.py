@@ -14,7 +14,7 @@ import torch
 import numpy as np
 
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
-from dupeclean.core.cache import CacheManager
+from dupeclean.core.cache import CacheManager, compute_prefix_hash
 
 # Parâmetros de extração de assinaturas visuais de alta discriminação
 IMG_SIZE = 64
@@ -197,6 +197,8 @@ def extract_image_embeddings(
             if stop_event.is_set() or (stop_check and stop_check()):
                 break
             try:
+                if rec.prefix_hash is None:
+                    rec.prefix_hash = compute_prefix_hash(rec.path, rec.size)
                 with Image.open(rec.path) as img:
                     img.draft("RGB", (IMG_SIZE, IMG_SIZE))
                     rgb = img.convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.Resampling.BILINEAR)
@@ -271,7 +273,7 @@ def extract_image_embeddings(
 
                             norm_cpu_np = normalized.cpu().numpy()
                             new_entries = [
-                                (str(b_rec.path), b_rec.size, b_rec.mtime, norm_cpu_np[b_idx:b_idx + 1].tobytes())
+                                (str(b_rec.path), b_rec.size, b_rec.mtime, norm_cpu_np[b_idx:b_idx + 1].tobytes(), b_rec.volume_id, b_rec.file_id, b_rec.prefix_hash)
                                 for b_idx, b_rec in enumerate(batch_records)
                             ]
                             cache_writer.add_batch(new_entries)

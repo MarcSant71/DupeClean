@@ -28,6 +28,9 @@ class FileRecord:
     is_reference: bool = False
     name: str = ""
     ext: str = ""
+    volume_id: int = 0
+    file_id: int = 0
+    prefix_hash: Optional[str] = None
     hash_value: Optional[str] = None
     embedding: Optional[Any] = None  # torch.Tensor na GPU ou CPU
     duration: Optional[float] = None

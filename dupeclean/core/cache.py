@@ -14,8 +14,35 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Callable
 import numpy as np
 import torch
+import xxhash
 
 from dupeclean.core.models import FileRecord, ScanMode, ScanPath
+
+
+def compute_prefix_hash(path: Path, size: int) -> Optional[str]:
+    """
+    Calcula a assinatura rápida (Head 4KB + Tail 4KB ou <=8KB total) via xxHash64.
+    Utilizada para o Tier 3 (L3 Content Sieve) em volumes exFAT/FAT32 ou cópias entre unidades.
+    """
+    try:
+        with open(path, "rb") as f:
+            if size <= 8192:
+                data = f.read(8192)
+                return xxhash.xxh64(data).hexdigest()
+            else:
+                head = f.read(4096)
+                try:
+                    f.seek(-4096, os.SEEK_END)
+                    tail = f.read(4096)
+                except OSError:
+                    tail = b""
+                h = xxhash.xxh64()
+                h.update(head)
+                if tail:
+                    h.update(tail)
+                return h.hexdigest()
+    except (OSError, PermissionError):
+        return None
 
 
 def get_default_cache_db_path() -> Path:
@@ -97,14 +124,19 @@ class CacheManager:
                     size INTEGER NOT NULL,
                     mtime REAL NOT NULL,
                     prefix_hash TEXT,
-                    full_hash TEXT
+                    full_hash TEXT,
+                    volume_id INTEGER DEFAULT 0,
+                    file_id INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS cache_images (
                     path TEXT PRIMARY KEY,
                     size INTEGER NOT NULL,
                     mtime REAL NOT NULL,
-                    embedding BLOB NOT NULL
+                    embedding BLOB NOT NULL,
+                    volume_id INTEGER DEFAULT 0,
+                    file_id INTEGER DEFAULT 0,
+                    prefix_hash TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS cache_videos (
@@ -112,7 +144,10 @@ class CacheManager:
                     size INTEGER NOT NULL,
                     mtime REAL NOT NULL,
                     duration REAL NOT NULL,
-                    embedding BLOB NOT NULL
+                    embedding BLOB NOT NULL,
+                    volume_id INTEGER DEFAULT 0,
+                    file_id INTEGER DEFAULT 0,
+                    prefix_hash TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS app_settings (
@@ -120,7 +155,36 @@ class CacheManager:
                     value TEXT NOT NULL
                 );
             """)
-            # Remove índices secundários redundantes (PRIMARY KEY já provê índice B-Tree único ótimo)
+
+            # Migração transparente de colunas para bancos pré-existentes
+            def _add_col(table: str, col: str, col_type: str):
+                cur = conn.execute(f"PRAGMA table_info({table});")
+                cols = {row[1] for row in cur.fetchall()}
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type};")
+
+            _add_col("cache_exact", "volume_id", "INTEGER DEFAULT 0")
+            _add_col("cache_exact", "file_id", "INTEGER DEFAULT 0")
+
+            _add_col("cache_images", "volume_id", "INTEGER DEFAULT 0")
+            _add_col("cache_images", "file_id", "INTEGER DEFAULT 0")
+            _add_col("cache_images", "prefix_hash", "TEXT")
+
+            _add_col("cache_videos", "volume_id", "INTEGER DEFAULT 0")
+            _add_col("cache_videos", "file_id", "INTEGER DEFAULT 0")
+            _add_col("cache_videos", "prefix_hash", "TEXT")
+
+            # Índices parciais de altíssima performance para L2 (File ID) e L3 (Prefix Hash)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_exact_fileid ON cache_exact(file_id, volume_id) WHERE file_id != 0;")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_exact_prefix ON cache_exact(size, prefix_hash) WHERE prefix_hash IS NOT NULL;")
+
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_images_fileid ON cache_images(file_id, volume_id) WHERE file_id != 0;")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_images_prefix ON cache_images(size, prefix_hash) WHERE prefix_hash IS NOT NULL;")
+
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_fileid ON cache_videos(file_id, volume_id) WHERE file_id != 0;")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_prefix ON cache_videos(size, prefix_hash) WHERE prefix_hash IS NOT NULL;")
+
+            # Remove índices secundários obsoletos
             conn.execute("DROP INDEX IF EXISTS idx_exact_lookup;")
             conn.execute("DROP INDEX IF EXISTS idx_images_lookup;")
             conn.execute("DROP INDEX IF EXISTS idx_videos_lookup;")
@@ -236,6 +300,9 @@ class CacheManager:
     ) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
         """
         Retorna dicionário {caminho: (prefix_hash, full_hash)} para registros válidos.
+        Executa arquitetura tríbrida:
+        - L1: Verificação direta por caminho + tamanho + mtime (zero I/O).
+        - L2: Resiliência NTFS por File ID (st_dev + st_ino) quando movido/renomeado.
         Invalida caso o tamanho ou mtime tenham mudado. Suporta cancelamento atômico via stop_check.
         """
         results: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
@@ -244,6 +311,7 @@ class CacheManager:
 
         chunk_size = 900
         with self._get_connection() as conn:
+            # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
             for i in range(0, len(records), chunk_size):
                 if stop_check and stop_check():
                     return results
@@ -251,31 +319,71 @@ class CacheManager:
                 placeholders = ",".join("?" for _ in chunk)
                 paths = [str(r.path) for r in chunk]
                 cursor = conn.execute(
-                    f"SELECT path, size, mtime, prefix_hash, full_hash FROM cache_exact WHERE path IN ({placeholders})",
+                    f"SELECT path, size, mtime, prefix_hash, full_hash, volume_id, file_id FROM cache_exact WHERE path IN ({placeholders})",
                     paths
                 )
                 record_map = {str(r.path): r for r in chunk}
                 for row in cursor.fetchall():
-                    c_path, c_size, c_mtime, p_hash, f_hash = row
+                    c_path, c_size, c_mtime, p_hash, f_hash, c_vol_id, c_f_id = row
                     rec = record_map.get(c_path)
                     if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
                         results[c_path] = (p_hash, f_hash)
+
+            # 2. Tier 2 (L2 - NTFS File ID): Resiliência a pastas e arquivos renomeados/movidos no mesmo volume
+            uncached = [r for r in records if str(r.path) not in results and r.volume_id > 0 and r.file_id > 0]
+            if uncached and not (stop_check and stop_check()):
+                for i in range(0, len(uncached), chunk_size):
+                    if stop_check and stop_check():
+                        return results
+                    chunk = uncached[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    file_ids = [r.file_id for r in chunk]
+                    l2_map = {(r.file_id, r.volume_id): r for r in chunk}
+                    cursor = conn.execute(
+                        f"SELECT path, size, mtime, prefix_hash, full_hash, volume_id, file_id FROM cache_exact WHERE file_id IN ({placeholders})",
+                        file_ids
+                    )
+                    for row in cursor.fetchall():
+                        c_path, c_size, c_mtime, p_hash, f_hash, c_vol_id, c_f_id = row
+                        rec = l2_map.get((c_f_id, c_vol_id))
+                        if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
+                            new_path_str = str(rec.path)
+                            results[new_path_str] = (p_hash, f_hash)
+                            conn.execute("""
+                                INSERT INTO cache_exact (path, size, mtime, prefix_hash, full_hash, volume_id, file_id)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(path) DO UPDATE SET
+                                    size=excluded.size, mtime=excluded.mtime,
+                                    prefix_hash=excluded.prefix_hash, full_hash=excluded.full_hash,
+                                    volume_id=excluded.volume_id, file_id=excluded.file_id;
+                            """, (new_path_str, rec.size, rec.mtime, p_hash, f_hash, rec.volume_id, rec.file_id))
+                            if c_path != new_path_str:
+                                conn.execute("DELETE FROM cache_exact WHERE path = ?;", (c_path,))
         return results
 
-    def save_exact_batch(self, entries: List[Tuple[str, int, float, Optional[str], Optional[str]]]):
+    def save_exact_batch(self, entries: List[Tuple]):
         """Salva ou atualiza hashes em lote no cache exato."""
         if not entries:
             return
+        norm_entries = []
+        for e in entries:
+            if len(e) >= 7:
+                norm_entries.append(e[:7])
+            else:
+                norm_entries.append((e[0], e[1], e[2], e[3], e[4], 0, 0))
+
         with self._get_connection() as conn:
             conn.executemany("""
-                INSERT INTO cache_exact (path, size, mtime, prefix_hash, full_hash)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO cache_exact (path, size, mtime, prefix_hash, full_hash, volume_id, file_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     size=excluded.size,
                     mtime=excluded.mtime,
                     prefix_hash=COALESCE(excluded.prefix_hash, cache_exact.prefix_hash),
-                    full_hash=COALESCE(excluded.full_hash, cache_exact.full_hash);
-            """, entries)
+                    full_hash=COALESCE(excluded.full_hash, cache_exact.full_hash),
+                    volume_id=CASE WHEN excluded.volume_id != 0 THEN excluded.volume_id ELSE cache_exact.volume_id END,
+                    file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_exact.file_id END;
+            """, norm_entries)
 
     # -------------------------------------------------------------------------
     # 2. Cache para Modo IMAGENS (Embeddings 2D-DCT FP16)
@@ -291,6 +399,10 @@ class CacheManager:
         """
         Retorna dicionário {caminho: embedding_bytes} para imagens com cache válido.
         Valida tamanho em bytes do embedding para garantir compatibilidade estrutural.
+        Executa arquitetura tríbrida:
+        - L1: Verificação direta por caminho + tamanho + mtime (zero I/O).
+        - L2: Resiliência NTFS por File ID (st_dev + st_ino) quando movido/renomeado no mesmo volume.
+        - L3: Content Sieve por tamanho + prefix_hash (xxHash64) para exFAT, FAT32 ou cópias entre volumes.
         Suporta cancelamento imediato via stop_check.
         """
         results: Dict[str, bytes] = {}
@@ -300,6 +412,7 @@ class CacheManager:
         chunk_size = 900
         total_recs = len(records)
         with self._get_connection() as conn:
+            # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
             for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
                     return results
@@ -307,12 +420,12 @@ class CacheManager:
                 placeholders = ",".join("?" for _ in chunk)
                 paths = [str(r.path) for r in chunk]
                 cursor = conn.execute(
-                    f"SELECT path, size, mtime, embedding FROM cache_images WHERE path IN ({placeholders})",
+                    f"SELECT path, size, mtime, embedding, volume_id, file_id, prefix_hash FROM cache_images WHERE path IN ({placeholders})",
                     paths
                 )
                 record_map = {str(r.path): r for r in chunk}
                 for row in cursor.fetchall():
-                    c_path, c_size, c_mtime, emb_blob = row
+                    c_path, c_size, c_mtime, emb_blob, c_vol_id, c_f_id, c_prefix = row
                     rec = record_map.get(c_path)
                     if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
                         if expected_bytes is None or len(emb_blob) == expected_bytes:
@@ -322,21 +435,103 @@ class CacheManager:
                     done = min(i + chunk_size, total_recs)
                     progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", done, total_recs)
 
+            # 2. Tier 2 (L2 - NTFS File ID): Resiliência a pastas e arquivos movidos no mesmo volume
+            uncached = [r for r in records if str(r.path) not in results and r.volume_id > 0 and r.file_id > 0]
+            if uncached and not (stop_check and stop_check()):
+                for i in range(0, len(uncached), chunk_size):
+                    if stop_check and stop_check():
+                        return results
+                    chunk = uncached[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    file_ids = [r.file_id for r in chunk]
+                    l2_map = {(r.file_id, r.volume_id): r for r in chunk}
+                    cursor = conn.execute(
+                        f"SELECT path, size, mtime, embedding, volume_id, file_id, prefix_hash FROM cache_images WHERE file_id IN ({placeholders})",
+                        file_ids
+                    )
+                    for row in cursor.fetchall():
+                        c_path, c_size, c_mtime, emb_blob, c_vol_id, c_f_id, c_prefix = row
+                        rec = l2_map.get((c_f_id, c_vol_id))
+                        if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
+                            if expected_bytes is None or len(emb_blob) == expected_bytes:
+                                new_path_str = str(rec.path)
+                                results[new_path_str] = emb_blob
+                                conn.execute("""
+                                    INSERT INTO cache_images (path, size, mtime, embedding, volume_id, file_id, prefix_hash)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                    ON CONFLICT(path) DO UPDATE SET
+                                        size=excluded.size, mtime=excluded.mtime, embedding=excluded.embedding,
+                                        volume_id=excluded.volume_id, file_id=excluded.file_id,
+                                        prefix_hash=COALESCE(excluded.prefix_hash, cache_images.prefix_hash);
+                                """, (new_path_str, rec.size, rec.mtime, emb_blob, rec.volume_id, rec.file_id, c_prefix))
+                                if c_path != new_path_str:
+                                    conn.execute("DELETE FROM cache_images WHERE path = ?;", (c_path,))
+
+            # 3. Tier 3 (L3 - Content Sieve / Prefix Hash): Para exFAT, FAT32 ou cópias entre volumes
+            uncached_l3 = [r for r in records if str(r.path) not in results]
+            if uncached_l3 and not (stop_check and stop_check()):
+                candidate_sizes = list({r.size for r in uncached_l3})
+                known_sizes = set()
+                for i in range(0, len(candidate_sizes), chunk_size):
+                    chunk_s = candidate_sizes[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk_s)
+                    cur_sizes = conn.execute(
+                        f"SELECT DISTINCT size FROM cache_images WHERE prefix_hash IS NOT NULL AND size IN ({placeholders})",
+                        chunk_s
+                    )
+                    known_sizes.update(r[0] for r in cur_sizes.fetchall())
+
+                if known_sizes:
+                    sieve_candidates = [r for r in uncached_l3 if r.size in known_sizes]
+                    for rec in sieve_candidates:
+                        if stop_check and stop_check():
+                            return results
+                        p_hash = compute_prefix_hash(rec.path, rec.size)
+                        if not p_hash:
+                            continue
+                        rec.prefix_hash = p_hash
+                        cur_match = conn.execute(
+                            "SELECT embedding FROM cache_images WHERE size = ? AND prefix_hash = ? LIMIT 1;",
+                            (rec.size, p_hash)
+                        )
+                        row = cur_match.fetchone()
+                        if row:
+                            emb_blob = row[0]
+                            if expected_bytes is None or len(emb_blob) == expected_bytes:
+                                new_path_str = str(rec.path)
+                                results[new_path_str] = emb_blob
+                                conn.execute("""
+                                    INSERT INTO cache_images (path, size, mtime, embedding, volume_id, file_id, prefix_hash)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                    ON CONFLICT(path) DO UPDATE SET
+                                        size=excluded.size, mtime=excluded.mtime, embedding=excluded.embedding,
+                                        volume_id=excluded.volume_id, file_id=excluded.file_id, prefix_hash=excluded.prefix_hash;
+                                """, (new_path_str, rec.size, rec.mtime, emb_blob, rec.volume_id, rec.file_id, p_hash))
         return results
 
-    def save_image_batch(self, entries: List[Tuple[str, int, float, bytes]]):
+    def save_image_batch(self, entries: List[Tuple]):
         """Salva lote de embeddings de imagem no cache."""
         if not entries:
             return
+        norm_entries = []
+        for e in entries:
+            if len(e) >= 7:
+                norm_entries.append(e[:7])
+            else:
+                norm_entries.append((e[0], e[1], e[2], e[3], 0, 0, None))
+
         with self._get_connection() as conn:
             conn.executemany("""
-                INSERT INTO cache_images (path, size, mtime, embedding)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO cache_images (path, size, mtime, embedding, volume_id, file_id, prefix_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     size=excluded.size,
                     mtime=excluded.mtime,
-                    embedding=excluded.embedding;
-            """, entries)
+                    embedding=excluded.embedding,
+                    volume_id=CASE WHEN excluded.volume_id != 0 THEN excluded.volume_id ELSE cache_images.volume_id END,
+                    file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_images.file_id END,
+                    prefix_hash=COALESCE(excluded.prefix_hash, cache_images.prefix_hash);
+            """, norm_entries)
 
     # -------------------------------------------------------------------------
     # 3. Cache para Modo VÍDEOS (Duração + Embeddings Compostos FP16)
@@ -352,6 +547,10 @@ class CacheManager:
         """
         Retorna dicionário {caminho: (duracao, embedding_bytes)} para vídeos válidos no cache.
         Valida tamanho em bytes do embedding para garantir compatibilidade estrutural.
+        Executa arquitetura tríbrida:
+        - L1: Verificação direta por caminho + tamanho + mtime (zero I/O).
+        - L2: Resiliência NTFS por File ID (st_dev + st_ino) quando movido/renomeado no mesmo volume.
+        - L3: Content Sieve por tamanho + prefix_hash (xxHash64) para exFAT, FAT32 ou cópias entre volumes.
         Suporta cancelamento imediato via stop_check.
         """
         results: Dict[str, Tuple[float, bytes]] = {}
@@ -361,6 +560,7 @@ class CacheManager:
         chunk_size = 900
         total_recs = len(records)
         with self._get_connection() as conn:
+            # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
             for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
                     return results
@@ -368,12 +568,12 @@ class CacheManager:
                 placeholders = ",".join("?" for _ in chunk)
                 paths = [str(r.path) for r in chunk]
                 cursor = conn.execute(
-                    f"SELECT path, size, mtime, duration, embedding FROM cache_videos WHERE path IN ({placeholders})",
+                    f"SELECT path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash FROM cache_videos WHERE path IN ({placeholders})",
                     paths
                 )
                 record_map = {str(r.path): r for r in chunk}
                 for row in cursor.fetchall():
-                    c_path, c_size, c_mtime, dur, emb_blob = row
+                    c_path, c_size, c_mtime, dur, emb_blob, c_vol_id, c_f_id, c_prefix = row
                     rec = record_map.get(c_path)
                     if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
                         if dur == -1.0 and len(emb_blob) == 0:
@@ -386,22 +586,105 @@ class CacheManager:
                     done = min(i + chunk_size, total_recs)
                     progress_callback(f"Checking video cache ({done:,}/{total_recs:,})...", done, total_recs)
 
+            # 2. Tier 2 (L2 - NTFS File ID): Resiliência a pastas e arquivos movidos no mesmo volume
+            uncached = [r for r in records if str(r.path) not in results and r.volume_id > 0 and r.file_id > 0]
+            if uncached and not (stop_check and stop_check()):
+                for i in range(0, len(uncached), chunk_size):
+                    if stop_check and stop_check():
+                        return results
+                    chunk = uncached[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    file_ids = [r.file_id for r in chunk]
+                    l2_map = {(r.file_id, r.volume_id): r for r in chunk}
+                    cursor = conn.execute(
+                        f"SELECT path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash FROM cache_videos WHERE file_id IN ({placeholders})",
+                        file_ids
+                    )
+                    for row in cursor.fetchall():
+                        c_path, c_size, c_mtime, dur, emb_blob, c_vol_id, c_f_id, c_prefix = row
+                        rec = l2_map.get((c_f_id, c_vol_id))
+                        if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
+                            if (dur == -1.0 and len(emb_blob) == 0) or expected_bytes is None or len(emb_blob) == expected_bytes:
+                                new_path_str = str(rec.path)
+                                results[new_path_str] = (dur, emb_blob)
+                                conn.execute("""
+                                    INSERT INTO cache_videos (path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    ON CONFLICT(path) DO UPDATE SET
+                                        size=excluded.size, mtime=excluded.mtime, duration=excluded.duration,
+                                        embedding=excluded.embedding, volume_id=excluded.volume_id, file_id=excluded.file_id,
+                                        prefix_hash=COALESCE(excluded.prefix_hash, cache_videos.prefix_hash);
+                                """, (new_path_str, rec.size, rec.mtime, dur, emb_blob, rec.volume_id, rec.file_id, c_prefix))
+                                if c_path != new_path_str:
+                                    conn.execute("DELETE FROM cache_videos WHERE path = ?;", (c_path,))
+
+            # 3. Tier 3 (L3 - Content Sieve / Prefix Hash): Para exFAT, FAT32 ou cópias entre volumes
+            uncached_l3 = [r for r in records if str(r.path) not in results]
+            if uncached_l3 and not (stop_check and stop_check()):
+                candidate_sizes = list({r.size for r in uncached_l3})
+                known_sizes = set()
+                for i in range(0, len(candidate_sizes), chunk_size):
+                    chunk_s = candidate_sizes[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk_s)
+                    cur_sizes = conn.execute(
+                        f"SELECT DISTINCT size FROM cache_videos WHERE prefix_hash IS NOT NULL AND size IN ({placeholders})",
+                        chunk_s
+                    )
+                    known_sizes.update(r[0] for r in cur_sizes.fetchall())
+
+                if known_sizes:
+                    sieve_candidates = [r for r in uncached_l3 if r.size in known_sizes]
+                    for rec in sieve_candidates:
+                        if stop_check and stop_check():
+                            return results
+                        p_hash = compute_prefix_hash(rec.path, rec.size)
+                        if not p_hash:
+                            continue
+                        rec.prefix_hash = p_hash
+                        cur_match = conn.execute(
+                            "SELECT duration, embedding FROM cache_videos WHERE size = ? AND prefix_hash = ? LIMIT 1;",
+                            (rec.size, p_hash)
+                        )
+                        row = cur_match.fetchone()
+                        if row:
+                            dur, emb_blob = row
+                            if (dur == -1.0 and len(emb_blob) == 0) or expected_bytes is None or len(emb_blob) == expected_bytes:
+                                new_path_str = str(rec.path)
+                                results[new_path_str] = (dur, emb_blob)
+                                conn.execute("""
+                                    INSERT INTO cache_videos (path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    ON CONFLICT(path) DO UPDATE SET
+                                        size=excluded.size, mtime=excluded.mtime, duration=excluded.duration,
+                                        embedding=excluded.embedding, volume_id=excluded.volume_id, file_id=excluded.file_id,
+                                        prefix_hash=excluded.prefix_hash;
+                                """, (new_path_str, rec.size, rec.mtime, dur, emb_blob, rec.volume_id, rec.file_id, p_hash))
         return results
 
-    def save_video_batch(self, entries: List[Tuple[str, int, float, float, bytes]]):
+    def save_video_batch(self, entries: List[Tuple]):
         """Salva lote de vídeos decodificados no cache."""
         if not entries:
             return
+        norm_entries = []
+        for e in entries:
+            if len(e) >= 8:
+                norm_entries.append(e[:8])
+            else:
+                norm_entries.append((e[0], e[1], e[2], e[3], e[4], 0, 0, None))
+
         with self._get_connection() as conn:
             conn.executemany("""
-                INSERT INTO cache_videos (path, size, mtime, duration, embedding)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO cache_videos (path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     size=excluded.size,
                     mtime=excluded.mtime,
                     duration=excluded.duration,
-                    embedding=excluded.embedding;
-            """, entries)
+                    embedding=excluded.embedding,
+                    volume_id=CASE WHEN excluded.volume_id != 0 THEN excluded.volume_id ELSE cache_videos.volume_id END,
+                    file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_videos.file_id END,
+                    prefix_hash=COALESCE(excluded.prefix_hash, cache_videos.prefix_hash);
+            """, norm_entries)
 
     # -------------------------------------------------------------------------
     # 4. Estatísticas e Manutenção

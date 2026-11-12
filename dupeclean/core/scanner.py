@@ -6,9 +6,46 @@ nativos do Win32 (WIN32_FIND_DATA), eliminando roundtrips de rede via SMB/iSCSI.
 
 import os
 import time
+import ctypes
 from pathlib import Path
-from typing import List, Set, Callable, Optional
+from typing import List, Set, Callable, Optional, Dict, Tuple
 from dupeclean.core.models import ScanPath, FileRecord, ScanMode
+
+# Cache de capacidades de volume por letra de unidade (ex: 'C:\\' -> ('NTFS', True))
+_VOLUME_CAPS_CACHE: Dict[str, Tuple[str, bool]] = {}
+
+
+def get_volume_capabilities(path: Path) -> Tuple[str, bool]:
+    """
+    Detecta o sistema de arquivos do volume (ex: 'NTFS', 'ReFS', 'FAT32', 'exFAT').
+    Retorna (fs_name, supports_file_id). Cacheado em memória para custo zero.
+    """
+    try:
+        drive = os.path.splitdrive(os.path.abspath(str(path)))[0].upper()
+        if not drive:
+            return "UNKNOWN", False
+        root = drive + "\\"
+        if root in _VOLUME_CAPS_CACHE:
+            return _VOLUME_CAPS_CACHE[root]
+
+        fs_name_buf = ctypes.create_unicode_buffer(256)
+        vol_name_buf = ctypes.create_unicode_buffer(256)
+        serial = ctypes.c_ulong()
+        max_comp_len = ctypes.c_ulong()
+        flags = ctypes.c_ulong()
+        res = ctypes.windll.kernel32.GetVolumeInformationW(
+            root, vol_name_buf, 256, ctypes.byref(serial),
+            ctypes.byref(max_comp_len), ctypes.byref(flags), fs_name_buf, 256
+        )
+        if res:
+            fs_name = fs_name_buf.value.upper()
+            supports_file_id = fs_name in ("NTFS", "REFS")
+            res_tuple = (fs_name, supports_file_id)
+            _VOLUME_CAPS_CACHE[root] = res_tuple
+            return res_tuple
+    except Exception:
+        pass
+    return "UNKNOWN", False
 
 # Extensões suportadas
 IMAGE_EXTENSIONS = {
@@ -58,6 +95,7 @@ def crawl_directories(
             progress_callback(f"Scanning folders... ({total_scanned:,} files found)", total_scanned, 0)
 
         try:
+            _, supports_file_id = get_volume_capabilities(folder_path)
             with os.scandir(folder_path) as it:
                 subdirs: List[Path] = []
                 for entry in it:
@@ -99,13 +137,18 @@ def crawl_directories(
                             if size == 0:
                                 continue
 
+                            vol_id = getattr(st, "st_dev", 0) or 0
+                            f_id = (getattr(st, "st_ino", 0) or 0) if supports_file_id else 0
+
                             records.append(FileRecord(
                                 path=Path(entry.path),
                                 size=size,
                                 mtime=st.st_mtime,
                                 is_reference=is_ref,
                                 name=entry.name,
-                                ext=ext
+                                ext=ext,
+                                volume_id=vol_id,
+                                file_id=f_id,
                             ))
                             seen_paths.add(path_str)
                             total_scanned += 1
