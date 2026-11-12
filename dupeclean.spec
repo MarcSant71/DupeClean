@@ -67,6 +67,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='assets/icon.ico',
+    contents_directory='lib',
 )
 
 coll = COLLECT(
