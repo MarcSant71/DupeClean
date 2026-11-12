@@ -1159,7 +1159,7 @@ class MainWindow(QMainWindow):
             f"<b>Developer:</b> Marcelo Santos &bull; Dominio Digital<br>"
             f"<b>Contact:</b> <a style='color: #38bdf8;' href='mailto:contato@dominiodigital.dev.br'>contato@dominiodigital.dev.br</a><br>"
             f"<b>Platform:</b> Windows 10 / 11 x64 (Standalone)<br>"
-            f"<b>License:</b> MIT License</p>"
+            f"<b>License:</b> GNU General Public License v3.0 (GPLv3)</p>"
         )
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("About DupeClean")

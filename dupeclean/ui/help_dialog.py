@@ -562,7 +562,7 @@ class HelpDialog(QDialog):
             <p style="margin-bottom: 6px;">
                 <b>Product:</b> DupeClean v{dupeclean.__version__}<br>
                 <b>Platform:</b> Windows 10 / 11 x64 (Standalone Portable)<br>
-                <b>License:</b> MIT License (Open Source, Free Software)<br>
+                <b>License:</b> GNU General Public License v3.0 (GPLv3, Free Software)<br>
                 <b>GPU Acceleration:</b> NVIDIA RTX Tensor Cores, CUDA FP16 & NVDEC
             </p>
         </div>

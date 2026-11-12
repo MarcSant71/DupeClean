@@ -41,6 +41,9 @@ scratch/
 *.mp4
 *.mkv
 *.tmp
+!assets/*.png
+!assets/*.jpg
+!assets/*.ico
 
 # Operating system artifacts
 Thumbs.db

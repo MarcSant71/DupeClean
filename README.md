@@ -11,6 +11,10 @@ High-performance duplicate file, image, and video finder engineered and optimize
 > 📦 **Portable Release (No Python Installation Required):**  
 > Download the pre-built standalone package [**`DupeClean-v1.1.5-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
 
+<p align="center">
+  <img src="assets/dupeclean_main_screenshot.png" alt="DupeClean GPU Duplicate Finder Interface" width="100%">
+</p>
+
 ---
 
 ## ⚡ Why DupeClean? (DupeClean vs. Traditional Tools)
@@ -79,7 +83,7 @@ DupeClean achieves extreme deduplication throughput by strictly assigning each t
 * **Architecture Choice (Why CPU Multi-processing for Keyframes?):**
   * **Video Transcoding vs. Deduplication Sampling:** Video converters transcode hundreds of thousands of *continuous frames* from a single video, where paying the ~20 ms GPU session startup cost makes sense. In deduplication, we only need **5 temporal keyframes** across **100,000+ distinct files**.
   * **Zero Setup Overhead:** Standard GeForce drivers restrict concurrent NVDEC hardware decode sessions (typically 3 to 8 streams). Creating and tearing down GPU decoder contexts for 5 frames per file causes massive driver latency.
-  * **Parallel CPU Workers:** DupeClean allocates `(CPU Threads // 2)` isolated worker processes. In standard indexed containers (MP4, MKV, MOV), workers execute **Fast Keyframe Seek**, reading only the header index and fetching the 5 I-frames in **1–2 ms** without reading the full file.
+  * **Balanced Multi-Core Processing:** DupeClean automatically dedicates half of your CPU's processing cores to video sampling. This keeps your computer completely fluid and responsive (no freezing, lag, or stuttering) while workers fetch instant keyframes in **1–2 ms** without reading full files.
 * **Immediate GPU Hand-off:** As soon as workers gather a batch of frames, PyTorch transfers them to the RTX GPU to execute **frequency image hashing (2D DCT)** in half-precision (FP16) in less than 0.5 ms.
 
 #### Stage 4/4: Mass Tensor Core Duplicate Grouping (100% GPU VRAM)
@@ -197,3 +201,11 @@ To freeze the application into a standalone package with PyInstaller:
 ```powershell
 .\scripts\build.bat
 ```
+
+---
+
+## 📄 License
+
+Distributed under the **GNU General Public License v3.0 (GPLv3)**. See [`LICENSE`](LICENSE) for more details.
+Copyright &copy; 2026 Marcelo Santos &bull; Dominio Digital.
+
