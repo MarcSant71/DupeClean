@@ -502,7 +502,7 @@ class HelpDialog(QDialog):
                 <b>512 KB parallel streaming blocks</b> and computes cryptographic <code>xxHash64</code> digests.
             </p>
             <p>
-                <b>Hardware Saturation:</b> Satures the sequential bandwidth of SSD RAID arrays and NVMe drives (<b>1,000+ MB/s</b>) 
+                <b>Hardware Saturation:</b> Saturates the sequential bandwidth of modern NVMe and solid-state storage (<b>1,000+ MB/s</b>) 
                 across up to 32 concurrent worker threads, ensuring the physical reading phase finishes in the minimum possible time.
             </p>
         </div>
