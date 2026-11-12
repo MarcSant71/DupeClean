@@ -9,7 +9,7 @@
 High-performance duplicate file, image, and video finder engineered and optimized exclusively for **NVIDIA GeForce RTX (30, 40, and 50 Series)** GPUs with Ampere, Ada Lovelace, and Blackwell architectures.
 
 > 📦 **Portable Release (No Python Installation Required):**  
-> Download the pre-built standalone package [**`DupeClean-v1.1.8-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
+> Download the pre-built standalone package [**`DupeClean-v1.1.9-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
 
 <p align="center">
   <img src="assets/dupeclean_main_screenshot.png" alt="DupeClean GPU Duplicate Finder Interface" width="100%">
@@ -161,7 +161,7 @@ Traditional deduplicators are lightweight single-binary executables because they
 
 For 99% of users, **no installation, no Python, and no command line setup is required**:
 
-1. Download [**`DupeClean-v1.1.8-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
+1. Download [**`DupeClean-v1.1.9-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
 2. Extract the archive using [7-Zip](https://www.7-zip.org/) or WinRAR.
 3. Launch **`DupeClean.exe`** directly. Everything (Python runtime, CUDA 12 libraries, and GPU models) is pre-bundled and runs out of the box.
 

@@ -1,5 +1,13 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.9
+- **Technical Documentation & In-App Help Synchronization:**
+  - Synchronized in-app Help Dialog with latest physical NVMe benchmark performance, documenting sustained sequential read speeds up to **3.4+ GB/s** via unbuffered zero-copy DMA streaming (`buffering=0` with `readinto`).
+  - Added comprehensive hardware telemetry FAQs explaining dynamic CPU worker thread scaling (preserving operating system headroom) and adaptive GPU VRAM block management (256 MB caps on 8 GB cards to prevent WDDM paging vs. 2.0 GB blocks on 24/32 GB RTX cards).
+  - Documented interactive rich-text viewer zoom shortcuts (`Ctrl + Scroll`, `Ctrl + / -`, and `Ctrl 0` to reset) in the Help shortcuts reference.
+- **Repository Documentation Clean-Up:**
+  - Eliminated redundant hardware telemetry FAQ blocks in project documentation.
+
 ### What's New in v1.1.8
 - **Refined Action Bar & Unified Card Aesthetics:**
   - Restyled the top action bar into a single framed container matching the exact visual styling of the sidebar modes (`#202024` surface, `#2e2e33` subtle border, 6px radius).
