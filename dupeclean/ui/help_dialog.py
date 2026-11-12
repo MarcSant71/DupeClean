@@ -30,8 +30,8 @@ class HelpDialog(QDialog):
         super().__init__(parent)
         self.gpu_info = gpu_info or {}
         self.setWindowTitle(f"DupeClean v{dupeclean.__version__} - Help & Technical Guide")
-        self.resize(860, 620)
-        self.setMinimumSize(720, 500)
+        self.resize(920, 660)
+        self.setMinimumSize(780, 540)
         self._init_ui()
 
     def _init_ui(self):
@@ -53,10 +53,10 @@ class HelpDialog(QDialog):
                 border-bottom: none;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
-                padding: 8px 16px;
+                padding: 9px 18px;
                 margin-right: 3px;
                 font-weight: 500;
-                font-size: 12px;
+                font-size: 13px;
             }
             QTabBar::tab:selected {
                 background-color: #18181b;
@@ -104,17 +104,17 @@ class HelpDialog(QDialog):
         header.setSpacing(10)
 
         lbl_logo = QLabel("⚡")
-        lbl_logo.setStyleSheet("font-size: 26px;")
+        lbl_logo.setStyleSheet("font-size: 28px;")
         header.addWidget(lbl_logo)
 
         title_vbox = QVBoxLayout()
         title_vbox.setSpacing(2)
 
         lbl_title = QLabel("DupeClean")
-        lbl_title.setStyleSheet("font-size: 20px; font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;")
+        lbl_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;")
 
         lbl_desc = QLabel("GPU-Accelerated Duplicate File, Image & Video Finder")
-        lbl_desc.setStyleSheet("font-size: 11px; color: #a1a1aa;")
+        lbl_desc.setStyleSheet("font-size: 12px; color: #a1a1aa;")
 
         title_vbox.addWidget(lbl_title)
         title_vbox.addWidget(lbl_desc)
@@ -126,7 +126,7 @@ class HelpDialog(QDialog):
         lbl_ver = QLabel(f"v{dupeclean.__version__}")
         lbl_ver.setStyleSheet(
             "background-color: #202024; color: #38bdf8; border: 1px solid #2e2e33; "
-            "border-radius: 12px; padding: 4px 10px; font-weight: bold; font-size: 11px;"
+            "border-radius: 12px; padding: 4px 12px; font-weight: bold; font-size: 12px;"
         )
         header.addWidget(lbl_ver)
 
@@ -154,7 +154,7 @@ class HelpDialog(QDialog):
         btn_repo.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_repo.setStyleSheet(
             "QPushButton { background-color: #202024; border: 1px solid #3f3f46; border-radius: 5px; "
-            "color: #e4e4e7; padding: 6px 14px; font-size: 11px; } "
+            "color: #e4e4e7; padding: 7px 16px; font-size: 12px; font-weight: 500; } "
             "QPushButton:hover { background-color: #27272a; border-color: #38bdf8; color: #38bdf8; }"
         )
         btn_repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://github.com/MarcSant71/DupeClean")))
@@ -166,7 +166,7 @@ class HelpDialog(QDialog):
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.setStyleSheet(
             "QPushButton { background-color: #0284c7; border: 1px solid #0284c7; border-radius: 5px; "
-            "color: #ffffff; padding: 6px 20px; font-weight: 600; font-size: 11px; } "
+            "color: #ffffff; padding: 7px 22px; font-weight: 600; font-size: 12px; } "
             "QPushButton:hover { background-color: #0369a1; border-color: #0369a1; }"
         )
         btn_close.clicked.connect(self.accept)
@@ -193,37 +193,37 @@ class HelpDialog(QDialog):
             <style>
                 body {{
                     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-                    font-size: 12px;
-                    line-height: 1.55;
+                    font-size: 13.5px;
+                    line-height: 1.6;
                     color: #d4d4d8;
                     background-color: #18181b;
-                    margin: 12px;
+                    margin: 14px;
                 }}
                 h2 {{
                     color: #38bdf8;
-                    font-size: 15px;
+                    font-size: 17px;
                     margin-top: 0px;
-                    margin-bottom: 8px;
+                    margin-bottom: 10px;
                     border-bottom: 1px solid #2e2e33;
-                    padding-bottom: 4px;
+                    padding-bottom: 5px;
                 }}
                 h3 {{
                     color: #fafafa;
-                    font-size: 13px;
-                    margin-top: 14px;
-                    margin-bottom: 6px;
+                    font-size: 14.5px;
+                    margin-top: 16px;
+                    margin-bottom: 8px;
                 }}
                 p {{
                     margin-top: 0px;
-                    margin-bottom: 8px;
+                    margin-bottom: 10px;
                 }}
                 ul, ol {{
                     margin-top: 0px;
-                    margin-bottom: 10px;
-                    padding-left: 20px;
+                    margin-bottom: 12px;
+                    padding-left: 22px;
                 }}
                 li {{
-                    margin-bottom: 4px;
+                    margin-bottom: 5px;
                 }}
                 code {{
                     font-family: 'Consolas', 'Cascadia Code', monospace;
@@ -231,14 +231,14 @@ class HelpDialog(QDialog):
                     color: #38bdf8;
                     border: 1px solid #2e2e33;
                     border-radius: 3px;
-                    padding: 1px 4px;
-                    font-size: 11px;
+                    padding: 2px 5px;
+                    font-size: 12.5px;
                 }}
                 .badge {{
                     display: inline-block;
-                    padding: 2px 6px;
+                    padding: 2px 7px;
                     border-radius: 4px;
-                    font-size: 10px;
+                    font-size: 11px;
                     font-weight: bold;
                 }}
                 .badge-cyan {{
@@ -255,25 +255,25 @@ class HelpDialog(QDialog):
                     background-color: #202024;
                     border: 1px solid #2e2e33;
                     border-radius: 6px;
-                    padding: 10px 14px;
-                    margin-bottom: 12px;
+                    padding: 12px 16px;
+                    margin-bottom: 14px;
                 }}
                 table {{
                     width: 100%;
                     border-collapse: collapse;
-                    margin-top: 8px;
-                    margin-bottom: 12px;
-                    font-size: 11px;
+                    margin-top: 10px;
+                    margin-bottom: 14px;
+                    font-size: 12.5px;
                 }}
                 th {{
                     background-color: #202024;
                     color: #38bdf8;
                     text-align: left;
-                    padding: 7px 10px;
+                    padding: 8px 12px;
                     border: 1px solid #2e2e33;
                 }}
                 td {{
-                    padding: 6px 10px;
+                    padding: 7px 12px;
                     border: 1px solid #27272a;
                     color: #d4d4d8;
                 }}
@@ -283,8 +283,8 @@ class HelpDialog(QDialog):
                 .callout {{
                     background-color: #182230;
                     border-left: 4px solid #38bdf8;
-                    padding: 8px 12px;
-                    margin: 8px 0px;
+                    padding: 10px 14px;
+                    margin: 10px 0px;
                     border-radius: 0 4px 4px 0;
                 }}
             </style>
