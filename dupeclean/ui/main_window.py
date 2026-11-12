@@ -360,7 +360,7 @@ class MainWindow(QMainWindow):
         # Linha 1: Current Stage
         self.lbl_stage_current = QLabel("Current Stage:")
         self.lbl_stage_current.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
-        self.lbl_stage_current.setFixedWidth(84)
+        self.lbl_stage_current.setMinimumWidth(84)
 
         self.progress_current = SmoothProgressBar()
         self.progress_current.setObjectName("progCurrent")
@@ -381,7 +381,7 @@ class MainWindow(QMainWindow):
         # Linha 2: All Stages
         self.lbl_stage_all = QLabel("All Stages:")
         self.lbl_stage_all.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
-        self.lbl_stage_all.setFixedWidth(84)
+        self.lbl_stage_all.setMinimumWidth(84)
 
         self.progress_all = SmoothProgressBar()
         self.progress_all.setObjectName("progAll")
@@ -556,13 +556,35 @@ class MainWindow(QMainWindow):
                 self.lbl_stage_all.setVisible(False)
                 self.progress_all.setVisible(False)
                 self.lbl_pct_all.setVisible(False)
-                self.lbl_stage_current.setText(f"{title}:")
+
+                # Mapeamento para títulos concisos que nunca cortam na barra superior
+                stage_label_map = {
+                    "delete": "Deleting... ",
+                    "Permanently deleting": "Deleting... ",
+                    "Deleting": "Deleting... ",
+                    "trash": "Recycling... ",
+                    "Moving to Recycle Bin": "Recycling... ",
+                    "Recycling": "Recycling... ",
+                    "move": "Moving... ",
+                    "Moving files": "Moving... ",
+                    "Moving": "Moving... ",
+                    "Selecting smart duplicates": "Selecting... ",
+                    "Applying selection rule": "Selecting... ",
+                    "Inverting selection": "Inverting... ",
+                    "Selecting all duplicates": "Selecting... ",
+                    "Unselecting all": "Unselecting... ",
+                }
+                display_title = stage_label_map.get(title, title)
+                if not (display_title.endswith("...") or display_title.endswith("... ") or display_title.endswith(":")):
+                    display_title = f"{display_title}:"
+                self.lbl_stage_current.setText(display_title)
 
             if self.progress_current.maximum() != 100 or self.progress_current.minimum() != 0:
                 self.progress_current.setRange(0, 100)
             self.progress_current.setValue(pct)
             self.lbl_pct_current.setText(f"{pct}%")
-            self.lbl_status.setText(f"{title} ({current:,} / {total:,})...")
+            clean_title = display_title.rstrip(". :")
+            self.lbl_status.setText(f"{clean_title} ({current:,} / {total:,})...")
         else:
             self.stage_widget.setVisible(False)
             self.lbl_stage_all.setVisible(True)
@@ -1002,13 +1024,13 @@ class MainWindow(QMainWindow):
         self._action_total = len(paths)
         self._set_action_busy_state(True)
 
-        verb_map = {
-            "trash": "Moving to Recycle Bin",
-            "delete": "Permanently deleting",
-            "move": "Moving files"
+        stage_verb_map = {
+            "trash": "Recycling... ",
+            "delete": "Deleting... ",
+            "move": "Moving... ",
         }
-        self._action_verb = verb_map.get(action, "Processing")
-        self._on_operation_progress(self._action_verb, 0, len(paths))
+        self._action_stage_label = stage_verb_map.get(action, "Processing... ")
+        self._on_operation_progress(self._action_stage_label, 0, len(paths))
 
         self.file_worker = FileActionWorker(paths, action, dest_dir=dest_dir, parent=self)
         self.file_worker.progress.connect(self._on_file_action_progress)
@@ -1017,8 +1039,8 @@ class MainWindow(QMainWindow):
 
     @Slot(str, "qint64", "qint64")
     def _on_file_action_progress(self, msg: str, current: int, total: int):
-        verb = getattr(self, "_action_verb", "Processing")
-        self._on_operation_progress(verb, current, total)
+        stage_label = getattr(self, "_action_stage_label", "Processing... ")
+        self._on_operation_progress(stage_label, current, total)
         self.lbl_status.setText(msg)
         if hasattr(self, "_action_start_time") and self._action_start_time:
             elapsed = time.time() - self._action_start_time

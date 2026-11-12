@@ -535,7 +535,7 @@ class ResultsWidget(QWidget):
                             child.setCheckState(0, Qt.CheckState.Unchecked)
 
                 if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Selecting smart duplicates", i + 1, total_groups)
+                    self.selection_progress.emit("Selecting... ", i + 1, total_groups)
                     QApplication.processEvents()
 
         finally:
@@ -622,7 +622,7 @@ class ResultsWidget(QWidget):
                         selected_bytes += rec.size
 
                 if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Applying selection rule", i + 1, total_groups)
+                    self.selection_progress.emit("Selecting... ", i + 1, total_groups)
                     QApplication.processEvents()
 
         finally:
@@ -662,7 +662,7 @@ class ResultsWidget(QWidget):
                             selected_bytes += file_rec.size
 
                 if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Inverting selection", i + 1, total_groups)
+                    self.selection_progress.emit("Inverting... ", i + 1, total_groups)
                     QApplication.processEvents()
         finally:
             self.tree.viewport().setUpdatesEnabled(True)
@@ -698,7 +698,7 @@ class ResultsWidget(QWidget):
                         selected_bytes += file_rec.size
 
                 if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Selecting all duplicates", i + 1, total_groups)
+                    self.selection_progress.emit("Selecting... ", i + 1, total_groups)
                     QApplication.processEvents()
         finally:
             self.tree.viewport().setUpdatesEnabled(True)
@@ -729,7 +729,7 @@ class ResultsWidget(QWidget):
                         child.setCheckState(0, Qt.CheckState.Unchecked)
 
                 if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Unselecting all", i + 1, total_groups)
+                    self.selection_progress.emit("Unselecting... ", i + 1, total_groups)
                     QApplication.processEvents()
         finally:
             self.tree.viewport().setUpdatesEnabled(True)
