@@ -1,5 +1,5 @@
 """
-Worker multithread (QThread) para escaneamento assíncrono sem congelar a interface gráfica.
+Multithreaded worker (QThread) for asynchronous scanning without freezing the GUI.
 """
 
 from pathlib import Path
@@ -19,10 +19,10 @@ from dupeclean.core.cache import CacheManager
 
 
 class ScanWorker(QThread):
-    """Executa a varredura e processamento na GPU em background com telemetria em múltiplos estágios."""
+    """Execute scanning and GPU processing in the background with multi-stage telemetry."""
     
-    progress_status = Signal(str, "qint64", "qint64")                    # (mensagem, item_atual, total_itens)
-    progress_stage = Signal(str, "qint64", "qint64", int, int)           # (mensagem, item_atual, total_itens, estagio_num, total_estagios)
+    progress_status = Signal(str, "qint64", "qint64")                    # (message, current_item, total_items)
+    progress_stage = Signal(str, "qint64", "qint64", int, int)           # (message, current_item, total_items, stage_num, total_stages)
     scan_finished = Signal(list)                               # (List[DuplicateGroup])
     scan_error = Signal(str)
 
@@ -45,10 +45,10 @@ class ScanWorker(QThread):
             total_stages = 3 if self.mode == ScanMode.EXACT else 4
             cache = CacheManager()
 
-            # No Estágio 1 (descoberta), o total é 0 para manter a animação fluida e sem ETA redundante
+            # In Stage 1 (discovery), total is 0 to keep the animation smooth without redundant ETA
             self.progress_stage.emit("Scanning folders...", 0, 0, 1, total_stages)
 
-            # 1. Rastreamento recursivo de arquivos no disco (Modo Descoberta - Estágio 1)
+            # 1. Recursive file crawling on disk (Discovery Mode - Stage 1)
             def _crawl_cb(msg: str, count: int, tot: int):
                 self.progress_stage.emit(msg, count, 0, 1, total_stages)
 
@@ -70,7 +70,7 @@ class ScanWorker(QThread):
             cache.save_folder_counts(self.scan_paths, len(records))
             self.progress_stage.emit(f"{len(records):,} files found.", len(records), len(records), 1, total_stages)
 
-            # 2. Execução conforme o Modo Selecionado com Cache Persistente e Estágios
+            # 2. Execution according to Selected Mode with Persistent Cache and Stages
             groups: List[DuplicateGroup] = []
 
             if self.mode == ScanMode.EXACT:
@@ -169,7 +169,7 @@ class ScanWorker(QThread):
 
 
 class FileActionWorker(QThread):
-    """Executa ações de arquivos (lixeira, exclusão permanente ou movimentação) em background sem congelar a UI."""
+    """Execute file actions (trash, permanent delete, or move) in the background without freezing the UI."""
 
     progress = Signal(str, "qint64", "qint64")  # (status_msg, current_count, total_count)
     finished_action = Signal(set, list)        # (deleted_paths_set, errors_list)
@@ -223,7 +223,7 @@ class FileActionWorker(QThread):
             except Exception as e:
                 errors.append(f"{path.name}: {str(e)}")
 
-            # Emite telemetria periódica (a cada 20 arquivos ou nos extremos) para manter o event loop leve e 60fps
+            # Emit periodic telemetry (every 20 files or at endpoints) to keep the event loop light at 60fps
             if idx % 20 == 0 or idx == total or idx == 1:
                 self.progress.emit(f"{verb} ({idx:,}/{total:,}) - {path.name}", idx, total)
 

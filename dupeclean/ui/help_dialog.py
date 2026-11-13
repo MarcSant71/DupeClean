@@ -39,7 +39,7 @@ class ZoomableBrowser(QTextBrowser):
         self._apply_zoom()
 
     def _apply_zoom(self) -> None:
-        """Re-renderiza o HTML escalando proporcionalmente fontes, tabelas e espaçamentos."""
+        """Re-render HTML while proportionally scaling fonts, tables, and spacing."""
         scale = 1.0 + 0.1 * self._zoom_level
         sb = self.verticalScrollBar()
         prev_max = sb.maximum()
@@ -221,21 +221,21 @@ class ZoomableBrowser(QTextBrowser):
 
 
 class HelpDialog(QDialog):
-    """Diálogo completo de ajuda, arquitetura técnica e atalhos do DupeClean."""
+    """Complete help, technical architecture, and shortcuts dialog for DupeClean."""
 
     def __init__(self, gpu_info: Optional[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
         self.gpu_info = gpu_info or {}
         self.setWindowTitle(f"DupeClean v{dupeclean.__version__} - Help & Technical Guide")
 
-        # Habilita botões nativos de Maximizar, Minimizar e Restaurar do Windows
+        # Enable native Windows Maximize, Minimize, and Restore buttons
         self.setWindowFlags(
             self.windowFlags()
             | Qt.WindowType.WindowMaximizeButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
         )
 
-        # Dimensionamento Proporcional Dinâmico (~82% da largura e ~86% da altura)
+        # Dynamic proportional sizing (~82% width and ~86% height)
         if parent:
             pw = parent.width()
             ph = parent.height()
@@ -412,7 +412,7 @@ class HelpDialog(QDialog):
 
         layout.addLayout(footer)
 
-        # Atalhos globais do diálogo para funcionar independente do widget com foco (abas, botões ou texto)
+        # Global dialog shortcuts so zoom works regardless of which widget has focus (tabs, buttons, or text)
         for seq in ("Ctrl++", "Ctrl+="):
             sc = QShortcut(QKeySequence(seq), self)
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -427,7 +427,7 @@ class HelpDialog(QDialog):
         sc_reset.activated.connect(lambda: self._apply_shortcut_zoom(0))
 
     def _apply_shortcut_zoom(self, direction: int) -> None:
-        """Aplica zoom (+1/-1/0) à aba ativa do leitor independente do foco atual."""
+        """Apply zoom (+1/-1/0) to the active reader tab regardless of current focus."""
         browser = self.tabs.currentWidget()
         if not isinstance(browser, ZoomableBrowser):
             return
@@ -439,7 +439,7 @@ class HelpDialog(QDialog):
             browser.reset_zoom()
 
     def open_tab(self, index: int):
-        """Abre o diálogo na aba especificada."""
+        """Open the dialog on the specified tab."""
         if 0 <= index < self.tabs.count():
             self.tabs.setCurrentIndex(index)
         self.exec()

@@ -23,12 +23,12 @@ from dupeclean.core.cache import (
     compute_prefix_hash_from_stream,
 )
 
-# Parâmetros de extração de assinaturas visuais de alta discriminação
+# High-discrimination visual signature extraction parameters
 IMG_SIZE = 64
 LOW_FREQ_SIZE = 16
 CHANNELS = 3
-ALPHA = 1.2  # Equalização espectral calibrada: atenua fundo estático sem amplificar ruído de compressão
-DIM_SIZE = CHANNELS * LOW_FREQ_SIZE * LOW_FREQ_SIZE  # 768 dimensões (1.536 bytes em FP16)
+ALPHA = 1.2  # Calibrated spectral whitening: attenuates static background without amplifying compression noise
+DIM_SIZE = CHANNELS * LOW_FREQ_SIZE * LOW_FREQ_SIZE  # 768 dimensions (1,536 bytes in FP16)
 _SINGLE_READ_IMAGE_THRESHOLD = 16 * 1024 * 1024  # 16 MB
 
 
@@ -46,7 +46,7 @@ def _to_opaque_rgb(img: Image.Image) -> Image.Image:
 
 
 def _decode_image_from_stream(stream) -> np.ndarray:
-    """Decodifica com correção EXIF, composição de alpha e downsampling anti-aliased."""
+    """Decode with EXIF orientation fix, alpha compositing, and anti-aliased downsampling."""
     with Image.open(stream) as img:
         img.draft("RGB", (IMG_SIZE * 2, IMG_SIZE * 2))
         try:
@@ -58,7 +58,7 @@ def _decode_image_from_stream(stream) -> np.ndarray:
 
 
 def _get_dct_matrix(n: int, device: str = "cuda", dtype=torch.float16) -> torch.Tensor:
-    """Gera matriz ortogonal de transformação DCT-II."""
+    """Generate orthogonal DCT-II transform matrix."""
     matrix = np.zeros((n, n), dtype=np.float32)
     s = math.sqrt(2.0 / n)
     s0 = math.sqrt(1.0 / n)
@@ -71,9 +71,9 @@ def _get_dct_matrix(n: int, device: str = "cuda", dtype=torch.float16) -> torch.
 
 class _AsyncImageCacheWriter:
     """
-    Escritor assíncrono em background para persistência do cache de imagens (SQLite WAL).
-    Desacopla totalmente a GPU e os workers de decodificação do banco de dados,
-    acumulando lotes em memória e commitando em uma thread dedicada sem pausar os Tensor Cores.
+    Asynchronous background writer for image cache persistence (SQLite WAL).
+    Completely decouples the GPU and decoding workers from the database,
+    accumulating batches in memory and committing on a dedicated thread without stalling Tensor Cores.
     """
     def __init__(self, cache_manager: CacheManager, batch_size: int = 1024, flush_interval: float = 0.5):
         self.cache_manager = cache_manager
@@ -133,9 +133,9 @@ def extract_image_embeddings(
     cache_manager: Optional[CacheManager] = None
 ) -> Tuple[List[FileRecord], torch.Tensor]:
     """
-    Carrega imagens em paralelo maximizando a eficiência de CPU e throughput de I/O,
+    Load images in parallel maximizing CPU efficiency and I/O throughput,
     alimenta a RTX 5090 em lotes de alto rendimento e calcula embeddings normalizados.
-    Utiliza cache SQLite persistente (WAL) para carregar instantaneamente imagens já analisadas.
+    Uses persistent SQLite cache (WAL) to load already-analyzed images instantaneously.
     Retorna (registros_validos, tensor_embeddings).
     """
     device, dtype = get_compute_device()
@@ -146,7 +146,7 @@ def extract_image_embeddings(
     if total == 0:
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
 
-    # 1. Consulta em lote ao cache persistente com telemetria contínua
+    # 1. Batch lookup in persistent cache with continuous telemetry
     def _image_cache_cb(msg: str, curr: int, tot: int):
         if progress_callback:
             progress_callback(msg, curr, tot * 2)
@@ -168,7 +168,7 @@ def extract_image_embeddings(
     cached_recs: List[FileRecord] = []
     to_process: List[FileRecord] = []
 
-    # Separa imagens já cacheadas (ignorando tombstones de b"") das que precisam de processamento
+    # Separate already-cached images (ignoring b"" tombstones) from those needing processing
     for rec in records:
         if stop_check and stop_check():
             return [], torch.empty((0, dim_size), device=device, dtype=dtype)
@@ -183,7 +183,7 @@ def extract_image_embeddings(
 
     if cached_recs:
         valid_records.extend(cached_recs)
-        # Prealoca matriz contígua em RAM de uma vez (elimina 140k micro-alocações e fragmentação)
+        # Pre-allocate contiguous matrix in RAM once (eliminates 140k micro-allocations and fragmentation)
         cached_mat = np.empty((len(cached_recs), dim_size), dtype=np.float16)
         for idx, r in enumerate(cached_recs):
             cached_mat[idx] = np.frombuffer(cached_map[str(r.path)], dtype=np.float16)
@@ -208,7 +208,7 @@ def extract_image_embeddings(
             all_embeddings_list.clear()
         return valid_records, all_embeddings
 
-    # 3. Processamento de Altíssimo Throughput: Streaming Producer-Consumer Concorrente
+    # 3. Ultra-High-Throughput Processing: Concurrent Producer-Consumer Streaming
     # Threads de CPU decodificam continuamente para uma fila delimitada em RAM,
     # enquanto a GPU (Tensor Cores) e o SQLite operam sem tempo ocioso em paralelo.
     to_process.sort(key=lambda r: str(r.path.parent))
@@ -254,7 +254,7 @@ def extract_image_embeddings(
                         arr = _decode_image_from_stream(f)
                 item = (rec, arr, False)
             except Exception:
-                # Só grava tombstone permanente se o arquivo abriu e o conteúdo falhou na decodificação
+                # Only write a permanent tombstone if the file opened and content decoding failed
                 item = (rec, None, opened_ok)
 
             while not stop_event.is_set():
@@ -278,7 +278,7 @@ def extract_image_embeddings(
             t.start()
             worker_threads.append(t)
 
-    # Consumidor: Alimenta a GPU em blocos contínuos e delega persistência para o AsyncCacheWriter
+    # Consumer: Feeds the GPU in contiguous blocks and delegates persistence to AsyncCacheWriter
     batch_records: List[FileRecord] = []
     batch_images: List[np.ndarray] = []
     tombstone_entries: List[Tuple] = []
@@ -301,18 +301,18 @@ def extract_image_embeddings(
                     elif is_tombstone:
                         tombstone_entries.append((str(rec.path), rec.size, rec.mtime, b"", rec.volume_id, rec.file_id, rec.prefix_hash))
 
-                    # Processa lote na GPU (inicia com 64 para resposta instantânea <30ms, depois escala para effective_batch)
+                    # Process batch on GPU (starts at 64 for instant <30ms response, then scales to effective_batch)
                     target_batch = 64 if processed_count < 256 else effective_batch
                     if len(batch_records) >= target_batch or processed_count == uncached_total:
                         if batch_images:
                             stacked = np.stack(batch_images)
-                            # Calcula DCT, equalização e norma L2 em FP32 para máxima precisão antes de quantizar em FP16
+                            # Compute DCT, whitening, and L2 norm in FP32 for maximum precision before quantizing to FP16
                             t_batch = torch.from_numpy(stacked).permute(0, 3, 1, 2).to(device=device, dtype=torch.float32) / 255.0
                             dct_3d = torch.matmul(dct_mat, torch.matmul(t_batch, dct_mat_t))
                             low_freq = dct_3d[:, :, :LOW_FREQ_SIZE, :LOW_FREQ_SIZE].clone()
-                            # Zera o componente DC (0,0) em cada canal RGB para comparar apenas frequências espaciais AC
+                            # Zero out the DC (0,0) component in each RGB channel to compare only AC spatial frequencies
                             low_freq[:, :, 0, 0] = 0.0
-                            # Equalização espectral (whitening): evita que fundos estáticos dominem o sujeito
+                            # Spectral equalization (whitening): prevents static backgrounds from dominating the subject
                             weighted = low_freq * spectral_weight
                             flat = weighted.reshape(weighted.shape[0], -1)
 

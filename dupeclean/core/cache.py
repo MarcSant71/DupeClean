@@ -1,7 +1,7 @@
 """
 Gerenciador de Cache Persistente (SQLite WAL).
-Armazena hashes e embeddings visuais para evitar reprocessamento desnecessário,
-permitindo escaneamentos quase instantâneos e retenção total de progresso em cancelamentos.
+Stores hashes and visual embeddings to avoid unnecessary reprocessing,
+enabling near-instant rescans and full progress retention on cancellation.
 """
 
 import json
@@ -26,7 +26,7 @@ from dupeclean.core.scanner import get_volume_capabilities
 
 
 class _CacheProgressTracker:
-    """Rastreia progresso monotônico e throttled através das múltiplas camadas de cache (L1/L2/L3)."""
+    """Track monotonic, throttled progress across multiple cache tiers (L1/L2/L3)."""
 
     def __init__(
         self,
@@ -52,7 +52,7 @@ class _CacheProgressTracker:
         sub_total: int,
         force: bool = False,
     ) -> None:
-        """Emite progresso estritamente monotônico dentro da fração [start_frac, end_frac] (limitado < total)."""
+        """Emit strictly monotonic progress within [start_frac, end_frac] (capped < total)."""
         if not self.enabled or not self._callback or sub_total <= 0:
             return
         with self._lock:
@@ -68,7 +68,7 @@ class _CacheProgressTracker:
             self._callback(sub_label, curr, self.total)
 
     def finish(self) -> None:
-        """Emite 100% do estágio de cache somente após conclusão de todas as camadas."""
+        """Emit 100% of the cache stage only after all tiers complete."""
         if not self.enabled or not self._callback:
             return
         with self._lock:
@@ -78,7 +78,7 @@ class _CacheProgressTracker:
 
 
 def _stat_record_file_id(rec: FileRecord) -> None:
-    """Coleta volume_id e file_id reais via os.stat() assumindo volume já validado."""
+    """Collect real volume_id and file_id via os.stat() assuming an already-validated volume."""
     if rec.volume_id > 0 and rec.file_id > 0:
         return
     try:
@@ -100,7 +100,7 @@ def populate_record_file_id(rec: FileRecord) -> None:
 
 
 def compute_prefix_hash_from_bytes(data: bytes) -> str:
-    """Calcula a assinatura rápida (Head 4KB + Tail 4KB ou <=8KB total) a partir de bytes em RAM."""
+    """Compute the fast signature (Head 4KB + Tail 4KB or <=8KB total) from bytes in RAM."""
     if len(data) <= 8192:
         return xxhash.xxh64(data).hexdigest()
     h = xxhash.xxh64()
@@ -110,7 +110,7 @@ def compute_prefix_hash_from_bytes(data: bytes) -> str:
 
 
 def compute_prefix_hash_from_stream(f, size: int) -> str:
-    """Calcula a assinatura rápida (Head 4KB + Tail 4KB ou <=8KB total) usando um stream já aberto."""
+    """Compute the fast signature (Head 4KB + Tail 4KB or <=8KB total) using an already-open stream."""
     if size <= 8192:
         data = f.read(8192)
         return xxhash.xxh64(data).hexdigest()
@@ -129,8 +129,8 @@ def compute_prefix_hash_from_stream(f, size: int) -> str:
 
 def compute_prefix_hash(path: Path, size: int) -> Optional[str]:
     """
-    Calcula a assinatura rápida (Head 4KB + Tail 4KB ou <=8KB total) via xxHash64.
-    Utilizada para o Tier 3 (L3 Content Sieve) em volumes exFAT/FAT32 ou cópias entre unidades.
+    Compute the fast signature (Head 4KB + Tail 4KB or <=8KB total) via xxHash64.
+    Used for Tier 3 (L3 Content Sieve) on exFAT/FAT32 volumes or cross-drive copies.
     """
     try:
         with open(path, "rb") as f:
@@ -140,7 +140,7 @@ def compute_prefix_hash(path: Path, size: int) -> Optional[str]:
 
 
 def get_default_cache_db_path() -> Path:
-    """Retorna o caminho centralizado do banco de dados DupeClean.db (pasta data/), com migração automática."""
+    """Return the centralized DupeClean.db path (data/ folder), with automatic migration."""
     if getattr(sys, "frozen", False):
         base_dir = Path(sys.executable).parent
     else:
@@ -153,7 +153,7 @@ def get_default_cache_db_path() -> Path:
         data_dir.mkdir(parents=True, exist_ok=True)
         new_db = data_dir / "DupeClean.db"
 
-        # Migração transparente do cache antigo se existir
+        # Transparent migration of legacy cache if present
         if old_cache.exists() and not new_db.exists():
             shutil.move(str(old_cache), str(new_db))
             for ext in ["-wal", "-shm"]:
@@ -175,7 +175,7 @@ def get_default_cache_db_path() -> Path:
 class CacheManager:
     """
     Gerenciador de cache SQLite de alta performance, thread-safe e resiliente a bibliotecas massivas.
-    Configurado com modo WAL, mmap I/O, commit/rollback transacional seguro e fechamento estrito de conexões.
+    Configured with WAL mode, mmap I/O, safe transactional commit/rollback, and strict connection closing.
     """
 
     def __init__(self, db_path: Optional[Path] = None):
@@ -186,14 +186,14 @@ class CacheManager:
     def _get_connection(self):
         """
         Gerenciador de contexto que garante commit em sucesso, rollback em erro
-        e fechamento obrigatório da conexão para eliminar leaks de locks no Windows.
+        and mandatory connection closing to eliminate lock leaks on Windows.
         """
         conn = sqlite3.connect(str(self.db_path), timeout=60.0)
         try:
             conn.execute("PRAGMA synchronous = NORMAL;")
             conn.execute("PRAGMA busy_timeout = 60000;")  # 60 segundos de espera para locks
-            conn.execute("PRAGMA cache_size = -64000;")   # 64 MB de cache de páginas em RAM (elimina I/O repetido)
-            conn.execute("PRAGMA temp_store = MEMORY;")   # Estruturas temporárias em memória RAM
+            conn.execute("PRAGMA cache_size = -64000;")   # 64 MB RAM page cache (eliminates repeated I/O)
+            conn.execute("PRAGMA temp_store = MEMORY;")   # Temporary structures in RAM
             conn.execute("PRAGMA mmap_size = 268435456;") # 256 MB zero-copy memory mapping
             yield conn
             conn.commit()
@@ -204,15 +204,15 @@ class CacheManager:
             conn.close()
 
     def _init_db(self) -> SchemaInitResult:
-        """Valida e adapta o schema de DupeClean.db para a versão atual via módulo db_schema."""
+        """Validate and adapt the DupeClean.db schema to the current version via db_schema."""
         return ensure_database_schema(self.db_path)
 
     # -------------------------------------------------------------------------
-    # 0. Gerenciamento de Configurações e Estado da Aplicação (app_settings)
+    # 0. Application Settings and State Management (app_settings)
     # -------------------------------------------------------------------------
 
     def save_setting(self, key: str, value: Any):
-        """Salva uma configuração ou estado (serializado em JSON se complexo)."""
+        """Save a setting or state (JSON-serialized if complex)."""
         val_str = json.dumps(value) if not isinstance(value, str) else value
         with self._get_connection() as conn:
             conn.execute(
@@ -221,7 +221,7 @@ class CacheManager:
             )
 
     def get_setting(self, key: str, default: Any = None) -> Any:
-        """Recupera uma configuração da tabela app_settings, desserializando JSON se possível."""
+        """Retrieve a setting from app_settings, deserializing JSON if possible."""
         with self._get_connection() as conn:
             cursor = conn.execute("SELECT value FROM app_settings WHERE key = ?;", (key,))
             row = cursor.fetchone()
@@ -236,13 +236,13 @@ class CacheManager:
     def estimate_file_count(self, scan_paths: List[ScanPath], mode: ScanMode) -> int:
         """
         Estima instantaneamente (em <1ms) a contagem de arquivos das pastas selecionadas
-        utilizando o histórico de escaneamentos e metadados persistentes em SQLite.
+        using scan history and persistent SQLite metadata.
         Elimina completamente o modo indeterminado (barra que fica quicando) sem tocar no disco.
         """
         if not scan_paths:
             return 0
 
-        # 1. Tenta recuperar do histórico recente de pastas em app_settings
+        # 1. Try retrieving from recent folder history in app_settings
         saved_counts = self.get_setting("last_folder_counts", {})
         total_estimate = 0
         missing_paths = []
@@ -277,7 +277,7 @@ class CacheManager:
         return total_estimate
 
     def save_folder_counts(self, scan_paths: List[ScanPath], total_count: int):
-        """Salva a última contagem de arquivos observada para as pastas escaneadas."""
+        """Save the last observed file count for scanned folders."""
         if not scan_paths or total_count <= 0:
             return
         try:
@@ -290,11 +290,11 @@ class CacheManager:
             pass
 
     # -------------------------------------------------------------------------
-    # Helpers Compartilhados (Arquitetura Tríbrida L1 -> L2 Lazy -> L3 Parallel)
+    # Shared Helpers (Tri-Hybrid Architecture L1 -> L2 Lazy -> L3 Parallel)
     # -------------------------------------------------------------------------
 
     def _table_has_rows(self, conn: sqlite3.Connection, table: str, condition: str = "1=1") -> bool:
-        """Verifica em O(1) via índice se há ao menos um registro elegível na tabela."""
+        """Check in O(1) via index whether at least one eligible record exists in the table."""
         cur = conn.execute(f"SELECT 1 FROM {table} WHERE {condition} LIMIT 1;")
         return cur.fetchone() is not None
 
@@ -307,7 +307,7 @@ class CacheManager:
         progress_range: Tuple[float, float] = (0.65, 0.80),
         progress_label: str = "Checking cache (file IDs)...",
     ) -> None:
-        """Preenche (volume_id, file_id) via os.stat() em lotes paralelos apenas onde necessário."""
+        """Populate (volume_id, file_id) via os.stat() in parallel batches only where needed."""
         if assume_supported:
             to_stat = [r for r in records if r.volume_id == 0 or r.file_id == 0]
         else:
@@ -410,7 +410,7 @@ class CacheManager:
         progress_label: str = "Checking cache",
         stop_check: Optional[Callable[[], bool]] = None,
     ) -> Set[int]:
-        """Consulta tamanhos existentes em SQLite usando o índice idx_*_size antes de tocar no disco."""
+        """Query existing sizes in SQLite using idx_*_size before touching disk."""
         candidate_sizes = list({r.size for r in records})
         known_sizes: Set[int] = set()
         chunk_size = 900
@@ -471,7 +471,7 @@ class CacheManager:
         stop_check: Optional[Callable[[], bool]] = None,
         tracker: Optional[_CacheProgressTracker] = None,
     ) -> List[FileRecord]:
-        """Seleciona misses do L1 elegíveis a NTFS/ReFS com tamanho presente no banco e coleta File ID."""
+        """Select L1 misses eligible for NTFS/ReFS with size present in DB and collect File ID."""
         if not uncached or (stop_check and stop_check()):
             return []
         if not self._table_has_rows(conn, table, "file_id != 0"):
@@ -509,7 +509,7 @@ class CacheManager:
         stale_candidates: Set[str],
         active_paths: Set[str]
     ) -> None:
-        """Remove caminhos antigos do SQLite apenas se não existirem mais no disco (protege hardlinks)."""
+        """Remove old paths from SQLite only if they no longer exist on disk (protects hardlinks)."""
         to_delete = [
             (p,) for p in stale_candidates
             if p not in active_paths and not os.path.exists(p)
@@ -528,11 +528,11 @@ class CacheManager:
         stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
         """
-        Retorna dicionário {caminho: (prefix_hash, full_hash)} para registros válidos.
+        Return dictionary {path: (prefix_hash, full_hash)} for valid records.
         Executa arquitetura L1 -> L2 Lazy:
-        - L1: Verificação direta por caminho + tamanho + mtime (zero I/O), com backfill legado.
-        - L2: Resiliência NTFS por File ID (st_dev + st_ino) sob demanda apenas para misses de L1.
-        Invalida caso o tamanho ou mtime tenham mudado. Suporta cancelamento atômico via stop_check.
+        - L1: Direct lookup by path + size + mtime (zero I/O), with legacy backfill.
+        - L2: On-demand NTFS File ID (st_dev + st_ino) resilience for L1 misses only.
+        Invalidates if size or mtime changed. Supports atomic cancellation via stop_check.
         """
         results: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
         if not records:
@@ -544,7 +544,7 @@ class CacheManager:
         tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking cache")
 
         with self._get_connection() as conn:
-            # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
+            # 1. Tier 1 (L1 - In-place Path): Fast direct path lookup
             for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
                     return results
@@ -575,7 +575,7 @@ class CacheManager:
             if backfill_recs:
                 self._backfill_l1_file_ids(conn, "cache_exact", backfill_recs, stop_check=stop_check, tracker=tracker)
 
-            # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos renomeados/movidos no mesmo volume
+            # 2. Tier 2 (L2 - NTFS File ID Lazy): Resilience for renamed/moved folders and files on the same volume
             uncached = [r for r in records if str(r.path) not in results]
             l2_candidates = self._find_l2_candidates(conn, "cache_exact", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
@@ -666,11 +666,11 @@ class CacheManager:
         stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, bytes]:
         """
-        Retorna dicionário {caminho: embedding_bytes} para imagens com cache válido.
+        Return dictionary {path: embedding_bytes} for images with valid cache.
         Valida tamanho em bytes do embedding para garantir compatibilidade estrutural.
-        Executa arquitetura tríbrida L1 -> L2 Lazy -> L3 Paralelo:
-        - L1: Verificação direta por caminho + tamanho + mtime (zero I/O), com backfill legado.
-        - L2: Resiliência NTFS por File ID (st_dev + st_ino) sob demanda para misses de L1.
+        Runs tri-hybrid architecture L1 -> L2 Lazy -> L3 Parallel:
+        - L1: Direct lookup by path + size + mtime (zero I/O), with legacy backfill.
+        - L2: On-demand NTFS File ID (st_dev + st_ino) resilience for L1 misses.
         - L3: Content Sieve paralelo por tamanho + prefix_hash (xxHash64) em lote para exFAT/outros volumes.
         Suporta cancelamento imediato via stop_check.
         """
@@ -684,7 +684,7 @@ class CacheManager:
         tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking cache")
 
         with self._get_connection() as conn:
-            # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
+            # 1. Tier 1 (L1 - In-place Path): Fast direct path lookup
             for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
                     return results
@@ -717,7 +717,7 @@ class CacheManager:
             if backfill_recs:
                 self._backfill_l1_file_ids(conn, "cache_images", backfill_recs, stop_check=stop_check, tracker=tracker)
 
-            # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos movidos no mesmo volume
+            # 2. Tier 2 (L2 - NTFS File ID Lazy): Resilience for moved folders and files on the same volume
             uncached = [r for r in records if str(r.path) not in results]
             l2_candidates = self._find_l2_candidates(conn, "cache_images", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
@@ -772,7 +772,7 @@ class CacheManager:
                     """, upserts)
                 self._cleanup_dead_paths(conn, "cache_images", stale_candidates, active_new_paths)
 
-            # 3. Tier 3 (L3 - Content Sieve Paralelo em Lote): Para exFAT, FAT32 ou cópias entre volumes
+            # 3. Tier 3 (L3 - Parallel Batch Content Sieve): For exFAT, FAT32, or cross-volume copies
             uncached_l3 = [r for r in records if str(r.path) not in results]
             if uncached_l3 and not (stop_check and stop_check()) and self._table_has_rows(conn, "cache_images", "prefix_hash IS NOT NULL"):
                 known_sizes = self._prefilter_known_sizes(
@@ -866,7 +866,7 @@ class CacheManager:
             """, norm_entries)
 
     # -------------------------------------------------------------------------
-    # 3. Cache para Modo VÍDEOS (Duração + Embeddings Compostos FP16)
+    # 3. Cache for VIDEOS Mode (Duration + FP16 Composite Embeddings)
     # -------------------------------------------------------------------------
 
     def get_video_cache(
@@ -877,11 +877,11 @@ class CacheManager:
         stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Tuple[float, bytes]]:
         """
-        Retorna dicionário {caminho: (duracao, embedding_bytes)} para vídeos válidos no cache.
+        Return dictionary {path: (duration, embedding_bytes)} for valid cached videos.
         Valida tamanho em bytes do embedding para garantir compatibilidade estrutural.
-        Executa arquitetura tríbrida L1 -> L2 Lazy -> L3 Paralelo:
-        - L1: Verificação direta por caminho + tamanho + mtime (zero I/O), com backfill legado.
-        - L2: Resiliência NTFS por File ID (st_dev + st_ino) sob demanda para misses de L1.
+        Runs tri-hybrid architecture L1 -> L2 Lazy -> L3 Parallel:
+        - L1: Direct lookup by path + size + mtime (zero I/O), with legacy backfill.
+        - L2: On-demand NTFS File ID (st_dev + st_ino) resilience for L1 misses.
         - L3: Content Sieve paralelo por tamanho + prefix_hash (xxHash64) em lote para exFAT/outros volumes.
         Suporta cancelamento imediato via stop_check.
         """
@@ -895,7 +895,7 @@ class CacheManager:
         tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking video cache")
 
         with self._get_connection() as conn:
-            # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
+            # 1. Tier 1 (L1 - In-place Path): Fast direct path lookup
             for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
                     return results
@@ -931,7 +931,7 @@ class CacheManager:
             if backfill_recs:
                 self._backfill_l1_file_ids(conn, "cache_videos", backfill_recs, stop_check=stop_check, tracker=tracker)
 
-            # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos movidos no mesmo volume
+            # 2. Tier 2 (L2 - NTFS File ID Lazy): Resilience for moved folders and files on the same volume
             uncached = [r for r in records if str(r.path) not in results]
             l2_candidates = self._find_l2_candidates(conn, "cache_videos", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
@@ -986,7 +986,7 @@ class CacheManager:
                     """, upserts)
                 self._cleanup_dead_paths(conn, "cache_videos", stale_candidates, active_new_paths)
 
-            # 3. Tier 3 (L3 - Content Sieve Paralelo em Lote): Para exFAT, FAT32 ou cópias entre volumes
+            # 3. Tier 3 (L3 - Parallel Batch Content Sieve): For exFAT, FAT32, or cross-volume copies
             uncached_l3 = [r for r in records if str(r.path) not in results]
             if uncached_l3 and not (stop_check and stop_check()) and self._table_has_rows(conn, "cache_videos", "prefix_hash IS NOT NULL"):
                 known_sizes = self._prefilter_known_sizes(
@@ -1034,7 +1034,7 @@ class CacheManager:
                             is_dav = rec.ext == ".dav" or str(rec.path).lower().endswith(".dav")
                             matched_entry = None
                             for r_mtime, dur, emb_blob in candidates_row:
-                                # Arquivos .dav pré-alocados de CFTV exigem proximidade de mtime para evitar colisão de container vazio
+                                # Pre-allocated CCTV .dav files require mtime proximity to avoid empty-container collisions
                                 if is_dav and abs(rec.mtime - r_mtime) > 2.0:
                                     continue
                                 matched_entry = (dur, emb_blob)
@@ -1069,7 +1069,7 @@ class CacheManager:
         return results
 
     def save_video_batch(self, entries: List[Tuple]):
-        """Salva lote de vídeos decodificados no cache."""
+        """Save batch of decoded videos to cache."""
         if not entries:
             return
         norm_entries = []
@@ -1094,7 +1094,7 @@ class CacheManager:
             """, norm_entries)
 
     # -------------------------------------------------------------------------
-    # 4. Estatísticas e Manutenção
+    # 4. Statistics and Maintenance
     # -------------------------------------------------------------------------
 
     def get_stats(self) -> Dict[str, Any]:
@@ -1117,7 +1117,7 @@ class CacheManager:
             pass
 
     def clear(self, mode: Optional[ScanMode] = None):
-        """Limpa dados do cache para um modo específico ou para todos."""
+        """Clear cached data for a specific mode or for all modes."""
         with self._get_connection() as conn:
             if mode == ScanMode.EXACT:
                 conn.execute("DELETE FROM cache_exact;")
@@ -1130,7 +1130,7 @@ class CacheManager:
                 conn.execute("DELETE FROM cache_images;")
                 conn.execute("DELETE FROM cache_videos;")
 
-        # VACUUM deve ser executado fora de transação em conexão limpa
+        # VACUUM must run outside a transaction on a clean connection
         conn = sqlite3.connect(str(self.db_path), timeout=60.0)
         try:
             conn.isolation_level = None

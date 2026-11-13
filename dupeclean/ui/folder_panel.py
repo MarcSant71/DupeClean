@@ -16,7 +16,7 @@ from dupeclean.core.models import ScanPath
 
 
 class DropTableWidget(QTableWidget):
-    """Tabela de pastas incluídas com suporte nativo a Drag & Drop do Windows Explorer."""
+    """Included folders table with native Windows Explorer Drag & Drop support."""
     paths_dropped = Signal(list)
 
     def __init__(self, *args, **kwargs):
@@ -58,7 +58,7 @@ class DropTableWidget(QTableWidget):
 
 
 class DeletableListWidget(QListWidget):
-    """Lista de pastas com suporte a Drag & Drop e à remoção via tecla Delete."""
+    """Folder list with Drag & Drop support and Delete-key removal."""
     paths_dropped = Signal(list)
 
     def __init__(self, parent=None):
@@ -99,7 +99,7 @@ class DeletableListWidget(QListWidget):
 
 
 class FolderPanel(QWidget):
-    """Painel inferior com pastas incluídas e excluídas."""
+    """Bottom panel with included and excluded folders."""
     folders_cleared = Signal()
     folders_changed = Signal(int)
 
@@ -268,7 +268,7 @@ class FolderPanel(QWidget):
             self.list_excluded.takeItem(self.list_excluded.row(item))
 
     def get_scan_paths(self) -> List[ScanPath]:
-        """Extrai a lista de ScanPath configurada com a flag de referência."""
+        """Extract the configured ScanPath list with the reference flag."""
         scan_paths: List[ScanPath] = []
         for row in range(self.table_included.rowCount()):
             path_item = self.table_included.item(row, 1)
@@ -283,14 +283,14 @@ class FolderPanel(QWidget):
         return scan_paths
 
     def get_excluded_paths(self) -> List[Path]:
-        """Extrai a lista de pastas excluídas."""
+        """Extract the excluded folders list."""
         excluded: List[Path] = []
         for idx in range(self.list_excluded.count()):
             excluded.append(Path(self.list_excluded.item(idx).text()))
         return excluded
 
     def export_state(self) -> dict:
-        """Exporta o estado atual das pastas para persistência."""
+        """Export current folder state for persistence."""
         return {
             "included": [
                 {"path": str(sp.path), "is_reference": sp.is_reference}
@@ -300,7 +300,7 @@ class FolderPanel(QWidget):
         }
 
     def import_state(self, state: dict):
-        """Restaura as pastas salvas na interface, preservando flags de referência sem bloquear I/O em discos remotos."""
+        """Restore saved folders into the UI, preserving reference flags without blocking I/O on remote drives."""
         if not isinstance(state, dict):
             return
 

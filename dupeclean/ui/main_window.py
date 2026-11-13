@@ -34,15 +34,15 @@ from dupeclean.worker import ScanWorker, FileActionWorker
 
 
 class ModeItemDelegate(QStyledItemDelegate):
-    """Renderiza a pílula vertical cinza de seleção ativa (estilo Czkawka) na margem esquerda."""
+    """Render the subtle gray vertical active-selection pill on the left edge."""
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
-        # Suprime o indicador nativo do Windows 11 para desenhar a pílula limpa
+        # Suppress the native Windows 11 indicator to draw the clean pill
         opt.state &= ~QStyle.StateFlag.State_HasFocus
         super().paint(painter, opt, index)
 
-        # Se o item estiver selecionado, desenha a pílula vertical cinza sutil na margem esquerda
+        # If the item is selected, draw a subtle gray vertical pill on the left edge
         if option.state & QStyle.StateFlag.State_Selected:
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _create_app_icon() -> QIcon:
-        """Retorna o ícone oficial do aplicativo para a barra de títulos e barra de tarefas."""
+        """Return the official application icon for the title bar and taskbar."""
         from dupeclean.ui.theme import create_app_icon
         return create_app_icon()
 
@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
         self._was_cancelled: bool = False
         self._is_busy: bool = False
 
-        # Temporizador independente da UI para contagem contínua e taxa de iteração
+        # UI-independent timer for continuous elapsed time and iteration rate
         self.ui_timer = QTimer(self)
         self.ui_timer.setInterval(250)
         self.ui_timer.timeout.connect(self._update_telemetry_tick)
@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
         self._sync_controls_state(busy=False)
 
     def _restore_app_state(self):
-        """Restaura pastas salvas e preferências anteriores a partir do DupeClean.db."""
+        """Restore saved folders and previous preferences from DupeClean.db."""
         try:
             cache = CacheManager()
             saved_folders = cache.get_setting("saved_folders")
@@ -141,7 +141,7 @@ class MainWindow(QMainWindow):
         lbl_subtitle.setStyleSheet("font-size: 11px; color: #71717a;")
         sidebar_layout.addWidget(lbl_subtitle)
 
-        # GPU Badge (KISS: Minimalist, moldura única externa, layout unificado centralizado)
+        # GPU Badge (KISS: Minimalist, single outer frame, unified centered layout)
         gpu_box = QFrame()
         gpu_box.setObjectName("gpuBox")
         gpu_box.setStyleSheet(
@@ -186,7 +186,7 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addSpacing(10)
 
-        # Mode List (Caixa única comportando os 3 modos)
+        # Mode List (Single box holding the 3 modes)
         self.sidebar_modes = QListWidget()
         self.sidebar_modes.setObjectName("sidebarModes")
         self.sidebar_modes.setItemDelegate(ModeItemDelegate(self.sidebar_modes))
@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
         top_bar_layout.setContentsMargins(0, 0, 0, 0)
         top_bar_layout.setSpacing(8)
 
-        # Container Unificado de Ações (Estilo Segmented Card - Idêntico ao Menu Lateral)
+        # Unified Action Container (Segmented Card style matching Side Menu)
         actions_container = QFrame()
         actions_container.setObjectName("topActionBarContainer")
         actions_layout = QHBoxLayout(actions_container)
@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
         menu_select.addAction("Collapse All Groups", lambda: self.results_widget.collapse_all())
         self.btn_select_menu.setMenu(menu_select)
 
-        # Action Buttons (Iniciam desabilitados até o usuário marcar pelo menos 1 arquivo)
+        # Action Buttons (Start disabled until the user checks at least 1 file)
         self.btn_move = QPushButton("📁 Move")
         self.btn_move.setToolTip("Moves selected files to another folder.")
         self.btn_move.setEnabled(False)
@@ -354,7 +354,7 @@ class MainWindow(QMainWindow):
         top_bar_layout.addWidget(actions_container)
         top_bar_layout.addStretch()
 
-        # Botão Circular de Ajuda (?) - Alinhado no extremo direito (Identidade RadarEleitoral)
+        # Circular Help Button (?) - Aligned on the far right
         self.btn_help = QPushButton("?")
         self.btn_help.setObjectName("helpButton")
         self.btn_help.setFixedSize(28, 28)
@@ -380,7 +380,7 @@ class MainWindow(QMainWindow):
         self.results_widget.file_selected.connect(self._on_file_selected)
         self.h_splitter.addWidget(self.results_widget)
 
-        # Painel lateral de Preview (Inicia oculto até clicar em um arquivo de foto/vídeo)
+        # Side Preview Panel (Starts hidden until a photo/video file is clicked)
         self.preview_panel = PreviewPanel()
         self.preview_panel.setVisible(False)
         self.h_splitter.addWidget(self.preview_panel)
@@ -388,7 +388,7 @@ class MainWindow(QMainWindow):
 
         self.v_splitter.addWidget(self.h_splitter)
 
-        # Painel de Pastas (Incluídas com Ref e Excluídas) - BASE
+        # Folders Panel (Included with Ref and Excluded) - BOTTOM
         self.folder_panel = FolderPanel()
         self.folder_panel.folders_cleared.connect(self._on_folders_cleared)
         self.folder_panel.folders_changed.connect(lambda _cnt: self._sync_controls_state())
@@ -397,12 +397,12 @@ class MainWindow(QMainWindow):
         self.v_splitter.setSizes([520, 240])
         right_layout.addWidget(self.v_splitter)
 
-        # 2.3 Status Bar, Telemetry and Progress (Dois Estágios)
+        # 2.3 Status Bar, Telemetry and Progress (Two Stages)
         status_container = QVBoxLayout()
         status_container.setSpacing(6)
         status_container.setContentsMargins(0, 4, 0, 0)
 
-        # Widget de Estágios com grid de 2 linhas (Current Stage e All Stages)
+        # Stages widget with 2-row grid (Current Stage and All Stages)
         self.stage_widget = QWidget()
         stage_layout = QGridLayout(self.stage_widget)
         stage_layout.setContentsMargins(0, 0, 0, 0)
@@ -458,7 +458,7 @@ class MainWindow(QMainWindow):
         self.stage_widget.setSizePolicy(sp_stage)
         self.stage_widget.setVisible(False)
 
-        # Linha 3: Informações de status e telemetria/cronômetro
+        # Row 3: Status info and telemetry/timer
         status_info_layout = QHBoxLayout()
         status_info_layout.setSpacing(12)
 
@@ -467,7 +467,7 @@ class MainWindow(QMainWindow):
         self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.lbl_status.setMinimumWidth(0)
 
-        # Telemetry Label (Elapsed Time / Iteration Rate) - sem moldura para coerência com lbl_status
+        # Telemetry Label (Elapsed Time / Iteration Rate) - frameless for consistency with lbl_status
         self.lbl_timer = QLabel("00:00")
         self.lbl_timer.setStyleSheet(
             "font-weight: bold; font-family: 'Consolas', monospace; color: #38bdf8;"
@@ -502,11 +502,11 @@ class MainWindow(QMainWindow):
 
         # Exibe o controle de sensibilidade (slider) apenas para modos visuais
         self.container_slider.setVisible(self.current_mode in (ScanMode.IMAGES, ScanMode.VIDEOS))
-        # Mantém a grade e a barra de status 100% intactas, com tempo de resposta zero (0 ms).
+        # Keeps the grid and status bar 100% intact, with zero response time (0 ms).
 
     @Slot(object)
     def _on_file_selected(self, file_rec: Optional[FileRecord]):
-        """Atualiza o painel de preview quando o usuário clica com 1 clique em um arquivo de foto ou vídeo."""
+        """Update the preview panel when the user single-clicks a photo or video file."""
         if file_rec is not None and file_rec.path.exists():
             ext = file_rec.ext.lower()
             if ext in IMAGE_EXTENSIONS or ext in VIDEO_EXTENSIONS:
@@ -519,7 +519,7 @@ class MainWindow(QMainWindow):
                 self.preview_panel.load_file(file_rec)
                 return
 
-        # Se clicou em cabeçalho ou arquivo não multimídia, recolhe o painel
+        # If a header or non-multimedia file was clicked, collapse the panel
         self.preview_panel.clear()
         self.preview_panel.setVisible(False)
 
@@ -533,7 +533,7 @@ class MainWindow(QMainWindow):
         return f"{m:02d}:{s:02d}"
 
     def _sync_controls_state(self, busy: Optional[bool] = None):
-        """Sincroniza habilitação de todos os botões conforme estado de execução, pastas e resultados (KISS)."""
+        """Synchronize all button enabled states with execution, folders, and results state (KISS)."""
         if busy is not None:
             self._is_busy = busy
         is_busy = bool(
@@ -567,7 +567,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str, int, int)
     def _on_operation_progress(self, title: str, current: int, total: int):
-        """Atualiza a barra de estágios e percentual para operações em lote mantendo a coerência visual."""
+        """Update stage bars and percentage for batch operations while preserving visual consistency."""
         if total > 0 and current <= total:
             self.stage_widget.setVisible(True)
             fraction = min(1.0, max(0.0, current / total))
@@ -577,9 +577,9 @@ class MainWindow(QMainWindow):
             display_title = title
             display_total_stages = getattr(self, "total_stages", 3) + 1
             if is_scan_mount:
-                # Mantém a coerência visual estrita do scan:
-                # Linha de cima: 'Current Stage:' avança de 0% a 100% da montagem
-                # Linha intermediária: 'All Stages:' avança proporcionalmente dos estágios anteriores até 100%
+                # Preserve strict scan visual consistency:
+                # Top bar: 'Current Stage:' advances from 0% to 100% of assembly
+                # Bottom bar: 'All Stages:' advances proportionally from previous stages to 100%
                 # Linha de baixo: 'Stage N/N: Loading results (X/Y)...'
                 display_title = "Loading results"
                 self.lbl_stage_current.setText("Current Stage:")
@@ -600,7 +600,7 @@ class MainWindow(QMainWindow):
                 self.progress_all.setValue(overall_pct)
                 self.lbl_pct_all.setText(f"{overall_pct}%")
 
-                # Atualiza telemetria contínua com taxa de montagem e tempo decorrido total em andamento
+                # Update continuous telemetry with assembly rate and total elapsed time in progress
                 if getattr(self, "start_time", None):
                     now = time.time()
                     elapsed = now - self.start_time
@@ -613,7 +613,7 @@ class MainWindow(QMainWindow):
                 self.progress_all.setVisible(False)
                 self.lbl_pct_all.setVisible(False)
 
-                # Mapeamento para títulos concisos que nunca cortam na barra superior
+                # Map to concise titles that never truncate in the top bar
                 stage_label_map = {
                     "delete": "Deleting... ",
                     "Permanently deleting": "Deleting... ",
@@ -661,7 +661,7 @@ class MainWindow(QMainWindow):
 
     @Slot(int, "qint64")
     def _on_selection_changed(self, count: int, total_bytes: int):
-        """Atualiza dinamicamente os botões de ação e status conforme arquivos são marcados/desmarcados."""
+        """Dynamically update action buttons and status as files are checked/unchecked."""
         is_busy = bool((self.worker and self.worker.isRunning()) or (getattr(self, 'file_worker', None) and self.file_worker.isRunning()))
         has_sel = (count > 0) and not is_busy
         self.btn_move.setEnabled(has_sel)
@@ -681,7 +681,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_status_message(self, msg: str):
-        """Exibe mensagens temporárias na barra de status durante operações síncronas (ex: ordenação de colunas)."""
+        """Show temporary messages in the status bar during synchronous operations (e.g., column sorting)."""
         if msg:
             if not getattr(self, "_saved_status_text", None):
                 self._saved_status_text = self.lbl_status.text()
@@ -693,7 +693,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_folders_cleared(self):
-        """Ao remover todas as fontes de comparação, limpa a grade de duplicatas, fecha preview e reseta status."""
+        """When all scan sources are removed, clear the duplicate grid, close preview, and reset status."""
         if self.worker and self.worker.isRunning():
             return
 
@@ -812,7 +812,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "preview_panel"):
             self.preview_panel._worker.stop()
 
-        # Persiste pastas incluídas e excluídas no DupeClean.db antes de fechar
+        # Persist included and excluded folders in DupeClean.db before closing
         try:
             cache = CacheManager()
             state = self.folder_panel.export_state()
@@ -847,15 +847,15 @@ class MainWindow(QMainWindow):
         elapsed = now - self.start_time
         elapsed_str = self._format_duration(elapsed)
 
-        # Durante o Estágio 1 (descoberta de arquivos), exibe apenas o tempo decorrido.
-        # A taxa de iteração (it/s) é calculada e exibida a partir do Estágio 2 quando há avanço real.
+        # During Stage 1 (file discovery), display only elapsed time.
+        # Iteration rate (it/s) is computed and displayed starting from Stage 2 when real progress occurs.
         stage_num = getattr(self, "current_stage_num", 1)
         if stage_num > 1 and self.latest_total > 0 and self.latest_current > 1 and elapsed > 0.5:
             if not hasattr(self, "_telemetry_window"):
                 self._telemetry_window = deque()
 
             self._telemetry_window.append((now, self.latest_current))
-            # Mantém apenas amostras dos últimos 3 segundos para velocidade instantânea real
+            # Keep only samples from the last 3 seconds for true instantaneous speed
             while len(self._telemetry_window) > 2 and (now - self._telemetry_window[0][0]) > 3.0:
                 self._telemetry_window.popleft()
 
@@ -865,7 +865,7 @@ class MainWindow(QMainWindow):
             stale_sec = now - getattr(self, "_last_progress_change_time", now)
 
             if stale_sec >= 1.0 and dc <= 0:
-                # Sem avanço real recente: evita calcular it/s artificial decrescente sobre total congelado
+                # No recent real progress: avoid computing artificially decaying it/s over a frozen total
                 self.lbl_timer.setText(f"{elapsed_str}")
             elif dt >= 0.8 and dc > 0:
                 rate = dc / dt
@@ -882,7 +882,7 @@ class MainWindow(QMainWindow):
     @Slot(str, "qint64", "qint64", int, int)
     def _on_stage_progress(self, msg: str, current: int, total: int, stage_num: int, total_stages: int):
         now = time.time()
-        # Se mudou de estágio, reseta o temporizador interno da fase e a janela deslizante
+        # If stage changed, reset the phase internal timer and sliding window
         if getattr(self, "current_stage_num", 1) != stage_num:
             self.current_stage_num = stage_num
             self.stage_start_time = now
@@ -897,11 +897,11 @@ class MainWindow(QMainWindow):
         self.latest_current = current
         self.latest_total = total
 
-        # Inclui o estágio final de montagem dos resultados para coerência total com a barra All Stages
+        # Include the final results assembly stage for full consistency with the All Stages bar
         display_total_stages = total_stages + 1 if total_stages > 0 else total_stages
         self.lbl_status.setText(f"Stage {stage_num}/{display_total_stages}: {msg}")
 
-        # 1. Progresso do Estágio Atual (Current Stage)
+        # 1. Current Stage Progress
         if total > 0:
             pct_curr = int(min(1.0, current / total) * 100)
             if self.progress_current.maximum() != 100 or self.progress_current.minimum() != 0:
@@ -909,7 +909,7 @@ class MainWindow(QMainWindow):
             self.progress_current.setValue(pct_curr)
             self.lbl_pct_current.setText(f"{pct_curr}%")
         else:
-            # Animação indeterminada suave no Estágio 1 (sem resets e sem solavancos)
+            # Smooth indeterminate animation in Stage 1 (no resets or jumps)
             if self.progress_current.maximum() != 0 or self.progress_current.minimum() != 0:
                 self.progress_current.setRange(0, 0)
             self.lbl_pct_current.setText("...")
@@ -945,7 +945,7 @@ class MainWindow(QMainWindow):
         finally:
             self._is_scan_mounting = False
 
-        # Finaliza temporizador e estado de scan somente após os dados estarem totalmente montados
+        # Finish timer and scan state only after data is fully assembled
         self.ui_timer.stop()
         self._set_scanning_state(False)
 
@@ -955,7 +955,7 @@ class MainWindow(QMainWindow):
             total_time_str = self._format_duration(total_elapsed)
             self.lbl_timer.setText(f"Total Time: {total_time_str}")
 
-        # Garante 100% em ambas as barras ao concluir o scan com visualização perfeita
+        # Ensure 100% on both bars upon scan completion for clean visual closure
         self.progress_current.setRange(0, 100)
         self.progress_current.setValue(100)
         self.lbl_pct_current.setText("100%")
@@ -1091,7 +1091,7 @@ class MainWindow(QMainWindow):
             self._start_file_action(selected, "delete")
 
     def _start_file_action(self, paths: List[Path], action: str, dest_dir: Optional[Path] = None):
-        """Inicia a execução da ação de arquivo em background com feedback visual não-bloqueante."""
+        """Start executing the file action in the background with non-blocking visual feedback."""
         self._action_start_time = time.time()
         self._action_type = action
         self._action_dest_dir = dest_dir
@@ -1231,17 +1231,17 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Save Error", f"Could not save file:\n{str(e)}")
 
     def _open_help_dialog(self):
-        """Abre a janela de Ajuda e Documentação Técnica diretamente com as abas."""
+        """Open the Help and Technical Documentation window directly with its tabs."""
         dlg = HelpDialog(self.gpu_info, parent=self)
         dlg.exec()
 
     def _open_help_tab(self, tab_idx: int = 0):
-        """Abre a janela de Ajuda e Arquitetura Técnica na aba correspondente."""
+        """Open the Help and Technical Architecture window on the corresponding tab."""
         dlg = HelpDialog(self.gpu_info, parent=self)
         dlg.open_tab(tab_idx)
 
     def _show_about_dialog(self):
-        """Exibe o diálogo compacto Sobre o DupeClean."""
+        """Display the compact About DupeClean dialog."""
         has_gpu = bool(self.gpu_info.get("has_cuda", False))
         if has_gpu:
             gpu_name = self.gpu_info.get("name", "NVIDIA GPU")
@@ -1272,7 +1272,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _create_status_dot_pixmap(color_hex: str, size: int = 12) -> QPixmap:
-        """Gera um ícone circular nítido com antialiasing e DPR para o badge de hardware."""
+        """Generate a crisp circular icon with antialiasing and DPR for the hardware badge."""
         dpr = 2
         pixmap = QPixmap(size * dpr, size * dpr)
         pixmap.fill(Qt.GlobalColor.transparent)

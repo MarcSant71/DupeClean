@@ -16,7 +16,7 @@ from dupeclean.ui.splash import SplashScreen
 
 
 class HardwareInitWorker(QThread):
-    """Valida o hardware, inicializa PyTorch e adapta o schema do banco sem congelar a animação da Splash Screen."""
+    """Validate hardware, initialize PyTorch, and adapt the database schema without freezing the Splash Screen animation."""
     progress_update = Signal(int, str)
     finished_init = Signal(bool, str, dict, object)
 
@@ -54,7 +54,7 @@ class HardwareInitWorker(QThread):
 
 
 def excepthook(exc_type, exc_value, exc_tb):
-    """Captura exceções globais não tratadas e grava log sanitizado (LGPD) com retenção de 7 dias."""
+    """Capture unhandled global exceptions and write a sanitized log with 7-day retention."""
     log_file_str = "data/logs/"
     try:
         from dupeclean.core.crash_logger import log_critical_crash
@@ -79,10 +79,10 @@ sys.excepthook = excepthook
 
 
 def main():
-    # 0. Força a GPU dedicada de alta performance (NVIDIA RTX)
+    # 0. Enforce the high-performance dedicated GPU (NVIDIA RTX)
     enforce_high_performance_gpu()
 
-    # Identidade explícita no Windows para agrupar Splash, diálogos e janela principal sob o mesmo ícone na taskbar
+    # Explicit Windows AppUserModelID to group Splash, dialogs, and main window under one taskbar icon
     if sys.platform == "win32":
         try:
             import ctypes
@@ -99,13 +99,13 @@ def main():
     app.setWindowIcon(create_app_icon())
     app.setStyleSheet(DARK_THEME_QSS)
 
-    # 1. Exibe a Splash Screen imediatamente (< 50ms) com animação fluida ativa
+    # 1. Show the Splash Screen immediately (< 50ms) with smooth animation active
     splash = SplashScreen()
     splash.show()
     splash.start_animation()
     app.processEvents()
 
-    # 2. Hardware Gatekeeper: Validação em background sem congelar o loop de eventos
+    # 2. Hardware Gatekeeper: Background validation without freezing the event loop
     worker = HardwareInitWorker()
     worker.progress_update.connect(splash.set_target_progress)
     main_window_holder = []
@@ -166,13 +166,13 @@ def main():
         splash.set_target_progress(95, "Warming up...")
         app.processEvents()
 
-        # 3. Inicialização da Interface Principal
+        # 3. Main UI Initialization
         from dupeclean.ui.main_window import MainWindow
         window = MainWindow(gpu_info=gpu_info)
         main_window_holder.append(window)
         window.show()
 
-        # Fecha a splash screen após a janela principal carregar
+        # Close the splash screen after the main window loads
         splash.finish(window)
 
         if getattr(db_payload, "status", None) == "reset":

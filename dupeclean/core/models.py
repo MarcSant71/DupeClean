@@ -1,5 +1,5 @@
 """
-Modelos de dados para o DupeClean.
+Data models for DupeClean.
 """
 
 from dataclasses import dataclass, field
@@ -9,15 +9,15 @@ from enum import Enum
 
 
 class ScanMode(Enum):
-    EXACT = "exact"      # 100% idênticos (xxhash)
-    IMAGES = "images"    # Imagens similares (GPU Tensor Hash / Embedding)
-    VIDEOS = "videos"    # Vídeos similares (NVDEC HWAccel + GPU Frame Sampling)
+    EXACT = "exact"      # 100% identical (xxhash)
+    IMAGES = "images"    # Similar images (GPU Tensor Hash / Embedding)
+    VIDEOS = "videos"    # Similar videos (NVDEC HWAccel + GPU Frame Sampling)
 
 
 @dataclass
 class ScanPath:
     path: Path
-    is_reference: bool = False  # Se True, arquivos NUNCA são sugeridos para deleção
+    is_reference: bool = False  # If True, files are NEVER suggested for deletion
 
 
 @dataclass(slots=True)
@@ -32,7 +32,7 @@ class FileRecord:
     file_id: int = 0
     prefix_hash: Optional[str] = None
     hash_value: Optional[str] = None
-    embedding: Optional[Any] = None  # torch.Tensor na GPU ou CPU
+    embedding: Optional[Any] = None  # torch.Tensor on GPU or CPU
     duration: Optional[float] = None
 
     def __post_init__(self):
@@ -46,19 +46,19 @@ class FileRecord:
 class DuplicateGroup:
     group_id: int
     files: List[FileRecord] = field(default_factory=list)
-    similarity: float = 1.0  # 1.0 = 100% idêntico
+    similarity: float = 1.0  # 1.0 = 100% identical
     kind: ScanMode = ScanMode.EXACT
 
     @property
     def reclaimable_bytes(self) -> int:
-        """Calcula espaço recuperável deixando pelo menos 1 arquivo intacto."""
+        """Compute reclaimable space while keeping at least 1 file intact."""
         if len(self.files) <= 1:
             return 0
         ref_files = [f for f in self.files if f.is_reference]
         if ref_files:
             return sum(f.size for f in self.files if not f.is_reference)
         sizes = [f.size for f in self.files]
-        # Deixa o maior ou o primeiro preservado
+        # Keep the largest or first file intact
         return sum(sizes) - max(sizes)
 
 

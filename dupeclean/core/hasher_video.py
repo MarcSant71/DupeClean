@@ -1,7 +1,7 @@
 """
-Extrator de Assinaturas de Vídeo de Altíssima Performance com Multiprocessamento Paralelo e GPU Tensor Cores.
-Elimina completamente a contenção do GIL do Python via ProcessPoolExecutor isolado por processo,
-alimenta em fluxo contínuo a RTX 5090 e processa tensores DCT 2D diretamente em VRAM (FP16).
+Ultra-High-Performance Video Signature Extractor with Parallel Multiprocessing and GPU Tensor Cores.
+Completely eliminates Python GIL contention via an isolated ProcessPoolExecutor,
+continuously feeds the GPU, and processes 2D DCT tensors directly in VRAM (FP16).
 """
 
 import sys
@@ -25,7 +25,7 @@ from dupeclean.core.hasher_image import _get_dct_matrix
 from dupeclean.core.cache import CacheManager, compute_prefix_hash
 from dupeclean.core.scanner import get_volume_capabilities
 
-# Dimensão dos quadros e frequência para assinatura temporal de vídeos
+# Frame dimensions and frequency count for temporal video signatures
 VIDEO_IMG_SIZE = 64
 VIDEO_LOW_FREQ_SIZE = 16
 VIDEO_CHANNELS = 3
@@ -34,7 +34,7 @@ VIDEO_DIM_SIZE = VIDEO_LOW_FREQ_SIZE * VIDEO_LOW_FREQ_SIZE * VIDEO_CHANNELS * VI
 
 
 def get_video_duration(path: Path) -> Optional[float]:
-    """Obtém duração do vídeo nativamente em memória via PyAV com I/O reduzido."""
+    """Get video duration natively in memory via PyAV with minimal I/O."""
     is_dav = path.suffix.lower() == ".dav"
     options = {"probesize": "65536", "analyzeduration": "0"} if is_dav else None
     try:
@@ -53,7 +53,7 @@ def get_video_duration(path: Path) -> Optional[float]:
 def crop_letterbox(frames: np.ndarray, threshold: int = 25) -> np.ndarray:
     """
     Detecta e recorta barras pretas (letterbox / pillarbox) antes do hashing.
-    Evita que o formato de tela gere harmônicos espúrios na DCT 2D.
+    Prevents aspect ratio from generating spurious harmonics in the 2D DCT.
     """
     cropped_list = []
     for f in frames:
@@ -76,7 +76,7 @@ def extract_video_frames_and_duration(
     path: Path,
     num_samples: int = 5
 ) -> Optional[Tuple[float, np.ndarray]]:
-    """Função compatível de extração direta por caminho."""
+    """Compatible direct path-based extraction function."""
     res = _worker_decode_path(str(path))
     if res is None:
         return None
@@ -88,9 +88,9 @@ def extract_video_frames_and_duration(
 
 def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray], int, int, Optional[str]]:
     """
-    Worker isolado por processo: abre o vídeo, coleta metadados NTFS (vol_id, file_id) e prefix_hash,
+    Process-isolated worker: opens the video, collects NTFS metadata (vol_id, file_id) and prefix_hash,
     extrai 5 quadros temporais RGB limpos e retorna dados brutos fora do GIL do processo principal.
-    Retorna (path_str, -1.0, None, vol_id, file_id, prefix_hash) em caso de falha para persistência de tombstone.
+    Returns (path_str, -1.0, None, vol_id, file_id, prefix_hash) on failure for tombstone persistence.
     """
     p = Path(path_str)
     vol_id, f_id, p_hash = 0, 0, None
@@ -125,7 +125,7 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
 
         frames = []
 
-        # 1. Estratégia A: Fast Keyframe Seek (para formatos indexados: MP4, MKV, AVI, MOV, WEBM, etc.)
+        # 1. Strategy A: Fast Keyframe Seek (for indexed formats: MP4, MKV, AVI, MOV, WEBM, etc.)
         if not is_dav:
             percentages = [0.10, 0.30, 0.50, 0.70, 0.90]
             try:
@@ -155,7 +155,7 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
                 except Exception:
                     pass
 
-        # 2. Estratégia B: Extração Temporal de 5 Keyframes Distintos (para .dav e fluxos contínuos)
+        # 2. Strategy B: Temporal Extraction of 5 Distinct Keyframes (for .dav and continuous streams)
         else:
             kf_packets = []
             for pkt in container.demux():
@@ -199,9 +199,9 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
 
 class _AsyncVideoCacheWriter:
     """
-    Escritor assíncrono em background para persistência do cache de vídeos (SQLite WAL).
-    Desacopla totalmente a decodificação de vídeo e a GPU do banco de dados,
-    acumulando lotes e tombstones em memória e commitando em segundo plano.
+    Asynchronous background writer for video cache persistence (SQLite WAL).
+    Completely decouples video decoding and GPU from the database,
+    accumulating batches and tombstones in memory and committing in the background.
     """
     def __init__(self, cache_manager: CacheManager, batch_size: int = 512, flush_interval: float = 0.5):
         self.cache_manager = cache_manager
@@ -263,9 +263,9 @@ def extract_video_embeddings(
     cache_manager: Optional[CacheManager] = None
 ) -> Tuple[List[FileRecord], torch.Tensor]:
     """
-    Processa vídeos em altíssima velocidade utilizando multiprocessamento paralelo (ProcessPoolExecutor)
-    e consolidação em lote (CUDA FP16 em GPUs RTX ou CPU FP32 como fallback universal).
-    Garante isolamento de memória por arquivo (zero vazamento de frames) e persistência WAL no SQLite.
+    Process videos at ultra-high speed using parallel multiprocessing (ProcessPoolExecutor)
+    and batch consolidation (CUDA FP16 on RTX GPUs or CPU FP32 as universal fallback).
+    Ensures per-file memory isolation (zero frame leaks) and SQLite WAL persistence.
     """
     device, dtype = get_compute_device()
     cache = cache_manager or CacheManager()
@@ -304,7 +304,7 @@ def extract_video_embeddings(
         if p_key in cached_map:
             dur, emb_blob = cached_map[p_key]
             if dur == -1.0 or len(emb_blob) == 0:
-                # Arquivo corrompido/ilegível já marcado como tombstone: descarta sem reprocessar
+                # Corrupted/unreadable file already marked as tombstone: skip without reprocessing
                 continue
             rec.duration = dur
             cached_recs.append(rec)
@@ -331,7 +331,7 @@ def extract_video_embeddings(
             stage_total if to_process else total,
         )
 
-    # 2. Se todos os vídeos já estavam em cache, retorna de imediato
+    # 2. If all videos were already cached, return immediately
     if not to_process or (stop_check and stop_check()):
         if not embeddings_list:
             return [], torch.empty((0, dim_size), device=device, dtype=dtype)
@@ -339,7 +339,7 @@ def extract_video_embeddings(
             all_embeddings = torch.cat(embeddings_list, dim=0)
         return valid_records, all_embeddings
 
-    # 3. Preparação das transformadas DCT na GPU com Spectral Whitening
+    # 3. Prepare DCT transforms on GPU with Spectral Whitening
     to_process.sort(key=lambda r: str(r.path.parent))
 
     dct_mat = _get_dct_matrix(VIDEO_IMG_SIZE, device=device, dtype=dtype)
@@ -353,11 +353,11 @@ def extract_video_embeddings(
     uncached_total = len(to_process)
     cache_writer = _AsyncVideoCacheWriter(cache)
 
-    # Mapeamento rápido de caminhos para objetos FileRecord
+    # Fast mapping from paths to FileRecord objects
     path_to_rec = {str(r.path): r for r in to_process}
     path_list = list(path_to_rec.keys())
 
-    # Número ideal de processos trabalhadores no Core i9 (16 workers saturam I/O e eliminam o GIL)
+    # Optimal worker process count (saturates I/O and eliminates GIL)
     num_workers = min(16, max(4, (os.cpu_count() or 4) // 2))
 
     processed_count = 0
@@ -369,7 +369,7 @@ def extract_video_embeddings(
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         try:
             with torch.inference_mode():
-                # Processamento em lote com chunksize=16 para máxima taxa de transferência inter-processos
+                # Batch processing with chunksize=16 for maximum inter-process throughput
                 for res in executor.map(_worker_decode_path, path_list, chunksize=16):
                     if stop_check and stop_check():
                         break

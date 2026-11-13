@@ -1,6 +1,6 @@
 """
-Painel de visualização lateral (Preview Panel) para imagens e vídeos
-com renderização assíncrona, cache LRU em memória e preservação estrita de proporção (aspect ratio).
+Side preview panel (Preview Panel) for images and videos
+with asynchronous rendering, in-memory LRU cache, and strict aspect-ratio preservation.
 """
 
 import io
@@ -179,7 +179,7 @@ class AspectRatioPixmapLabel(QLabel):
 
 
 class PreviewWorker(QThread):
-    """Worker assíncrono para carregar imagens e extrair frames de vídeo sem travar a interface."""
+    """Asynchronous worker to load images and extract video frames without freezing the UI."""
     preview_ready = Signal(int, object, object, dict)  # (token, file_rec, QPixmap, metadata)
 
     def __init__(self, parent=None):
@@ -229,7 +229,7 @@ class PreviewWorker(QThread):
             orig_w, orig_h = img.size
             img_format = img.format or file_rec.ext.upper().lstrip(".")
 
-            # Redimensiona para preview limitando a 1200px para economizar memória
+            # Resize for preview, capping at 1200px to save memory
             max_bound = 1200
             if orig_w > max_bound or orig_h > max_bound:
                 img.thumbnail((max_bound, max_bound), Image.Resampling.BILINEAR)
@@ -270,7 +270,7 @@ class PreviewWorker(QThread):
             seek_sec = max(0.5, (duration * 0.2)) if (duration and duration > 2.0) else 1.0
             frame_img = None
 
-            # 1. Tenta seek rápido para momento representativo (somente se não for .dav)
+            # 1. Try fast seek to a representative moment (only if not .dav)
             if not is_dav:
                 try:
                     target_pts = int(seek_sec / stream.time_base) if stream.time_base else int(seek_sec * 1000000)
@@ -281,7 +281,7 @@ class PreviewWorker(QThread):
                 except Exception:
                     frame_img = None
 
-            # 2. Fallback / .dav: decodifica o primeiro keyframe disponível via demux rápido
+            # 2. Fallback / .dav: decode the first available keyframe via fast demux
             if frame_img is None:
                 for pkt in container.demux(stream):
                     if pkt.is_keyframe:
@@ -321,8 +321,8 @@ class PreviewWorker(QThread):
 
 class PreviewPanel(QFrame):
     """
-    Painel lateral elegante com preview da imagem/vídeo,
-    metadados em tempo real e atalhos rápidos.
+    Sleek side panel with image/video preview,
+    real-time metadata, and quick shortcuts.
     """
     closed = Signal()
 
@@ -332,7 +332,7 @@ class PreviewPanel(QFrame):
         self.setMinimumWidth(260)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
-        # Cache LRU em memória (máximo 60 itens para latência instantânea de 0ms)
+        # In-memory LRU cache (max 60 items for instant 0ms latency)
         self._lru_cache: OrderedDict[str, Tuple[QPixmap, Dict[str, Any]]] = OrderedDict()
         self._max_cache_size = 60
 
@@ -357,7 +357,7 @@ class PreviewPanel(QFrame):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
 
-        # 1. Barra de Cabeçalho Superior
+        # 1. Top Header Bar
         header_layout = QHBoxLayout()
         header_layout.setSpacing(6)
 
@@ -379,7 +379,7 @@ class PreviewPanel(QFrame):
 
         main_layout.addLayout(header_layout)
 
-        # 2. Área Central de Exibição da Imagem (QStackedLayout mantém altura constante sem piscar no swap)
+        # 2. Central Image Display Area (QStackedLayout keeps constant height without flicker on swap)
         self.image_container = QFrame()
         self.image_container.setStyleSheet(
             "QFrame { background-color: #141416; border: 1px solid #26262a; border-radius: 4px; }"
@@ -464,7 +464,7 @@ class PreviewPanel(QFrame):
         self._current_file = file_rec
         cache_key = str(file_rec.path)
 
-        # 1. Verifica cache LRU em memória (0 ms)
+        # 1. Check in-memory LRU cache (0 ms)
         if cache_key in self._lru_cache:
             pixmap, meta = self._lru_cache[cache_key]
             # Move para o final (mais recentemente usado)
@@ -472,7 +472,7 @@ class PreviewPanel(QFrame):
             self._display_preview(file_rec, pixmap, meta)
             return
 
-        # 2. Não está no cache: prepara interface e dispara worker
+        # 2. Cache miss: prepare UI and launch worker
         self._current_token += 1
         token = self._current_token
 
@@ -494,7 +494,7 @@ class PreviewPanel(QFrame):
     @Slot(int, object, object, dict)
     def _on_preview_ready(self, token: int, file_rec: FileRecord, pixmap: Optional[QPixmap], meta: dict):
         if token != self._current_token:
-            # Requisição obsoleta descartada (usuário já clicou em outro arquivo)
+            # Stale request discarded (user already clicked another file)
             return
 
         cache_key = str(file_rec.path)

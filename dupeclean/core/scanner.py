@@ -1,6 +1,6 @@
 """
 Rastreador de arquivos de alto desempenho (Filesystem Crawler).
-Varre diretórios de forma recursiva utilizando os.scandir com cache de metadados
+Recursively scans directories using os.scandir with metadata caching
 nativos do Win32 (WIN32_FIND_DATA), eliminando roundtrips de rede via SMB/iSCSI.
 """
 
@@ -18,7 +18,7 @@ _VOLUME_CAPS_CACHE: Dict[str, Tuple[str, bool]] = {}
 def get_volume_capabilities(path: Path) -> Tuple[str, bool]:
     """
     Detecta o sistema de arquivos do volume (ex: 'NTFS', 'ReFS', 'FAT32', 'exFAT').
-    Retorna (fs_name, supports_file_id). Cacheado em memória para custo zero.
+    Returns (fs_name, supports_file_id). Cached in memory for zero overhead.
     """
     try:
         drive = os.path.splitdrive(os.path.abspath(str(path)))[0].upper()
@@ -47,7 +47,7 @@ def get_volume_capabilities(path: Path) -> Tuple[str, bool]:
         pass
     return "UNKNOWN", False
 
-# Extensões suportadas
+# Supported extensions
 IMAGE_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif",
     ".gif", ".ico", ".heic", ".heif", ".avif",
@@ -70,14 +70,14 @@ def crawl_directories(
     stop_check: Optional[Callable[[], bool]] = None
 ) -> List[FileRecord]:
     """
-    Rastreia todos os diretórios incluídos, marcando a flag 'is_reference'
-    e respeitando os caminhos excluídos. Utiliza os.scandir de alto rendimento.
-    Emite telemetria contínua com contagem real e nomes de pastas vivas.
+    Crawls all included directories, marking the 'is_reference' flag
+    and respecting excluded paths. Uses high-throughput os.scandir.
+    Emits continuous telemetry with live counts and active folder names.
     """
     records: List[FileRecord] = []
     seen_paths: Set[str] = set()
 
-    # Normalizar exclusões
+    # Normalize exclusions
     resolved_exclusions = [p.resolve() for p in excluded_paths if p.exists()]
     total_scanned = 0
     last_reported_count = 0
@@ -106,7 +106,7 @@ def crawl_directories(
                         # is_dir e is_file no Windows usam atributos em cache do WIN32_FIND_DATA
                         if entry.is_dir(follow_symlinks=False):
                             sub_p = Path(entry.path)
-                            # Checa exclusões apenas se houver pastas excluídas cadastradas
+                            # Check exclusions only if excluded folders are configured
                             if resolved_exclusions and any(sub_p == exc or exc in sub_p.parents for exc in resolved_exclusions):
                                 continue
                             subdirs.append(sub_p)
@@ -116,7 +116,7 @@ def crawl_directories(
                             if path_str in seen_paths:
                                 continue
 
-                            # Extração rápida de extensão (5x mais rápida que os.path.splitext)
+                            # Fast extension extraction (5x faster than os.path.splitext)
                             name = entry.name
                             dot_pos = name.rfind(".")
                             if dot_pos == -1:
@@ -129,7 +129,7 @@ def crawl_directories(
                             elif mode == ScanMode.VIDEOS and ext not in VIDEO_EXTENSIONS:
                                 continue
 
-                            # entry.stat(follow_symlinks=False) não faz RPC de rede adicional no Windows
+                            # entry.stat(follow_symlinks=False) avoids extra network RPC on Windows
                             st = entry.stat(follow_symlinks=False)
                             size = st.st_size
 

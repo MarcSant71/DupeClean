@@ -1,8 +1,8 @@
 """
-Validador, contrato estrutural e gerenciador de migrações do banco DupeClean.db.
+Validator, structural contract, and migration manager for DupeClean.db.
 Garante no startup que bancos antigos ou restaurados atendam à estrutura esperada
-pela versão atual do executável, migrando com segurança ou reiniciando o cache
-quando incompatíveis/corrompidos (preservando configurações do usuário).
+by the current executable version, safely migrating or resetting the cache
+when incompatible/corrupted (preserving user settings).
 """
 
 import sqlite3
@@ -13,7 +13,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 CURRENT_SCHEMA_VERSION = 2
 
-# Contrato estrutural esperado pelo executável atual: {tabela: (coluna_pk, {colunas})}
+# Expected structural contract for the current executable: {table: (pk_column, {columns})}
 EXPECTED_TABLES: Dict[str, Tuple[str, Set[str]]] = {
     "cache_exact": (
         "path",
@@ -54,7 +54,7 @@ LEGACY_INDEXES: Tuple[str, ...] = (
     "idx_videos_prefix",
 )
 
-# Colunas aditivas compatíveis com ALTER TABLE ADD COLUMN
+# Additive columns compatible with ALTER TABLE ADD COLUMN
 _ADDITIVE_COLUMNS: Dict[str, List[Tuple[str, str]]] = {
     "cache_exact": [
         ("volume_id", "INTEGER DEFAULT 0"),
@@ -75,7 +75,7 @@ _ADDITIVE_COLUMNS: Dict[str, List[Tuple[str, str]]] = {
 
 @dataclass
 class SchemaInitResult:
-    """Resultado da validação/adaptação do schema na inicialização."""
+    """Result of schema validation/adaptation on startup."""
 
     status: str  # "ok" | "created" | "migrated" | "reset"
     from_version: int
@@ -85,7 +85,7 @@ class SchemaInitResult:
 
 
 class FutureSchemaError(Exception):
-    """Lançada quando o .db no disco pertence a uma versão mais nova que a suportada."""
+    """Raised when the .db on disk belongs to a newer version than supported."""
 
     def __init__(self, db_version: int, expected_version: int, db_path: Path):
         self.db_version = db_version
@@ -97,7 +97,7 @@ class FutureSchemaError(Exception):
 
 
 def _apply_structural_pragmas(conn: sqlite3.Connection, is_fresh: bool = False) -> None:
-    """Aplica parâmetros WAL e page_size (page_size somente na criação do arquivo)."""
+    """Apply WAL and page_size pragmas (page_size only on file creation)."""
     if is_fresh:
         conn.execute("PRAGMA page_size = 8192;")
     conn.execute("PRAGMA journal_mode = WAL;")
@@ -106,7 +106,7 @@ def _apply_structural_pragmas(conn: sqlite3.Connection, is_fresh: bool = False) 
 
 
 def _create_all_tables(conn: sqlite3.Connection) -> None:
-    """Cria todas as tabelas do contrato estrutural caso não existam."""
+    """Create all structural contract tables if they do not exist."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS cache_exact (
@@ -149,7 +149,7 @@ def _create_all_tables(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_indexes(conn: sqlite3.Connection) -> None:
-    """Remove índices obsoletos e garante todos os índices parciais atuais."""
+    """Drop obsolete indexes and ensure all current partial indexes exist."""
     for idx in LEGACY_INDEXES:
         conn.execute(f"DROP INDEX IF EXISTS {idx};")
 
@@ -180,7 +180,7 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
 
 def _inspect_schema(conn: sqlite3.Connection) -> Tuple[bool, bool, str]:
     """
-    Verifica tabelas, chaves primárias, colunas obrigatórias e índices.
+    Checks tables, primary keys, required columns, and indexes.
     Retorna (tables_and_cols_ok, indexes_ok, detail_reason).
     """
     existing_tables = {
@@ -216,7 +216,7 @@ def _inspect_schema(conn: sqlite3.Connection) -> Tuple[bool, bool, str]:
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:
-    """Adiciona colunas evolutivas previstas em tabelas já existentes."""
+    """Add expected evolutionary columns to existing tables."""
     for table_name, cols_to_add in _ADDITIVE_COLUMNS.items():
         existing_cols = {
             row[1] for row in conn.execute(f"PRAGMA table_info({table_name});").fetchall()
@@ -227,7 +227,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
 
 
 def _set_signature_version_v2(conn: sqlite3.Connection, invalidate_if_needed: bool) -> None:
-    """Garante marcação v2_head_tail para assinaturas exatas Head 4KB + Tail 4KB."""
+    """Ensure v2_head_tail marking for exact Head 4KB + Tail 4KB signatures."""
     if invalidate_if_needed:
         cur = conn.execute("SELECT value FROM app_settings WHERE key = 'signature_version';")
         row = cur.fetchone()
@@ -247,14 +247,14 @@ def _migrate_0_to_1(conn: sqlite3.Connection) -> None:
     _add_missing_columns(conn)
     _ensure_indexes(conn)
 
-    # Purga embeddings de dimensões obsoletas preservando tombstones (duration == -1.0)
+    # Purge obsolete-dimension embeddings while preserving tombstones (duration == -1.0)
     conn.execute("DELETE FROM cache_images WHERE length(embedding) != 1536 AND length(embedding) != 0;")
     conn.execute("DELETE FROM cache_videos WHERE length(embedding) != 7680 AND duration != -1.0;")
     _set_signature_version_v2(conn, invalidate_if_needed=True)
 
 
 def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
-    """Invalida apenas cache_images após recalibração visual do motor de imagens (EXIF, alpha, Hamming, ALPHA=1.2)."""
+    """Invalidate only cache_images after image engine visual recalibration (EXIF, alpha, Hamming, ALPHA=1.2)."""
     conn.execute("DELETE FROM cache_images;")
 
 
@@ -265,7 +265,7 @@ MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
 
 
 def _rescue_app_settings(db_path: Path) -> List[Tuple[str, str]]:
-    """Tenta resgatar preferências do usuário em app_settings antes de recriar o banco."""
+    """Attempt to rescue user preferences in app_settings before recreating the database."""
     if not db_path.exists():
         return []
     conn: Optional[sqlite3.Connection] = None
@@ -284,7 +284,7 @@ def _rescue_app_settings(db_path: Path) -> List[Tuple[str, str]]:
 
 
 def _unlink_db_files(db_path: Path) -> None:
-    """Remove o .db e arquivos auxiliares (-wal, -shm, -journal) para recriação limpa."""
+    """Remove the .db and sidecar files (-wal, -shm, -journal) for a clean recreation."""
     for suffix in ("", "-wal", "-shm", "-journal"):
         target = db_path if not suffix else db_path.with_name(f"{db_path.name}{suffix}")
         if target.exists():
@@ -292,7 +292,7 @@ def _unlink_db_files(db_path: Path) -> None:
 
 
 def _create_fresh_db(db_path: Path, rescued_settings: Optional[List[Tuple[str, str]]] = None) -> None:
-    """Cria um banco limpo na versão atual e restaura app_settings resgatadas."""
+    """Create a clean database at the current version and restore rescued app_settings."""
     conn = sqlite3.connect(str(db_path), timeout=60.0)
     try:
         _apply_structural_pragmas(conn, is_fresh=True)
@@ -311,7 +311,7 @@ def _create_fresh_db(db_path: Path, rescued_settings: Optional[List[Tuple[str, s
 
 
 def _recreate_tables_in_place(db_path: Path, rescued_settings: List[Tuple[str, str]]) -> None:
-    """Fallback caso o arquivo esteja travado para unlink: derruba e recria tabelas na própria base."""
+    """Fallback if the file is locked against unlink: drop and recreate tables in place."""
     conn = sqlite3.connect(str(db_path), timeout=60.0)
     try:
         tables = [
@@ -338,7 +338,7 @@ def _recreate_tables_in_place(db_path: Path, rescued_settings: List[Tuple[str, s
 
 
 def reset_database_preserving_settings(db_path: Path, reason: str = "reset") -> SchemaInitResult:
-    """Recria o banco do zero preservando app_settings legíveis e sem manter backup antigo."""
+    """Recreate the database from scratch preserving readable app_settings without keeping an old backup."""
     rescued = _rescue_app_settings(db_path)
     try:
         _unlink_db_files(db_path)
@@ -356,11 +356,11 @@ def reset_database_preserving_settings(db_path: Path, reason: str = "reset") -> 
 
 def ensure_database_schema(db_path: Path) -> SchemaInitResult:
     """
-    Valida no startup se o arquivo .db atende ao schema do executável atual.
-    - Se vazio/inexistente: cria na versão atual.
-    - Se versão antiga compatível: aplica migrações e atualiza user_version silenciosamente.
-    - Se versão futura (> CURRENT_SCHEMA_VERSION): lança FutureSchemaError sem modificar o arquivo.
-    - Se corrompido ou estruturalmente incompatível: preserva app_settings e recria limpo.
+    Validate at startup whether the .db file matches the current executable schema.
+    - If empty/missing: create at the current version.
+    - If older compatible version: apply migrations and update user_version silently.
+    - If future version (> CURRENT_SCHEMA_VERSION): raise FutureSchemaError without modifying the file.
+    - If corrupted or structurally incompatible: preserve app_settings and recreate cleanly.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     known_from_version = 0
@@ -380,7 +380,7 @@ def ensure_database_schema(db_path: Path) -> SchemaInitResult:
             ).fetchall()
         }
 
-        # 1. Banco recém-criado ou vazio
+        # 1. Newly created or empty database
         if not existing_tables and known_from_version == 0:
             conn.close()
             conn = None
@@ -393,7 +393,7 @@ def ensure_database_schema(db_path: Path) -> SchemaInitResult:
 
         _apply_structural_pragmas(conn, is_fresh=False)
 
-        # 2. Fast-path: já está marcado na versão atual
+        # 2. Fast-path: already marked at the current version
         if known_from_version == CURRENT_SCHEMA_VERSION:
             tables_ok, indexes_ok, detail = _inspect_schema(conn)
             if tables_ok and indexes_ok:
@@ -414,7 +414,7 @@ def ensure_database_schema(db_path: Path) -> SchemaInitResult:
                 )
             raise ValueError(f"Schema marked v{known_from_version} failed validation: {detail}")
 
-        # 3. Versão antiga (0 <= db_ver < CURRENT_SCHEMA_VERSION): verifica integridade e migra
+        # 3. Older version (0 <= db_ver < CURRENT_SCHEMA_VERSION): check integrity and migrate
         qc = conn.execute("PRAGMA quick_check(1);").fetchone()
         if not qc or qc[0] != "ok":
             raise sqlite3.DatabaseError(f"Integrity check failed: {qc}")

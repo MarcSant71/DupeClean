@@ -697,7 +697,7 @@ class _VirtualResultsView(QTableView):
         super().wheelEvent(event)
 
     def _apply_zoom(self) -> None:
-        """Escala fonte da tabela, cabeçalhos de grupo e altura das linhas mantendo virtualização O(1)."""
+        """Scale table font, group headers, and row height while preserving O(1) virtualization."""
         scale = 1.0 + 0.1 * self._zoom_level
         font_px = max(9, round(13 * scale))
         row_h = max(18, round(25 * scale))

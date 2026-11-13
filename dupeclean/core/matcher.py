@@ -1,7 +1,7 @@
 """
 Agrupador e Comparador Matricial por Similaridade na GPU.
-Executa multiplicação de tensores na VRAM e agrupa duplicatas por componentes conexos (Union-Find).
-Aplica rigorosamente as diretrizes da Pasta de Referência (Ref).
+Performs tensor multiplication in VRAM and groups duplicates by connected components (Union-Find).
+Strictly enforces Reference Folder (Ref) policies.
 """
 
 from pathlib import Path
@@ -16,7 +16,7 @@ from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
 def _fast_gpu_greedy_clique(cand_sims: torch.Tensor, thresh: float) -> torch.Tensor:
     """
     Calcula na GPU um clique maximal garantido onde TODOS os pares selecionados possuem
-    similaridade mútua >= thresh (elimina rigorosamente falsos positivos e encadeamento indireto).
+    mutual similarity >= thresh (strictly eliminates false positives and indirect chaining).
     """
     K = cand_sims.shape[0]
     if K <= 1:
@@ -54,7 +54,7 @@ def _resolve_clique_from_precomputed(
     idx_val: int,
     keep_pos: List[int],
 ) -> Tuple[List[int], float]:
-    """Resolve Complete Linkage em matriz de adjacência/similaridade já computada na GPU sem roundtrips CUDA."""
+    """Resolve Complete Linkage on an adjacency/similarity matrix already computed on GPU without CUDA roundtrips."""
     k_members = len(cands)
     lp = cands.index(idx_val) if idx_val in cands else -1
     if lp > 0:
@@ -104,7 +104,7 @@ def _precompute_batch_bmm_matrices(
     embeddings: torch.Tensor,
     similarity_threshold: float,
 ) -> Tuple[Dict[int, np.ndarray], Dict[int, np.ndarray]]:
-    """Pré-calcula em lote via Tensor Core BMM todas as matrizes KxK (3 <= K <= 96) do batch."""
+    """Pre-compute in batch via Tensor Core BMM all KxK matrices (3 <= K <= 96) for the batch."""
     buckets: Tuple[List[int], List[int]] = ([], [])
     for b, cl in enumerate(cands_by_row):
         lc = len(cl)
@@ -120,7 +120,7 @@ def _precompute_batch_bmm_matrices(
     for b_list in buckets:
         if not b_list:
             continue
-        # Sub-chunks limitam pico de memória em placas de 8 GB mesmo se K_max = 96
+        # Sub-chunks cap peak memory on 8 GB GPUs even if K_max = 96
         for start in range(0, len(b_list), 256):
             chunk_b = b_list[start:start + 256]
             k_max = max(len(cands_by_row[b]) for b in chunk_b)
@@ -149,7 +149,7 @@ def _resolve_multi_member_clique(
     embeddings: torch.Tensor,
     similarity_threshold: float,
 ) -> Tuple[List[int], float]:
-    """Extrai na GPU o subgrupo coeso máximo (Complete Linkage) contendo o líder idx_val."""
+    """Extract on GPU the maximal cohesive subgroup (Complete Linkage) containing leader idx_val."""
     ordered = list(cands)
     if idx_val in ordered:
         pos_leader = ordered.index(idx_val)
@@ -193,9 +193,9 @@ def cluster_by_similarity(
 ) -> List[DuplicateGroup]:
     """
     Calcula similaridade por cosseno em blocos GEMM na GPU e agrupa duplicatas via
-    algoritmo de Exemplar/Star Clustering de altíssimo rendimento diretamente na VRAM.
-    Elimina qualquer gargalo de CPU em coleções massivas, garantindo telemetria contínua,
-    alta ocupação de GPU (RTX Tensor Cores) e tolerância temporal em vídeos (<= 8%).
+    ultra-high-throughput Exemplar/Star Clustering algorithm directly in VRAM.
+    Eliminates any CPU bottleneck on massive collections, ensuring continuous telemetry,
+    high GPU occupancy (RTX Tensor Cores), and video duration tolerance (<= 8%).
     """
     n = len(records)
     if n <= 1 or embeddings.shape[0] != n:
@@ -206,14 +206,14 @@ def cluster_by_similarity(
     device = embeddings.device
 
     with torch.inference_mode():
-        # 1. Vetor de durações para filtro GPU em vídeos
+        # 1. Duration vector for GPU video filtering
         durations = None
         if mode == ScanMode.VIDEOS:
             dur_vals = [getattr(r, "duration", None) or 0.0 for r in records]
             durations = torch.tensor(dur_vals, device=device, dtype=torch.float32)
 
-        # 2. Análise de conectividade em lote (GEMM) na GPU
-        # Dimensiona o chunk baseado no hardware para proteger placas de 8 GB e escalar até 32 GB
+        # 2. Batch connectivity analysis (GEMM) on GPU
+        # Sizes the chunk based on hardware to protect 8 GB cards and scale up to 32 GB
         from dupeclean.core.hardware import get_optimal_gpu_budgets
         budgets = get_optimal_gpu_budgets()
         target_chunk_bytes = budgets.get("target_chunk_bytes", 256 * 1024 * 1024)
@@ -251,7 +251,7 @@ def cluster_by_similarity(
                 last_progress_time = now
                 progress_callback(f"Analyzing similarities ({end_i:,}/{n:,})...", end_i, n)
 
-        # Arquivos com grau 0 não possuem nenhum par similar
+        # Degree-0 files have no similar pairs
         unassigned[degrees <= 0] = False
         candidates = torch.nonzero(unassigned).squeeze(1)
         total_candidates = candidates.numel()
@@ -259,8 +259,8 @@ def cluster_by_similarity(
         if total_candidates == 0:
             return []
 
-        # 3. Ordenação inteligente de líderes:
-        # Prioriza arquivos de Referência (is_reference=True) e maior densidade/grau de conectividade
+        # 3. Smart leader ordering:
+        # Prioritizes Reference files (is_reference=True) and higher connectivity degree/density
         is_ref_arr = np.array([1 if getattr(r, "is_reference", False) else 0 for r in records], dtype=np.int32)
         is_ref_tensor = torch.from_numpy(is_ref_arr).to(device)
 
@@ -271,7 +271,7 @@ def cluster_by_similarity(
         sorted_order = candidates[sorted_perm]
         sorted_degrees_cpu = cand_degrees[sorted_perm].cpu().tolist()
 
-        # Mantém índice em CPU para pular membros já alocados com zero sincronização CUDA
+        # Keep CPU index to skip already-allocated members with zero CUDA synchronization
         sorted_cpu = sorted_order.cpu().tolist()
         unassigned_cpu = bytearray(n)
         for c in sorted_cpu:
@@ -283,7 +283,7 @@ def cluster_by_similarity(
         active_durations = durations[active_indices] if durations is not None else None
         active_remaining = total_candidates
 
-        # 4. Formação de grupos por Cohesive Clique Clustering em lote nos Tensor Cores da GPU
+        # 4. Group formation via batched Cohesive Clique Clustering on GPU Tensor Cores
         duplicate_groups: List[DuplicateGroup] = []
         group_id = 1
         processed_candidates = 0
@@ -321,7 +321,7 @@ def cluster_by_similarity(
             if not batch_leaders:
                 break
 
-            # Único GEMM Tensor Core [B, D] @ [D, M] e transferência D2H para todo o lote de líderes
+            # Single Tensor Core GEMM [B, D] @ [D, M] and D2H transfer for the entire leader batch
             lead_t = torch.tensor(batch_leaders, dtype=torch.int64, device=device)
             batch_sims = torch.matmul(embeddings[lead_t], active_embs.t())
             batch_masks = unassigned[active_indices].unsqueeze(0) & (batch_sims >= similarity_threshold)
@@ -375,7 +375,7 @@ def cluster_by_similarity(
                     active_remaining -= 1
                     processed_candidates += 1
                 elif k_members == 2:
-                    # Pares (k=2) já tiveram similaridade mútua validada pelo GEMM em lote
+                    # Pairs (k=2) already had mutual similarity validated by batched GEMM
                     if cands[0] == idx_val:
                         other, sc_val = cands[1], c_scores[1]
                     else:
@@ -438,14 +438,14 @@ def cluster_by_similarity(
 
 def apply_reference_rules(group: DuplicateGroup) -> Set[Path]:
     """
-    Retorna o conjunto de arquivos que PODEM ser selecionados para exclusão,
-    GARANTINDO que nenhum arquivo de pasta de Referência seja jamais marcado.
+    Return the set of files that MAY be selected for deletion,
+    GUARANTEEING that no file from a Reference folder is ever marked.
     
     Regra:
-    - Se existirem arquivos de Referência no grupo:
-      -> NENHUM arquivo de referência é selecionado.
-      -> Todos os arquivos normais (não-referência) são marcados para exclusão.
-    - Se NÃO existirem arquivos de Referência:
+    - If Reference files exist in the group:
+      -> NO reference file is selected.
+      -> All normal (non-reference) files are marked for deletion.
+    - If NO Reference files exist:
       -> Preserva o mais novo (ou maior) e marca o restante.
     """
     ref_files = [f for f in group.files if f.is_reference]
@@ -454,14 +454,14 @@ def apply_reference_rules(group: DuplicateGroup) -> Set[Path]:
     selected_for_removal: Set[Path] = set()
 
     if ref_files:
-        # Há pelo menos um arquivo de referência protegido!
-        # Todos os não-referência podem ser limpos
+        # At least one protected reference file exists!
+        # All non-reference files can be cleaned
         for f in non_ref_files:
             selected_for_removal.add(f.path)
     else:
-        # Nenhum é referência: preserva o primeiro/mais novo
+        # None is reference: preserve the first/newest
         sorted_files = sorted(group.files, key=lambda x: (x.size, x.mtime), reverse=True)
-        # O primeiro é preservado, os outros são marcados
+        # First is preserved, others are marked
         for f in sorted_files[1:]:
             selected_for_removal.add(f.path)
 
@@ -470,15 +470,15 @@ def apply_reference_rules(group: DuplicateGroup) -> Set[Path]:
 
 def filter_reference_groups(groups: List[DuplicateGroup]) -> List[DuplicateGroup]:
     """
-    Filtra e calibra os grupos de duplicatas sob a política estrita de Pastas de Referência:
-    - Se o grupo possui arquivos de Referência:
-      1. Descarta o grupo caso NÃO existam arquivos de pastas normais (não-referência) para limpar.
-         (Um grupo com apenas arquivos de referência não permite exclusão e gera apenas poluição visual).
-      2. Preserva apenas UM arquivo representativo da pasta de referência (o canônico: menor caminho / mais antigo).
-         (Elimina a duplicação interna redundante da própria pasta de referência nos resultados).
-      3. Monta o grupo como: 1 arquivo mestre de referência + todas as duplicatas das demais pastas normais.
-    - Se o grupo NÃO possui arquivos de Referência (ex: duplicatas entre pastas normais):
-      Mantém o grupo intacto desde que possua 2 ou mais arquivos.
+    Filter and calibrate duplicate groups under the strict Reference Folder policy:
+    - If the group has Reference files:
+      1. Discard the group if NO normal (non-reference) files exist to clean.
+         (A group with only reference files allows no deletion and only creates visual clutter.)
+      2. Preserve only ONE representative file from the reference folder (canonical: shortest path / oldest).
+         (Eliminates redundant internal duplication within the reference folder itself from results.)
+      3. Assemble the group as: 1 master reference file + all duplicates from normal folders.
+    - If the group has NO Reference files (e.g., duplicates across normal folders):
+      Keep the group intact as long as it has 2 or more files.
     """
     filtered_groups: List[DuplicateGroup] = []
     new_group_id = 1
@@ -488,11 +488,11 @@ def filter_reference_groups(groups: List[DuplicateGroup]) -> List[DuplicateGroup
         non_ref_files = [f for f in g.files if not f.is_reference]
 
         if ref_files:
-            # Se não há nenhum arquivo fora da referência, o grupo é puramente interno e inerte
+            # If no file exists outside reference, the group is purely internal and inert
             if not non_ref_files:
                 continue
 
-            # Elege o arquivo canônico de referência (menor comprimento de caminho e data mais antiga)
+            # Elect the canonical reference file (shortest path length and oldest timestamp)
             canonical_ref = min(ref_files, key=lambda f: (len(str(f.path)), f.mtime))
 
             # Grupo definitivo: 1 arquivo mestre travado + arquivos duplicados das pastas de destino

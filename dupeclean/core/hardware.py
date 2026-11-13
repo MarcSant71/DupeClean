@@ -1,8 +1,8 @@
 """
 Hardware Gatekeeper para o DupeClean.
-Garante que a execução ocorra exclusivamente em GPUs NVIDIA RTX Séries 30, 40 ou 50
+Ensures execution runs on NVIDIA RTX 30, 40, or 50 series GPUs when available,
 (Compute Capability >= 8.6 - Ampere, Ada Lovelace, Blackwell) e vincula
-em tempo de execução (in-process) o PyTorch diretamente ao dispositivo CUDA 0.
+in-process PyTorch binding directly to CUDA device 0.
 """
 
 import os
@@ -11,16 +11,16 @@ from typing import Tuple, Dict, Any
 
 def enforce_high_performance_gpu():
     """
-    Configura em tempo de execução (apenas no escopo do processo atual, sem tocar no registro do Windows)
-    as variáveis de ambiente para que todo o processamento de tensores e IA ocorra na NVIDIA RTX (Device 0).
-    Execução ultrarrápida (<1ms) para que a Splash Screen apareça instantaneamente ao clicar no aplicativo.
+    Configures environment variables at runtime (scoped to the current process without touching the Windows registry)
+    so all tensor and AI processing runs on the NVIDIA RTX GPU (Device 0).
+    Ultra-fast execution (<1ms) so the Splash Screen appears immediately on launch.
     """
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 
 def _cpu_fallback_info(reason: str, capability: str = "N/A", vram_gb: float = 0.0, device_id: Any = None) -> Dict[str, Any]:
-    """Monta o dicionário de metadados padrão para execução em fallback de CPU."""
+    """Build the default metadata dictionary for CPU fallback execution."""
     return {
         "name": "NO GPU",
         "has_cuda": False,
@@ -33,15 +33,15 @@ def _cpu_fallback_info(reason: str, capability: str = "N/A", vram_gb: float = 0.
 
 
 def _is_rtx_capability(major: int, minor: int) -> bool:
-    """Retorna True se a Compute Capability atender ao mínimo RTX 30+ (8.6)."""
+    """Return True if Compute Capability meets the RTX 30+ minimum (8.6)."""
     return (major > 8) or (major == 8 and minor >= 6)
 
 
 def get_compute_device() -> Tuple[str, Any]:
     """
-    Retorna o dispositivo de cálculo ativo e o dtype correspondente:
-    - ('cuda', torch.float16) quando uma NVIDIA RTX compatível (CC >= 8.6) está disponível.
-    - ('cpu', torch.float32) como fallback universal quando não há GPU compatível.
+    Returns the active compute device and corresponding dtype:
+    - ('cuda', torch.float16) when a compatible NVIDIA RTX (CC >= 8.6) is available.
+    - ('cpu', torch.float32) as a universal fallback when no compatible GPU is present.
     """
     import torch
 
@@ -60,7 +60,7 @@ def get_compute_device() -> Tuple[str, Any]:
 
 def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     """
-    Inspeciona o hardware gráfico disponível para seleção de engine (CUDA RTX ou CPU Fallback).
+    Inspects available graphics hardware for engine selection (CUDA RTX or CPU Fallback).
     Executado em segundo plano pelo HardwareInitWorker enquanto a Splash Screen anima.
     Retorna (pode_iniciar, mensagem_erro, info_hardware).
     """
@@ -75,7 +75,7 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     if device_count == 0:
         return True, "", _cpu_fallback_info("No accessible CUDA devices found")
 
-    # Fixa o dispositivo primário explicitamente
+    # Explicitly pin the primary device
     device_id = 0
     try:
         torch.cuda.set_device(device_id)
@@ -125,7 +125,7 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
 
 def get_optimal_gpu_budgets() -> Dict[str, Any]:
     """
-    Calcula dinamicamente os orçamentos de memória e tamanhos de lote
+    Dynamically computes memory budgets and batch sizes
     baseando-se no dispositivo ativo (GPU RTX em VRAM ou fallback em CPU).
     """
     try:
@@ -144,15 +144,15 @@ def get_optimal_gpu_budgets() -> Dict[str, Any]:
         total_gb = total_bytes / (1024 ** 3)
         free_gb = free_bytes / (1024 ** 3)
 
-        # Regra de Segurança: aloca no máximo 25% da VRAM livre para um único bloco de cálculo GEMM.
-        # Garante 75% da VRAM livre como margem de segurança contra WDDM swap para a RAM.
-        # Piso: 256 MB (para 8 GB VRAM) | Teto: 2.0 GB (ponto ótimo para 24-32 GB VRAM).
+        # Safety Rule: allocate at most 25% of free VRAM for a single GEMM compute block.
+        # Keeps 75% of free VRAM as a safety margin against WDDM swap to system RAM.
+        # Floor: 256 MB (for 8 GB VRAM) | Ceiling: 2.0 GB (sweet spot for 24-32 GB VRAM).
         target_chunk_bytes = max(
             256 * 1024 * 1024,
             min(int(free_bytes * 0.25), 2 * 1024 * 1024 * 1024)
         )
 
-        # Escalonamento dinâmico do lote de extração de imagens por VRAM total
+        # Dynamic image extraction batch scaling by total VRAM
         if total_gb >= 24.0:
             image_batch_size = 1024
         elif total_gb >= 11.5:

@@ -1,10 +1,10 @@
 """
-Deduplicador Exato (Bit-a-bit) de Altíssimo Desempenho com xxHash64 e I/O Otimizado.
-Algoritmo de 3 estágios otimizado para alta vazão (NVMe, SSD, HDDs mecânicos e storages em rede/iSCSI):
-1. Agrupamento por tamanho (tamanhos únicos são descartados em memória sem tocar no disco).
-2. Assinatura composta Head 4KB + Tail 4KB para arquivos > 256KB, com fast-path direto para arquivos pequenos/médios (<= 256KB)
-   e ordenação por localidade de diretório para evitar head thrashing em HDDs mecânicos.
-3. Hash completo em streaming paralelo com buffers de 4 MB, concorrência balanceada e cancelamento atômico.
+High-Performance Exact (Bit-for-Bit) Deduplicator with xxHash64 and Optimized I/O.
+3-stage algorithm optimized for high throughput (NVMe, SSD, mechanical HDDs, and network/iSCSI storage):
+1. Size grouping (unique sizes are discarded in memory without touching disk).
+2. Composite Head 4KB + Tail 4KB signature for files > 256KB, with a direct fast-path for small/medium files (<= 256KB)
+   and directory-locality sorting to prevent head thrashing on mechanical HDDs.
+3. Full parallel streaming hash with 4 MB buffers, balanced concurrency, and atomic cancellation.
 """
 
 import os
@@ -20,7 +20,7 @@ from dupeclean.core.scanner import get_volume_capabilities
 
 
 def _capture_fstat_ids(f, rec: FileRecord) -> None:
-    """Captura (volume_id, file_id) do handle já aberto via os.fstat em volumes NTFS/ReFS (zero CreateFile extra)."""
+    """Capture (volume_id, file_id) from the already-open handle via os.fstat on NTFS/ReFS volumes (zero extra CreateFile)."""
     if rec.volume_id > 0 and rec.file_id > 0:
         return
     _, supports_fid = get_volume_capabilities(rec.path)
@@ -33,20 +33,20 @@ def _capture_fstat_ids(f, rec: FileRecord) -> None:
     except OSError:
         pass
 
-# Tamanho limite para arquivos pequenos/médios (lidos integralmente em 1 única passada no Estágio 2 via fast-path)
+# Size threshold for small/medium files (read in full in a single pass in Stage 2 via fast-path)
 PREHASH_CHUNK = 4096  # 4 KB (Head 4 KB + Tail 4 KB para arquivos > 256 KB)
 FAST_PATH_SIZE = 256 * 1024  # 256 KB (evita dupla abertura/leitura de fotos pequenas e documentos)
 
-# Buffer de leitura streaming otimizado para alta vazão contínua sem fragmentação de memória
+# Streaming read buffer optimized for sustained high throughput without memory fragmentation
 STREAM_BUFFER_SIZE = 512 * 1024  # 512 KB por bloco de leitura
 
 
 def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str, bool]]:
     """
-    Calcula o hash inicial do arquivo com suporte a cancelamento atômico:
-    - Arquivos <= 256 KB: lê o conteúdo integral de uma vez e já calcula o full hash (is_full=True).
-    - Arquivos > 256 KB: lê os primeiros 4 KB e os últimos 4 KB (Head + Tail) (is_full=False),
-      descartando 99.9% dos falsos positivos antes do streaming completo no Estágio 3.
+    Compute the initial file hash with atomic cancellation support:
+    - Files <= 256 KB: read the entire content at once and compute the full hash (is_full=True).
+    - Files > 256 KB: read the first 4 KB and last 4 KB (Head + Tail) (is_full=False),
+      discarding 99.9% of false positives before full streaming in Stage 3.
     Retorna (rec, hash_value, is_full) ou None em caso de erro de I/O ou cancelamento.
     """
     rec, stop_check = args
@@ -91,7 +91,7 @@ def _compute_full_hash_worker(
     mv: bytearray,
     stop_check: Optional[Callable[[], bool]]
 ) -> Optional[Tuple[FileRecord, str]]:
-    """Calcula o hash xxHash64 completo com zero overhead de alocação de buffer."""
+    """Compute the full xxHash64 hash with zero buffer allocation overhead."""
     if stop_check and stop_check():
         return None
     try:
@@ -119,7 +119,7 @@ def _compute_full_hash_worker(
 
 
 def _compute_full_hash(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str]]:
-    """Calcula o hash xxHash64 completo do arquivo em streaming com interrupção instantânea (API pública compatível)."""
+    """Compute the full streaming xxHash64 hash of a file with instant interruption (compatible public API)."""
     rec, stop_check = args
     mv = bytearray(STREAM_BUFFER_SIZE)
     return _compute_full_hash_worker(rec, mv, stop_check)
@@ -127,8 +127,8 @@ def _compute_full_hash(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) ->
 
 class _AsyncExactCacheWriter:
     """
-    Escritor assíncrono em background para persistência do cache exato (SQLite WAL).
-    Desacopla totalmente os workers de I/O do banco de dados, acumulando lotes em memória
+    Asynchronous background writer for exact cache persistence (SQLite WAL).
+    Completely decouples I/O workers from the database by accumulating batches in memory
     e commitando em uma thread dedicada sem bloquear o pipeline de leitura.
     """
     def __init__(self, cache_manager: CacheManager, batch_size: int = 2048, flush_interval: float = 0.5):
@@ -198,16 +198,16 @@ def find_exact_duplicates(
     cache_manager: Optional[CacheManager] = None
 ) -> List[DuplicateGroup]:
     """
-    Executa a identificação de duplicatas exatas usando xxHash64 multithreaded
-    com leitura concorrente de altíssima vazão, pipeline com zero overhead de lock,
-    persistência de cache assíncrona desacoplada do I/O e resposta instantânea a cancelamentos.
+    Identify exact duplicates using multithreaded xxHash64
+    with ultra-high-throughput concurrent reading, zero-lock-overhead pipeline,
+    asynchronous cache persistence decoupled from I/O, and instant cancellation response.
     """
     cache = cache_manager or CacheManager()
     cache_writer = _AsyncExactCacheWriter(cache)
 
     try:
         # -------------------------------------------------------------------------
-        # Estágio 1: Agrupar por tamanho (descarte instantâneo sem I/O)
+        # Stage 1: Group by size (instant discard without I/O)
         # -------------------------------------------------------------------------
         by_size = defaultdict(list)
         for rec in records:
@@ -221,7 +221,7 @@ def find_exact_duplicates(
             return []
 
         # -------------------------------------------------------------------------
-        # Estágio 2: Assinatura composta (Head 4 KB + Tail 4 KB) e fast-path (<= 256 KB)
+        # Stage 2: Composite signature (Head 4 KB + Tail 4 KB) and fast-path (<= 256 KB)
         # -------------------------------------------------------------------------
         flat_candidates = [f for grp in candidates_by_size for f in grp]
         if progress_callback:
@@ -229,7 +229,7 @@ def find_exact_duplicates(
 
         def _exact_cache_cb(msg: str, curr: int, tot: int):
             if progress_callback:
-                # Reserva 0% -> 50% do Estágio 2 para consulta ao cache, evitando 100% precoce e regressão
+                # Reserve 0% -> 50% of Stage 2 for cache lookup, preventing premature 100% and regression
                 _emit_progress(progress_callback, msg, curr, tot * 2, 2)
 
         cached_exact = cache.get_exact_cache(
@@ -244,7 +244,7 @@ def find_exact_duplicates(
         by_header_hash = defaultdict(list)
         to_header_check: List[FileRecord] = []
 
-        # Separação estrita: arquivos <= FAST_PATH_SIZE nunca entram em by_header_hash (são resolvidos no Estágio 2)
+        # Strict separation: files <= FAST_PATH_SIZE never enter by_header_hash (resolved in Stage 2)
         for rec in flat_candidates:
             p_key = str(rec.path)
             cached_data = cached_exact.get(p_key)
@@ -283,8 +283,8 @@ def find_exact_duplicates(
                 )
 
         if to_header_check and not (stop_check and stop_check()):
-            # Otimização espacial (Directory Locality): agrupa leituras por pasta pai
-            # para leitura sequencial do MFT e blocos de diretório, eliminando head thrashing em HDDs e storages NAS
+            # Spatial optimization (Directory Locality): group reads by parent folder
+            # for sequential MFT and directory block reads, eliminating head thrashing on HDDs and NAS storage
             to_header_check.sort(key=lambda r: str(r.path.parent))
 
             header_workers = min(32, max(4, os.cpu_count() or 4))
@@ -395,7 +395,7 @@ def find_exact_duplicates(
             return []
 
         # -------------------------------------------------------------------------
-        # Estágio 3: Hash completo em streaming paralelo com buffer contínuo (512 KB)
+        # Stage 3: Full parallel streaming hash with continuous buffer (512 KB)
         # -------------------------------------------------------------------------
         candidates_by_header = [files for key, files in by_header_hash.items() if len(files) > 1]
         total_deep_check = sum(len(f) for f in candidates_by_header)
@@ -417,7 +417,7 @@ def find_exact_duplicates(
                     to_deep_check.append(rec)
 
         if to_deep_check and not (stop_check and stop_check()):
-            # Otimização espacial para leitura sequencial de grandes blocos contíguos
+            # Spatial optimization for sequential reading of large contiguous blocks
             to_deep_check.sort(key=lambda r: str(r.path.parent))
 
             deep_workers = min(32, max(4, os.cpu_count() or 4))

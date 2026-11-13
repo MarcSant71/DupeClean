@@ -55,18 +55,18 @@ class SplashScreen(QWidget):
         container.setGraphicsEffect(shadow)
 
         layout = QVBoxLayout(container)
-        # Margens calculadas para simetria exata (35px topo ao título, 35px barra à base)
+        # Margins calculated for exact symmetry (35px top to title, 35px bar to bottom)
         layout.setContentsMargins(34, 14, 34, 28)
         layout.setSpacing(6)
 
-        # 1. Título Centralizado (Escalado em 50%: 36px font, altura 56px, background transparente)
+        # 1. Centered Title (Scaled 50%: 36px font, 56px height, transparent background)
         lbl_title = QLabel("DupeClean")
         lbl_title.setStyleSheet("font-size: 36px; font-weight: 800; color: #38bdf8; background: transparent;")
         lbl_title.setFixedHeight(56)
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_title)
 
-        # 2. Subtítulo Conciso Centralizado (Escalado em 50%: 18px font, altura 28px)
+        # 2. Centered Concise Subtitle (Scaled 50%: 18px font, 28px height)
         lbl_sub = QLabel("GPU-Accelerated Duplicate File Finder")
         lbl_sub.setStyleSheet("font-size: 18px; color: #a1a1aa; font-weight: 500; background: transparent;")
         lbl_sub.setFixedHeight(28)
@@ -104,7 +104,7 @@ class SplashScreen(QWidget):
 
         root_layout.addWidget(container)
 
-        # Centraliza na tela primária
+        # Center on the primary screen
         screen = QApplication.primaryScreen()
         if screen:
             geo = screen.availableGeometry()
@@ -113,7 +113,7 @@ class SplashScreen(QWidget):
             self.move(x, y)
 
     def start_animation(self):
-        """Inicia animação fluida e contínua da barra de progresso durante a carga."""
+        """Start smooth, continuous progress bar animation during loading."""
         self._current_float_val = 5.0
         self._target_val = 20.0
         self.progress.setValue(5)
@@ -122,7 +122,7 @@ class SplashScreen(QWidget):
         self._anim_timer.start(25)  # 40 fps suaves
 
     def set_target_progress(self, target: int, message: Optional[str] = None):
-        """Define um novo patamar de progresso para a interpolação suave da barra."""
+        """Set a new progress target for smooth bar interpolation."""
         self._target_val = max(self._target_val, float(target))
         if message:
             self.lbl_status.setText(message)
@@ -134,7 +134,7 @@ class SplashScreen(QWidget):
             self._current_float_val = min(self._target_val, self._current_float_val + step)
             self.progress.setValue(int(self._current_float_val))
         elif self._current_float_val < 98.0 and self._target_val < 100.0:
-            # Creep suave e sutil enquanto aguarda a próxima etapa real (elimina qualquer congelamento visual)
+            # Subtle smooth creep while waiting for the next real stage (eliminates any visual freeze)
             self._current_float_val += 0.05
             self.progress.setValue(int(self._current_float_val))
 

@@ -10,7 +10,7 @@ QMainWindow, QWidget {
     font-size: 13px;
 }
 
-/* Painéis e Caixas de Grupo */
+/* Panels and Group Boxes */
 QGroupBox {
     border: 1px solid #3f3f46;
     border-radius: 6px;
@@ -26,7 +26,7 @@ QGroupBox::title {
     padding: 0 4px;
 }
 
-/* Botões */
+/* Buttons */
 QPushButton {
     background-color: #27272a;
     color: #fafafa;
@@ -48,7 +48,7 @@ QPushButton:disabled {
     border-color: #27272a;
 }
 
-/* Botão de Ação Primária (Escanear) */
+/* Primary Action Button (Scan) */
 QPushButton#primaryButton {
     background-color: #0284c7;
     color: #ffffff;
@@ -64,7 +64,7 @@ QPushButton#primaryButton:disabled {
     border: 1px solid #27272a;
 }
 
-/* Botão de Parar */
+/* Stop Button */
 QPushButton#stopButton {
     background-color: #3f3f46;
     color: #f4f4f5;
@@ -80,7 +80,7 @@ QPushButton#stopButton:disabled {
     border: 1px solid #27272a;
 }
 
-/* Botão de Exclusão (Lixeira) */
+/* Delete / Trash Button */
 QPushButton#dangerButton {
     background-color: #b91c1c;
     color: #ffffff;
@@ -96,7 +96,7 @@ QPushButton#dangerButton:disabled {
     border: 1px solid #27272a;
 }
 
-/* Botão Circular de Ajuda (?) - Inspirado na Identidade do RadarEleitoral */
+/* Circular Help Button (?) */
 QPushButton#helpButton {
     background-color: #202024;
     border: 1px solid #3f3f46;
@@ -127,7 +127,7 @@ QPushButton#helpButton::menu-indicator {
     image: none;
 }
 
-/* Barra de Ações Superior (Container Unificado - Cópia Fiel dos Elementos Visuais do Menu Lateral) */
+/* Top Action Bar (Unified Container matching Side Menu visuals) */
 QFrame#topActionBarContainer {
     background-color: #202024;
     border: 1px solid #2e2e33;
@@ -157,7 +157,7 @@ QFrame#topActionBarContainer QPushButton:disabled {
     color: #52525b;
 }
 
-/* Botão Quadradinho com Checkmark da Pasta de Referência */
+/* Square Checkmark Button for Reference Folder */
 QPushButton#refSquare {
     width: 18px;
     height: 18px;
@@ -183,7 +183,7 @@ QPushButton#refSquare:checked {
     color: #0f172a;
 }
 
-/* Tabelas e Árvores */
+/* Tables and Trees */
 QTreeWidget, QTableWidget, QTableView {
     background-color: #27272a;
     alternate-background-color: #202023;
@@ -202,7 +202,7 @@ QTreeWidget::item:selected, QTableWidget::item:selected, QTableView::item:select
     color: #ffffff;
 }
 
-/* Cabeçalhos de Tabela */
+/* Table Headers */
 QHeaderView {
     background-color: transparent;
     border: none;
@@ -255,7 +255,7 @@ QSlider::handle:horizontal:disabled {
     border: 1px solid #3f3f46;
 }
 
-/* Barra de Progresso Geral e Estágios */
+/* Overall and Stage Progress Bars */
 QProgressBar {
     border: 1px solid #3f3f46;
     border-radius: 4px;
@@ -285,13 +285,13 @@ QProgressBar#progCurrent::chunk, QProgressBar#progAll::chunk {
     border-radius: 3px;
 }
 
-/* Container da Barra Lateral (Divisão Contínua e Elegante de Cima a Baixo) */
+/* Sidebar Container (Continuous Top-to-Bottom Divider) */
 QWidget#sidebarContainer {
     background-color: #151518;
     border-right: 1px solid #2e2e33;
 }
 
-/* Barra Lateral de Modos (Caixa Única Envolvendo os 3 Modos - Estilo Czkawka) */
+/* Mode Sidebar (Single Box Wrapping the 3 Modes) */
 QListWidget#sidebarModes {
     background-color: #202024;
     border: 1px solid #2e2e33;
@@ -344,7 +344,7 @@ QListWidget#sidebarModes::item:focus {
     outline: none;
 }
 
-/* Menus de Seleção e Contexto */
+/* Selection and Context Menus */
 QMenu {
     background-color: #202024;
     color: #f4f4f5;
@@ -384,7 +384,7 @@ QSplitter::handle:vertical {
 
 
 def create_app_icon():
-    """Carrega o ícone oficial (.ico) da aplicação ou gera fallback vetorial."""
+    """Load the official application icon (.ico) or generate a vector fallback."""
     import sys
     from pathlib import Path
     from PySide6.QtCore import Qt

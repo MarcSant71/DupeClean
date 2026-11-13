@@ -1,7 +1,7 @@
 """
-Gerenciador de Logs de Falhas Críticas com Anonimização LGPD e Retenção de 7 Dias.
-Registra no disco estritamente quando ocorre uma falha fatal ou exceção não tratada,
-garantindo 100% de privacidade ao expurgar nomes de usuários, diretórios e arquivos pessoais.
+Critical Crash Log Manager with Privacy Sanitization and 7-Day Retention.
+Writes to disk strictly when a fatal crash or unhandled exception occurs,
+ensuring 100% privacy by stripping usernames, personal directories, and file names.
 """
 
 import os
@@ -19,14 +19,14 @@ from dupeclean import __version__
 
 
 def get_project_root() -> Path:
-    """Retorna o diretório base da aplicação (raiz em dev ou diretório do executável congelado)."""
+    """Return the application base directory (project root in dev or frozen executable directory)."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent.parent
 
 
 def get_logs_dir() -> Path:
-    """Retorna o diretório data/logs para armazenamento dos relatórios de falha."""
+    """Return the data/logs directory for storing crash reports."""
     base_dir = get_project_root()
     logs_dir = base_dir / "data" / "logs"
     try:
@@ -40,8 +40,8 @@ def get_logs_dir() -> Path:
 
 def prune_old_logs(logs_dir: Path, max_age_days: int = 7) -> int:
     """
-    Remove arquivos de log na pasta logs_dir com tempo de modificação superior a max_age_days.
-    Retorna a quantidade de arquivos excluídos.
+    Remove log files in logs_dir older than max_age_days.
+    Returns the number of deleted files.
     """
     pruned_count = 0
     try:
@@ -62,9 +62,9 @@ def prune_old_logs(logs_dir: Path, max_age_days: int = 7) -> int:
 def sanitize_text(raw_text: str, project_root: Optional[Path] = None) -> str:
     """
     Aplica filtros de privacidade em conformidade rigorosa com a LGPD:
-    - Mascara o nome do usuário do Windows (%USERNAME% / Home).
-    - Converte caminhos absolutos do código-fonte em caminhos relativos ao projeto.
-    - Mascara caminhos locais de pastas/arquivos de usuário ([REDACTED_PATH]).
+    - Masks the Windows username (%USERNAME% / Home).
+    - Converts absolute source code paths into project-relative paths.
+    - Masks local user folder/file paths ([REDACTED_PATH]).
     - Mascara caminhos UNC de rede ([REDACTED_UNC_PATH]).
     """
     if not raw_text:
@@ -74,7 +74,7 @@ def sanitize_text(raw_text: str, project_root: Optional[Path] = None) -> str:
     root = project_root or get_project_root()
     root_str = str(root)
 
-    # 1. Mascara nome de usuário do sistema operacional
+    # 1. Mask OS username
     username = os.environ.get("USERNAME", "")
     if username and len(username) >= 2:
         sanitized = re.sub(re.escape(username), "[USER]", sanitized, flags=re.IGNORECASE)
@@ -86,7 +86,7 @@ def sanitize_text(raw_text: str, project_root: Optional[Path] = None) -> str:
     except Exception:
         pass
 
-    # 2. Converte caminhos absolutos do código-fonte para relativos
+    # 2. Convert absolute source code paths to relative paths
     variants = [
         root_str,
         root_str.replace("/", "\\"),
@@ -105,24 +105,24 @@ def sanitize_text(raw_text: str, project_root: Optional[Path] = None) -> str:
     # 4. Mascara caminhos de rede UNC: \\server\share\...
     sanitized = re.sub(r'(\\\\[A-Za-z0-9_.\-]+(?:\\[^\s"\'\r\n\t]+)*)', r'[REDACTED_UNC_PATH]', sanitized)
 
-    # 5. Mascara caminhos de unidades locais do usuário: [A-Za-z]:\...
+    # 5. Mask local user drive paths: [A-Za-z]:\...
     def _path_replacer(match):
         full = match.group(0)
-        # Identifica se possui extensão de arquivo no final
+        # Check if it has a file extension at the end
         ext_match = re.search(r'(\.[a-zA-Z0-9_]{1,8})$', full.rstrip("\"'"))
         ext = ext_match.group(1).lower() if ext_match else ""
         return f"[REDACTED_PATH/*{ext}]" if ext else "[REDACTED_PATH]"
 
     # Mascara caminhos delimitados por aspas
     sanitized = re.sub(r'["\'][A-Za-z]:\\[^"\'\r\n\t]+["\']', _path_replacer, sanitized)
-    # Mascara caminhos soltos no texto que não pertençam ao projeto
+    # Mask stray paths in text that do not belong to the project
     sanitized = re.sub(r'(?<![A-Za-z0-9_])[A-Za-z]:\\(?:[^\s"\'\r\n\t,;:]+)', _path_replacer, sanitized)
 
     return sanitized
 
 
 def get_system_telemetry() -> Dict[str, Any]:
-    """Coleta telemetria técnica de hardware e sistema sem qualquer identificador pessoal."""
+    """Collect technical hardware and system telemetry without any personal identifiers."""
     telemetry = {
         "dupeclean_version": __version__,
         "os": f"{platform.system()} {platform.release()} (build {platform.version()})",
@@ -130,7 +130,7 @@ def get_system_telemetry() -> Dict[str, Any]:
         "cpu_count": os.cpu_count() or 1,
     }
 
-    # Memória RAM do Sistema (Windows GlobalMemoryStatusEx)
+    # System RAM (Windows GlobalMemoryStatusEx)
     try:
         class MEMORYSTATUSEX(ctypes.Structure):
             _fields_ = [
@@ -152,7 +152,7 @@ def get_system_telemetry() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Informações de GPU / CUDA / PyTorch
+    # GPU / CUDA / PyTorch information
     try:
         import torch
         telemetry["pytorch_version"] = torch.__version__
@@ -174,10 +174,10 @@ def log_critical_crash(
     context: Optional[Dict[str, str]] = None
 ) -> Optional[Path]:
     """
-    Ponto de entrada oficial para gravação de falhas críticas:
+    Official entry point for recording critical crashes:
     1. Formata traceback e mensagem de erro.
     2. Aplica saneamento estrito (LGPD).
-    3. Executa a limpeza de logs com mais de 7 dias de retenção.
+    3. Run cleanup of logs older than 7 days.
     4. Grava em data/logs/crash_YYYY-MM-DD.log.
     Retorna o Path do arquivo gravado, ou None em caso de falha.
     """
@@ -185,7 +185,7 @@ def log_critical_crash(
         logs_dir = get_logs_dir()
         prune_old_logs(logs_dir, max_age_days=7)
 
-        # Trata formato da exceção
+        # Handle exception format
         if isinstance(exc, tuple) and len(exc) == 3:
             exc_type, exc_val, exc_tb = exc
             raw_tb = "".join(traceback.format_exception(exc_type, exc_val, exc_tb))
