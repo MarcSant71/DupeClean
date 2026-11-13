@@ -55,3 +55,6 @@ desktop.ini
 .vscode/
 *.swp
 *.swo
+
+# Local unit tests (not tracked in Git)
+tests/
