@@ -1,5 +1,11 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.11
+- **Tri-Tier Cache Resilience for Moved and Renamed Folders:**
+  - Implemented lazy NTFS File ID (`volume_id + file_id`) tracking across Exact, Image, and Video modes so moving or renaming folders on the same NTFS/ReFS volume reuses existing cache entries with zero file re-reads or GPU reprocessing.
+  - Added automatic batch L1 backfill for legacy databases, hardlink-safe orphan cleanup (`os.path.exists` guard), and a parallelized L3 content-sieve (`size + 8KB xxHash64 prefix`) fallback for exFAT/FAT32 drives and cross-volume copies.
+  - Offloaded `prefix_hash` and `os.stat` metadata collection inside image threads and video `ProcessPoolExecutor` workers to avoid blocking the GPU consumer pipeline.
+
 ### What's New in v1.1.10
 - **Polished Portable Distribution Layout (`lib/`):**
   - Customized PyInstaller's internal contents directory structure from the default `_internal` to standard `lib/` (`contents_directory='lib'`).
