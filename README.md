@@ -2,14 +2,14 @@
 
 **GPU-Accelerated Duplicate File Finder**
 
-[![GitHub Release](https://img.shields.io/github/v/release/MarcSant71/DupeClean?color=007acc&logo=github&v=1.1.10)](https://github.com/MarcSant71/DupeClean/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/MarcSant71/DupeClean?color=007acc&logo=github&v=1.1.13)](https://github.com/MarcSant71/DupeClean/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-blue?logo=windows)](https://github.com/MarcSant71/DupeClean/releases/latest)
 [![GPU](https://img.shields.io/badge/NVIDIA-RTX%20GPU%20Required-76b900?logo=nvidia)](https://github.com/MarcSant71/DupeClean/releases/latest)
 
 High-performance duplicate file, image, and video finder engineered and optimized exclusively for **NVIDIA GeForce RTX (30, 40, and 50 Series)** GPUs with Ampere, Ada Lovelace, and Blackwell architectures.
 
 > 📦 **Portable Release (No Python Installation Required):**  
-> Download the pre-built standalone package [**`DupeClean-v1.1.10-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
+> Download the pre-built standalone package [**`DupeClean-v1.1.13-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
 
 <p align="center">
   <img src="assets/dupeclean_main_screenshot.png" alt="DupeClean GPU Duplicate Finder Interface" width="100%">
@@ -161,7 +161,7 @@ Traditional deduplicators are lightweight single-binary executables because they
 
 For 99% of users, **no installation, no Python, and no command line setup is required**:
 
-1. Download [**`DupeClean-v1.1.10-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
+1. Download [**`DupeClean-v1.1.13-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
 2. Extract the archive using [7-Zip](https://www.7-zip.org/) or WinRAR.
 3. Launch **`DupeClean.exe`** directly. Everything (Python runtime, CUDA 12 libraries, and GPU models) is pre-bundled and runs out of the box.
 

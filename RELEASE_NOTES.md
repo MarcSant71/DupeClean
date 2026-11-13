@@ -1,5 +1,9 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.13
+- **Stage 2 Status Feedback Polish:**
+  - Refined the Tier 2 cache lookup status label to `"Checking cache index (N)..."` for clear, accurate feedback across both newly added and moved files.
+
 ### What's New in v1.1.12
 - **Cache Query & Stage Transition Optimization:**
   - Fixed SQLite partial-index predicates (`file_id != 0` and `prefix_hash IS NOT NULL`) across L2/L3 cache lookups in Exact, Image, and Video modes, replacing full table scans with direct index searches (~10x faster L2 SQL queries).
