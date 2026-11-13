@@ -184,7 +184,7 @@ QPushButton#refSquare:checked {
 }
 
 /* Tabelas e Árvores */
-QTreeWidget, QTableWidget {
+QTreeWidget, QTableWidget, QTableView {
     background-color: #27272a;
     alternate-background-color: #202023;
     border: 1px solid #3f3f46;
@@ -193,11 +193,11 @@ QTreeWidget, QTableWidget {
     color: #f4f4f5;
     outline: none;
 }
-QTreeWidget::item, QTableWidget::item {
+QTreeWidget::item, QTableWidget::item, QTableView::item {
     padding: 4px;
     border-bottom: 1px solid #2e2e33;
 }
-QTreeWidget::item:selected, QTableWidget::item:selected {
+QTreeWidget::item:selected, QTableWidget::item:selected, QTableView::item:selected {
     background-color: #0369a1;
     color: #ffffff;
 }

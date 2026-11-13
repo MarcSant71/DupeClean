@@ -1,205 +1,791 @@
 """
-Duplicate results tree widget with group headers,
-selection rules, and visual Reference Folder protection.
+Virtualized duplicate results grid backed by QTableView + QAbstractTableModel.
+Supports hundreds of thousands of groups and files with O(1) viewport rendering,
+fast Python Timsort column sorting, selection rules, and Reference Folder protection.
 """
 
-from pathlib import Path
+from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Set, Optional
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Set, Tuple
 import os
 import subprocess
 
-from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QColor, QBrush, QFont, QAction
+from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPointF, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QHeaderView, QMenu, QApplication
+    QAbstractItemView,
+    QApplication,
+    QHeaderView,
+    QMenu,
+    QStyle,
+    QStyleOptionViewItem,
+    QStyledItemDelegate,
+    QTableView,
+    QVBoxLayout,
+    QWidget,
 )
 
-from dupeclean.core.models import DuplicateGroup, FileRecord
 from dupeclean.core.matcher import apply_reference_rules
+from dupeclean.core.models import DuplicateGroup, FileRecord
 
 
 def format_size(size_bytes: int) -> str:
-    """Formata bytes em KB, MB ou GB legíveis."""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.2f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.2f} PB"
+    """Format byte counts into human-readable units."""
+    val = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if val < 1024.0:
+            return f"{val:.2f} {unit}"
+        val /= 1024.0
+    return f"{val:.2f} PB"
 
 
 _format_size = format_size
 
 
-class SortableGroupItem(QTreeWidgetItem):
-    """Item de cabeçalho do grupo com ordenação inteligente por coluna e chaves pré-cacheadas para alta performance."""
-    _sort_col: int = 1
-    _sort_normal: bool = False
-
-    def __init__(self, group: DuplicateGroup, original_index: int = 0, parent=None):
-        super().__init__(parent)
-        self.group = group
-        self.original_index: int = original_index
-        self.k_orig: int = original_index
-        self.k_chk: int = 0
-
-        # Pré-cache de chaves de comparação para eliminar chamadas e alocações repetitivas no __lt__
-        if group.files:
-            f0 = group.files[0]
-            self.k_name: str = (f0.name or f0.path.name or "").lower()
-            self.k_size: int = f0.size
-            self.k_path: str = str(f0.path).lower()
-            self.k_mtime: float = max((f.mtime for f in group.files), default=0.0)
-        else:
-            self.k_name = ""
-            self.k_size = 0
-            self.k_path = ""
-            self.k_mtime = 0.0
-
-        self.k_reclaim: int = group.reclaimable_bytes
-        self.k_sim: float = group.similarity
-
-        self.k_name_tuple = (self.k_name, self.k_orig)
-        self.k_size_tuple = (self.k_size, self.k_reclaim, self.k_orig)
-        self.k_mtime_tuple = (self.k_mtime, self.k_orig)
-        self.k_sim_tuple = (self.k_sim, self.k_reclaim, self.k_orig)
-        self.k_path_tuple = (self.k_path, self.k_orig)
-
-        self.setFlags(self.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-
-    def __lt__(self, other: 'QTreeWidgetItem') -> bool:
-        if not isinstance(other, SortableGroupItem):
-            return super().__lt__(other)
-        if SortableGroupItem._sort_normal:
-            return self.k_orig < other.k_orig
-
-        col = SortableGroupItem._sort_col
-        if col == 0:
-            return (self.k_chk, self.k_orig) < (other.k_chk, other.k_orig)
-        elif col == 1:
-            return self.k_name_tuple < other.k_name_tuple
-        elif col == 2:
-            return self.k_size_tuple < other.k_size_tuple
-        elif col == 3:
-            return self.k_mtime_tuple < other.k_mtime_tuple
-        elif col == 4:
-            return self.k_sim_tuple < other.k_sim_tuple
-        elif col == 5:
-            return self.k_path_tuple < other.k_path_tuple
-
-        return self.k_orig < other.k_orig
+@dataclass(slots=True)
+class _GroupEntry:
+    """Lightweight in-memory representation of a duplicate group and per-file selection."""
+    group: DuplicateGroup
+    orig_index: int
+    header_text: str
+    sim_str: str
+    k_name: str
+    k_size: int
+    k_mtime: float
+    k_reclaim: int
+    k_sim: float
+    k_path: str
+    k_chk: int
+    files: List[FileRecord]
+    checked: List[bool]
+    display_order: Optional[List[int]] = None
+    expanded: bool = True
 
 
-class SortableFileItem(QTreeWidgetItem):
-    """Item de arquivo filho com ordenação exata por tipo de dado (bytes, timestamp, texto) e chaves cacheadas."""
-    _sort_col: int = 1
-    _sort_normal: bool = False
-
-    def __init__(self, file_rec: FileRecord, similarity: float, original_index: int = 0, parent=None):
-        super().__init__(parent)
-        self.file_rec = file_rec
-        self.similarity = similarity
-        self.original_index: int = original_index
-        self.k_orig: int = original_index
-        self.k_name: str = (file_rec.name or file_rec.path.name or "").lower()
-        self.k_size: int = file_rec.size
-        self.k_mtime: float = file_rec.mtime
-        self.k_sim: float = similarity
-        self.k_path: str = str(file_rec.path).lower()
-
-        self.k_name_tuple = (self.k_name, self.k_orig)
-        self.k_size_tuple = (self.k_size, self.k_orig)
-        self.k_mtime_tuple = (self.k_mtime, self.k_orig)
-        self.k_sim_tuple = (self.k_sim, self.k_orig)
-        self.k_path_tuple = (self.k_path, self.k_orig)
-
-    def __lt__(self, other: 'QTreeWidgetItem') -> bool:
-        if not isinstance(other, SortableFileItem):
-            return super().__lt__(other)
-        if SortableFileItem._sort_normal:
-            return self.k_orig < other.k_orig
-
-        col = SortableFileItem._sort_col
-        if col == 0:
-            chk_self = (self.checkState(0) == Qt.CheckState.Checked) if not self.file_rec.is_reference else False
-            chk_other = (other.checkState(0) == Qt.CheckState.Checked) if not other.file_rec.is_reference else False
-            if self.file_rec.is_reference != other.file_rec.is_reference:
-                return self.file_rec.is_reference < other.file_rec.is_reference
-            return (chk_self, self.k_orig) < (chk_other, other.k_orig)
-        elif col == 1:
-            return self.k_name_tuple < other.k_name_tuple
-        elif col == 2:
-            return self.k_size_tuple < other.k_size_tuple
-        elif col == 3:
-            return self.k_mtime_tuple < other.k_mtime_tuple
-        elif col == 4:
-            return self.k_sim_tuple < other.k_sim_tuple
-        elif col == 5:
-            return self.k_path_tuple < other.k_path_tuple
-
-        return self.k_orig < other.k_orig
+def _build_group_header(group: DuplicateGroup) -> str:
+    reclaim_str = _format_size(group.reclaimable_bytes)
+    return (
+        f"Group #{group.group_id}  •  {len(group.files)} Files  •  "
+        f"Reclaimable: {reclaim_str}"
+    )
 
 
-class ResultsWidget(QWidget):
-    """Visualizador em árvore das duplicatas encontradas."""
+def _format_similarity(similarity: float) -> str:
+    return "100.0%" if similarity >= 0.9999 else f"{similarity * 100:.1f}%"
+
+
+def _build_entry(group: DuplicateGroup, orig_index: int) -> _GroupEntry:
+    files = group.files
+    if files:
+        f0 = files[0]
+        k_name = (f0.name or f0.path.name or "").lower()
+        k_size = f0.size
+        k_path = str(f0.path).lower()
+        k_mtime = max((f.mtime for f in files), default=0.0)
+    else:
+        k_name = ""
+        k_size = 0
+        k_path = ""
+        k_mtime = 0.0
+
+    return _GroupEntry(
+        group=group,
+        orig_index=orig_index,
+        header_text=_build_group_header(group),
+        sim_str=_format_similarity(group.similarity),
+        k_name=k_name,
+        k_size=k_size,
+        k_mtime=k_mtime,
+        k_reclaim=group.reclaimable_bytes,
+        k_sim=group.similarity,
+        k_path=k_path,
+        k_chk=0,
+        files=files,
+        checked=[False] * len(files),
+        display_order=None,
+        expanded=True,
+    )
+
+
+def _group_sort_key(entry: _GroupEntry, col: int):
+    if col == 0:
+        return (entry.k_chk, entry.orig_index)
+    if col == 1:
+        return (entry.k_name, entry.orig_index)
+    if col == 2:
+        return (entry.k_size, entry.k_reclaim, entry.orig_index)
+    if col == 3:
+        return (entry.k_mtime, entry.orig_index)
+    if col == 4:
+        return (entry.k_sim, entry.k_reclaim, entry.orig_index)
+    if col == 5:
+        return (entry.k_path, entry.orig_index)
+    return entry.orig_index
+
+
+def _sort_entry_files(entry: _GroupEntry, col: int, reverse: bool) -> None:
+    """Permute display_order of files within a group to match column sorting rules."""
+    n_files = len(entry.files)
+    if n_files <= 1:
+        entry.display_order = None
+        return
+
+    files = entry.files
+    checked = entry.checked
+    sim = entry.k_sim
+
+    if col == 0:
+        order = sorted(
+            range(n_files),
+            key=lambda fi: (
+                files[fi].is_reference,
+                checked[fi] if not files[fi].is_reference else False,
+                fi,
+            ),
+            reverse=reverse,
+        )
+    elif col == 1:
+        order = sorted(
+            range(n_files),
+            key=lambda fi: ((files[fi].name or files[fi].path.name or "").lower(), fi),
+            reverse=reverse,
+        )
+    elif col == 2:
+        order = sorted(
+            range(n_files),
+            key=lambda fi: (files[fi].size, fi),
+            reverse=reverse,
+        )
+    elif col == 3:
+        order = sorted(
+            range(n_files),
+            key=lambda fi: (files[fi].mtime, fi),
+            reverse=reverse,
+        )
+    elif col == 4:
+        order = sorted(
+            range(n_files),
+            key=lambda fi: (sim, fi),
+            reverse=reverse,
+        )
+    elif col == 5:
+        order = sorted(
+            range(n_files),
+            key=lambda fi: (str(files[fi].path).lower(), fi),
+            reverse=reverse,
+        )
+    else:
+        entry.display_order = None
+        return
+
+    entry.display_order = order
+
+
+class ResultsModel(QAbstractTableModel):
+    """Flat virtualized table model mapping visible rows to group headers or file records."""
+
     COLUMN_LABELS = [
         "Selection", "File Name", "Size", "Date Modified",
         "Similarity", "Full Path"
     ]
-    selection_changed = Signal(int, "qint64")  # (count, total_bytes) - qint64 suporta até 9 Exabytes sem overflow
-    selection_progress = Signal(str, int, int) # (title, current, total) para barra de progresso não-bloqueante
-    status_message = Signal(str)               # Mensagem amigável de status para o rodapé
-    file_selected = Signal(object)             # Optional[FileRecord]
+
+    selection_delta = Signal(int, "qint64")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._entries: List[_GroupEntry] = []
+        self._row_group: List[int] = []
+        self._row_file: List[int] = []
+        self._date_cache: Dict[int, str] = {}
+        self._ref_row_bg = QBrush(QColor("#202024"))
+        self._ref_row_fg = QBrush(QColor("#71717a"))
+        self._selected_count: int = 0
+        self._selected_bytes: int = 0
+
+    def _get_mtime_str(self, ts: float) -> str:
+        sec = int(ts)
+        val = self._date_cache.get(sec)
+        if val is None:
+            val = datetime.fromtimestamp(ts).strftime("%m/%d/%Y %H:%M:%S")
+            if len(self._date_cache) < 50000:
+                self._date_cache[sec] = val
+        return val
+
+    def _rebuild_flat_index(self) -> None:
+        row_group: List[int] = []
+        row_file: List[int] = []
+        append_g = row_group.append
+        append_f = row_file.append
+        extend_g = row_group.extend
+        extend_f = row_file.extend
+
+        for gi, entry in enumerate(self._entries):
+            append_g(gi)
+            append_f(-1)
+            if entry.expanded:
+                cnt = len(entry.files)
+                extend_g([gi] * cnt)
+                extend_f(range(cnt))
+
+        self._row_group = row_group
+        self._row_file = row_file
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._row_group)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return 6
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            if 0 <= section < len(self.COLUMN_LABELS):
+                return self.COLUMN_LABELS[section]
+        return None
+
+    def is_group_row(self, row: int) -> bool:
+        return 0 <= row < len(self._row_file) and self._row_file[row] < 0
+
+    def entry_at_row(self, row: int) -> Optional[_GroupEntry]:
+        if 0 <= row < len(self._row_group):
+            return self._entries[self._row_group[row]]
+        return None
+
+    def file_at_row(self, row: int) -> Optional[Tuple[_GroupEntry, int, FileRecord]]:
+        if not (0 <= row < len(self._row_group)):
+            return None
+        fi_vis = self._row_file[row]
+        if fi_vis < 0:
+            return None
+        entry = self._entries[self._row_group[row]]
+        orig_fi = entry.display_order[fi_vis] if entry.display_order is not None else fi_vis
+        return entry, orig_fi, entry.files[orig_fi]
+
+    def row_for_group_file(self, group_id: int, file_idx: int = 0) -> int:
+        """Locate the flat row index of a file inside a given group_id (used by tests/navigation)."""
+        for gi, entry in enumerate(self._entries):
+            if entry.group.group_id == group_id:
+                for row_idx in range(len(self._row_group)):
+                    if self._row_group[row_idx] == gi and self._row_file[row_idx] == file_idx:
+                        return row_idx
+        return -1
+
+    def row_for_group(self, group_id: int) -> int:
+        """Locate the flat row index of a group header row."""
+        for gi, entry in enumerate(self._entries):
+            if entry.group.group_id == group_id:
+                for row_idx in range(len(self._row_group)):
+                    if self._row_group[row_idx] == gi and self._row_file[row_idx] < 0:
+                        return row_idx
+        return -1
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        row = index.row()
+        if self.is_group_row(row):
+            return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        info = self.file_at_row(row)
+        if info is None:
+            return Qt.ItemFlag.NoItemFlags
+        _, _, rec = info
+        if index.column() == 0 and not rec.is_reference:
+            return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = index.row()
+        col = index.column()
+        if not (0 <= row < len(self._row_group)):
+            return None
+
+        gi = self._row_group[row]
+        fi_vis = self._row_file[row]
+        entry = self._entries[gi]
+
+        if fi_vis < 0:
+            if role == Qt.ItemDataRole.DisplayRole and col == 1:
+                return entry.header_text
+            return None
+
+        orig_fi = entry.display_order[fi_vis] if entry.display_order is not None else fi_vis
+        rec = entry.files[orig_fi]
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0:
+                return ""
+            if col == 1:
+                return rec.name
+            if col == 2:
+                return _format_size(rec.size)
+            if col == 3:
+                return self._get_mtime_str(rec.mtime)
+            if col == 4:
+                return entry.sim_str
+            if col == 5:
+                return str(rec.path)
+            return None
+
+        if role == Qt.ItemDataRole.CheckStateRole and col == 0:
+            if rec.is_reference:
+                return None
+            return Qt.CheckState.Checked if entry.checked[orig_fi] else Qt.CheckState.Unchecked
+
+        if role == Qt.ItemDataRole.UserRole:
+            return rec
+
+        if rec.is_reference:
+            if role == Qt.ItemDataRole.BackgroundRole:
+                return self._ref_row_bg
+            if role == Qt.ItemDataRole.ForegroundRole:
+                return self._ref_row_fg
+            if role == Qt.ItemDataRole.ToolTipRole:
+                return "Protected file (Reference Folder). Cannot be selected or deleted."
+
+        return None
+
+    def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole) -> bool:
+        if not index.isValid() or role != Qt.ItemDataRole.CheckStateRole or index.column() != 0:
+            return False
+        info = self.file_at_row(index.row())
+        if info is None:
+            return False
+        entry, orig_fi, rec = info
+        if rec.is_reference:
+            return False
+
+        target_state = Qt.CheckState(value) if not isinstance(value, Qt.CheckState) else value
+        is_checked = target_state == Qt.CheckState.Checked
+        if entry.checked[orig_fi] != is_checked:
+            entry.checked[orig_fi] = is_checked
+            if is_checked:
+                self._selected_count += 1
+                self._selected_bytes += rec.size
+            else:
+                self._selected_count = max(0, self._selected_count - 1)
+                self._selected_bytes = max(0, self._selected_bytes - rec.size)
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole])
+            self.selection_delta.emit(self._selected_count, self._selected_bytes)
+        return True
+
+    def set_entries(self, groups: List[DuplicateGroup]) -> None:
+        self.beginResetModel()
+        try:
+            self._entries = [_build_entry(g, idx) for idx, g in enumerate(groups, 1)]
+            self._selected_count = 0
+            self._selected_bytes = 0
+            self._rebuild_flat_index()
+        finally:
+            self.endResetModel()
+
+    def clear_entries(self) -> None:
+        self.beginResetModel()
+        try:
+            self._entries = []
+            self._row_group = []
+            self._row_file = []
+            self._selected_count = 0
+            self._selected_bytes = 0
+        finally:
+            self.endResetModel()
+
+    def sort_entries(self, col: Optional[int], order: Optional[Qt.SortOrder]) -> List[DuplicateGroup]:
+        if not self._entries:
+            return []
+
+        self.layoutAboutToBeChanged.emit()
+        try:
+            if order is None or col is None:
+                self._entries.sort(key=lambda e: e.orig_index)
+                for entry in self._entries:
+                    entry.display_order = None
+            else:
+                reverse = order == Qt.SortOrder.DescendingOrder
+                if col == 0:
+                    for entry in self._entries:
+                        entry.k_chk = sum(entry.checked)
+                self._entries.sort(key=lambda e: _group_sort_key(e, col), reverse=reverse)
+                for entry in self._entries:
+                    _sort_entry_files(entry, col, reverse)
+            self._rebuild_flat_index()
+        finally:
+            self.layoutChanged.emit()
+
+        return [e.group for e in self._entries]
+
+    def set_all_expanded(self, expanded: bool) -> None:
+        if not self._entries:
+            return
+        self.beginResetModel()
+        try:
+            for entry in self._entries:
+                entry.expanded = expanded
+            self._rebuild_flat_index()
+        finally:
+            self.endResetModel()
+
+    def toggle_group_at_row(self, row: int) -> None:
+        if not self.is_group_row(row):
+            return
+        gi = self._row_group[row]
+        entry = self._entries[gi]
+        n_files = len(entry.files)
+        if n_files == 0:
+            return
+
+        if entry.expanded:
+            self.beginRemoveRows(QModelIndex(), row + 1, row + n_files)
+            del self._row_group[row + 1:row + 1 + n_files]
+            del self._row_file[row + 1:row + 1 + n_files]
+            entry.expanded = False
+            self.endRemoveRows()
+        else:
+            self.beginInsertRows(QModelIndex(), row + 1, row + n_files)
+            self._row_group[row + 1:row + 1] = [gi] * n_files
+            self._row_file[row + 1:row + 1] = list(range(n_files))
+            entry.expanded = True
+            self.endInsertRows()
+
+    def apply_selection(
+        self,
+        updater: Callable[[_GroupEntry], Tuple[int, int]],
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> Tuple[int, int]:
+        """Run a batch selection function in pure Python memory and refresh column 0 once."""
+        total_groups = len(self._entries)
+        if total_groups == 0:
+            return 0, 0
+
+        selected_count = 0
+        selected_bytes = 0
+        chunk_size = 25000 if total_groups > 25000 else total_groups
+
+        for idx, entry in enumerate(self._entries, 1):
+            c_delta, b_delta = updater(entry)
+            selected_count += c_delta
+            selected_bytes += b_delta
+            if progress_callback and (idx % chunk_size == 0 or idx == total_groups):
+                progress_callback(idx, total_groups)
+
+        self._selected_count = selected_count
+        self._selected_bytes = selected_bytes
+        rc = len(self._row_group)
+        if rc > 0:
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(rc - 1, 0),
+                [Qt.ItemDataRole.CheckStateRole],
+            )
+        return selected_count, selected_bytes
+
+    def remove_deleted_paths(self, deleted_paths: Set[Path]) -> List[DuplicateGroup]:
+        if not deleted_paths or not self._entries:
+            return [e.group for e in self._entries]
+
+        self.beginResetModel()
+        selected_count = 0
+        selected_bytes = 0
+        new_entries: List[_GroupEntry] = []
+
+        try:
+            for entry in self._entries:
+                rem_files: List[FileRecord] = []
+                rem_checked: List[bool] = []
+                for rec, is_chk in zip(entry.files, entry.checked):
+                    if rec.path not in deleted_paths:
+                        rem_files.append(rec)
+                        keep_chk = bool(is_chk and not rec.is_reference)
+                        rem_checked.append(keep_chk)
+                        if keep_chk:
+                            selected_count += 1
+                            selected_bytes += rec.size
+
+                if len(rem_files) > 1:
+                    entry.group.files = rem_files
+                    entry.files = rem_files
+                    entry.checked = rem_checked
+                    entry.display_order = None
+                    entry.header_text = _build_group_header(entry.group)
+                    entry.k_reclaim = entry.group.reclaimable_bytes
+                    entry.k_mtime = max((f.mtime for f in rem_files), default=0.0)
+                    f0 = rem_files[0]
+                    entry.k_name = (f0.name or f0.path.name or "").lower()
+                    entry.k_size = f0.size
+                    entry.k_path = str(f0.path).lower()
+                    new_entries.append(entry)
+
+            self._entries = new_entries
+            self._selected_count = selected_count
+            self._selected_bytes = selected_bytes
+            self._rebuild_flat_index()
+        finally:
+            self.endResetModel()
+
+        return [e.group for e in self._entries]
+
+
+class _ResultsCellDelegate(QStyledItemDelegate):
+    """Paints standard file cells while skipping group rows (drawn full-width by the view)."""
+
+    def __init__(self, model: ResultsModel, parent=None):
+        super().__init__(parent)
+        self._model = model
+        self._chk_border_pen = QPen(QColor("#71717a"), 1.2)
+        self._chk_checked_pen = QPen(QColor("#38bdf8"), 1.2)
+        self._chk_tick_pen = QPen(QColor("#ffffff"), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        self._chk_unchecked_bg = QColor("#18181b")
+        self._chk_checked_bg = QColor("#0284c7")
+
+    def _checkbox_rect(self, cell_rect: QRect) -> QRect:
+        size = 15
+        x = cell_rect.left() + 14
+        y = cell_rect.top() + (cell_rect.height() - size) // 2
+        return QRect(x, y, size, size)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        row = index.row()
+        if self._model.is_group_row(row):
+            return
+        if index.column() == 0:
+            # Draw row background + selection + QSS border without native check indicator
+            opt = QStyleOptionViewItem(option)
+            self.initStyleOption(opt, index)
+            opt.text = ""
+            style = opt.widget.style() if opt.widget else QApplication.style()
+            style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, opt, painter, opt.widget)
+
+            info = self._model.file_at_row(row)
+            if info is not None and not info[2].is_reference:
+                box = self._checkbox_rect(option.rect)
+                is_checked = info[0].checked[info[1]]
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                if is_checked:
+                    painter.setPen(self._chk_checked_pen)
+                    painter.setBrush(self._chk_checked_bg)
+                    painter.drawRoundedRect(box, 3, 3)
+                    tick = QPainterPath()
+                    tick.moveTo(QPointF(box.left() + 3.2, box.top() + 7.8))
+                    tick.lineTo(QPointF(box.left() + 6.3, box.top() + 10.8))
+                    tick.lineTo(QPointF(box.left() + 11.8, box.top() + 4.4))
+                    painter.setPen(self._chk_tick_pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawPath(tick)
+                else:
+                    painter.setPen(self._chk_border_pen)
+                    painter.setBrush(self._chk_unchecked_bg)
+                    painter.drawRoundedRect(box, 3, 3)
+                painter.restore()
+            return
+        super().paint(painter, option, index)
+
+    def editorEvent(self, event, model, option, index) -> bool:
+        row = index.row()
+        if self._model.is_group_row(row):
+            return False
+        if index.column() == 0:
+            etype = event.type()
+            if etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                info = self._model.file_at_row(row)
+                if info is not None and not info[2].is_reference:
+                    box = self._checkbox_rect(option.rect).adjusted(-4, -4, 4, 4)
+                    pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                    if box.contains(pos):
+                        next_state = Qt.CheckState.Unchecked if info[0].checked[info[1]] else Qt.CheckState.Checked
+                        return model.setData(index, next_state, Qt.ItemDataRole.CheckStateRole)
+                return False
+            if etype == QEvent.Type.MouseButtonPress or etype == QEvent.Type.MouseButtonDblClick:
+                return False
+        return super().editorEvent(event, model, option, index)
+
+
+class _VirtualResultsView(QTableView):
+    """High-throughput QTableView painting full-width collapsible group headers."""
+
+    header_sort_requested = Signal(int)
+    direct_sort_requested = Signal(int, object)
+
+    def __init__(self, model: ResultsModel, parent=None):
+        super().__init__(parent)
+        self._model = model
+        self._group_bg = QColor("#27272a")
+        self._group_sel_bg = QColor("#0369a1")
+        self._group_border = QColor("#2e2e33")
+        self._group_fg = QColor("#38bdf8")
+        self._group_sel_fg = QColor("#ffffff")
+        self._chevron_pen = QPen(QColor("#a1a1aa"), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        self._group_font = QFont()
+        self._group_font.setBold(True)
+
+        self.setModel(model)
+        self.setItemDelegate(_ResultsCellDelegate(model, self))
+        self.setShowGrid(False)
+        self.setAlternatingRowColors(False)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        v_header = self.verticalHeader()
+        v_header.setVisible(False)
+        v_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        v_header.setDefaultSectionSize(25)
+
+    def header(self) -> QHeaderView:
+        """Compatibility helper mirroring QTreeWidget.header()."""
+        return self.horizontalHeader()
+
+    def sortByColumn(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder) -> None:
+        self.direct_sort_requested.emit(column, order)
+
+    def mousePressEvent(self, event) -> None:
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        idx = self.indexAt(pos)
+        if idx.isValid() and self._model.is_group_row(idx.row()):
+            col1_x = max(26, self.columnViewportPosition(1))
+            if pos.x() < col1_x:
+                super().mousePressEvent(event)
+                self._model.toggle_group_at_row(idx.row())
+                return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Space:
+            cur = self.currentIndex()
+            if cur.isValid():
+                row = cur.row()
+                if self._model.is_group_row(row):
+                    self._model.toggle_group_at_row(row)
+                    return
+                info = self._model.file_at_row(row)
+                if info is not None and not info[2].is_reference:
+                    chk_idx = self._model.index(row, 0)
+                    next_state = Qt.CheckState.Unchecked if info[0].checked[info[1]] else Qt.CheckState.Checked
+                    self._model.setData(chk_idx, next_state, Qt.ItemDataRole.CheckStateRole)
+                    return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        rc = self._model.rowCount()
+        if rc == 0:
+            return
+
+        rect = event.rect()
+        top_row = self.rowAt(rect.top())
+        bot_row = self.rowAt(rect.bottom())
+        if top_row < 0:
+            top_row = 0
+        if bot_row < 0:
+            bot_row = rc - 1
+
+        vp_width = self.viewport().width()
+        col0_x = self.columnViewportPosition(0)
+        col1_x = self.columnViewportPosition(1)
+        sel_model = self.selectionModel()
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        try:
+            for r in range(top_row, bot_row + 1):
+                if not self._model.is_group_row(r):
+                    continue
+                entry = self._model.entry_at_row(r)
+                if entry is None:
+                    continue
+
+                y = self.rowViewportPosition(r)
+                h = self.rowHeight(r)
+                row_rect = QRect(0, y, vp_width, h)
+                is_sel = bool(sel_model and sel_model.isRowSelected(r, QModelIndex()))
+
+                painter.fillRect(row_rect, self._group_sel_bg if is_sel else self._group_bg)
+                painter.setPen(self._group_border)
+                painter.drawLine(0, y + h - 1, vp_width, y + h - 1)
+
+                # Vector chevron inside column 0 left gutter
+                cx = col0_x + 12
+                cy = y + h * 0.5
+                chevron = QPainterPath()
+                if entry.expanded:
+                    chevron.moveTo(QPointF(cx - 4, cy - 2))
+                    chevron.lineTo(QPointF(cx, cy + 3))
+                    chevron.lineTo(QPointF(cx + 4, cy - 2))
+                else:
+                    chevron.moveTo(QPointF(cx - 2, cy - 4))
+                    chevron.lineTo(QPointF(cx + 3, cy))
+                    chevron.lineTo(QPointF(cx - 2, cy + 4))
+                painter.setPen(self._chevron_pen)
+                painter.drawPath(chevron)
+
+                # Full-width group title starting aligned with File Name column
+                text_x = max(col0_x + 24, col1_x + 4)
+                text_rect = QRect(text_x, y, max(0, vp_width - text_x - 8), h)
+                painter.setFont(self._group_font)
+                painter.setPen(self._group_sel_fg if is_sel else self._group_fg)
+                elided = painter.fontMetrics().elidedText(
+                    entry.header_text, Qt.TextElideMode.ElideRight, text_rect.width()
+                )
+                painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
+        finally:
+            painter.end()
+
+
+class ResultsWidget(QWidget):
+    """Duplicate results viewer backed by a virtualized flat QTableView."""
+
+    COLUMN_LABELS = ResultsModel.COLUMN_LABELS
+    selection_changed = Signal(int, "qint64")
+    selection_progress = Signal(str, int, int)
+    status_message = Signal(str)
+    file_selected = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.groups: List[DuplicateGroup] = []
         self._selected_count: int = 0
         self._selected_bytes: int = 0
+        self._current_sort_col: Optional[int] = None
+        self._current_sort_order: Optional[Qt.SortOrder] = None
         self._init_ui()
 
-    def _create_tree(self) -> QTreeWidget:
-        """Cria e configura uma instância limpa do QTreeWidget com todas as conexões e colunas calibradas."""
-        tree = QTreeWidget()
-        tree.setColumnCount(6)
-        tree.setHeaderLabels([
-            "Selection", "File Name", "Size", "Date Modified",
-            "Similarity", "Full Path"
-        ])
+    def _create_tree(self) -> _VirtualResultsView:
+        self.model = ResultsModel(self)
+        view = _VirtualResultsView(self.model, self)
 
-        header = tree.header()
-        # Colunas interativas com stretch na última seção (Full Path) para preencher a largura sem quebrar os cantos
+        header = view.header()
         header.setStretchLastSection(True)
         header.setMinimumSectionSize(50)
         for col_idx in range(6):
             header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
 
-        # Calibragem de indentação e larguras iniciais
-        tree.setIndentation(12)
-        tree.setColumnWidth(0, 75)   # Selection
-        tree.setColumnWidth(1, 260)  # File Name
-        tree.setColumnWidth(2, 90)   # Size
-        tree.setColumnWidth(3, 135)  # Date Modified
-        tree.setColumnWidth(4, 80)   # Similarity
-        tree.setColumnWidth(5, 200)  # Full Path (expande para preencher o espaço restante)
+        view.setColumnWidth(0, 75)   # Selection
+        view.setColumnWidth(1, 260)  # File Name
+        view.setColumnWidth(2, 90)   # Size
+        view.setColumnWidth(3, 135)  # Date Modified
+        view.setColumnWidth(4, 80)   # Similarity
+        view.setColumnWidth(5, 200)  # Full Path
 
-        # Permite rolagem horizontal suave se as colunas excederem o espaço disponível
-        tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        # Habilita duplo clique interativo nos cabeçalhos para alternar entre 3 estados: Crescente / Decrescente / Normal
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(False)
         header.setToolTip("Double-click column header to cycle sort: Ascending ▲ / Descending ▼ / Normal")
         header.sectionDoubleClicked.connect(self._on_header_double_clicked)
 
-        tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        tree.customContextMenuRequested.connect(self._show_context_menu)
-        tree.itemDoubleClicked.connect(self._on_item_double_clicked)
-        tree.itemClicked.connect(self._on_item_clicked)
-        tree.currentItemChanged.connect(self._on_current_item_changed)
-        tree.itemChanged.connect(self._on_item_changed)
-        return tree
+        view.direct_sort_requested.connect(self._apply_sort_state)
+        view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        view.customContextMenuRequested.connect(self._show_context_menu)
+        view.doubleClicked.connect(self._on_index_double_clicked)
+        view.clicked.connect(self._on_index_clicked)
+        if view.selectionModel():
+            view.selectionModel().currentChanged.connect(self._on_current_index_changed)
+        self.model.selection_delta.connect(self._on_model_selection_delta)
+        return view
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -207,164 +793,64 @@ class ResultsWidget(QWidget):
         self.tree = self._create_tree()
         layout.addWidget(self.tree)
 
-    def set_results(self, groups: List[DuplicateGroup]):
-        """Popula a árvore com os grupos de duplicatas encontrados em lote de alta performance."""
-        self.tree.viewport().setUpdatesEnabled(False)
-        self.tree.blockSignals(True)
-        if self.tree.topLevelItemCount() > 0:
-            self.tree.invisibleRootItem().takeChildren()
+    def _on_model_selection_delta(self, count: int, total_bytes: int) -> None:
+        self._selected_count = count
+        self._selected_bytes = total_bytes
+        self.selection_changed.emit(count, total_bytes)
 
-        self.tree.header().setSectionsClickable(True)
-        self.tree.header().setSortIndicatorShown(False)
-        self.groups = groups
+    def set_results(self, groups: List[DuplicateGroup]):
+        """Populate the virtualized grid in O(groups) without creating widget items."""
+        header = self.tree.header()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)
+        self.groups = list(groups)
         self._selected_count = 0
         self._selected_bytes = 0
         self._current_sort_col = None
         self._current_sort_order = None
-        self._reset_header_labels()
-        self.file_selected.emit(None)
 
-        bold_font = QFont()
-        bold_font.setBold(True)
-        bg_brush = QBrush(QColor("#27272a"))
-        fg_brush = QBrush(QColor("#38bdf8"))
-        ref_row_bg = QBrush(QColor("#202024"))
-        ref_row_fg = QBrush(QColor("#71717a"))
-
-        top_level_items: List[QTreeWidgetItem] = []
-        batch_chunk_size = 2000
-        app = QApplication.instance()
-
-        date_cache: Dict[int, str] = {}
-        def _get_mtime_str(ts: float) -> str:
-            sec = int(ts)
-            val = date_cache.get(sec)
-            if val is None:
-                val = datetime.fromtimestamp(ts).strftime("%m/%d/%Y %H:%M:%S")
-                if len(date_cache) < 50000:
-                    date_cache[sec] = val
-            return val
-
+        self.model.set_entries(groups)
         total_groups = len(groups)
-
-        for idx, group in enumerate(groups, 1):
-            # Item Pai: Cabeçalho do Grupo
-            reclaim_str = _format_size(group.reclaimable_bytes)
-            sim_pct = "100.0%" if group.similarity >= 0.9999 else f"{group.similarity * 100:.1f}%"
-            group_header = (
-                f"Group #{group.group_id}  •  {len(group.files)} Files  •  "
-                f"Reclaimable: {reclaim_str}"
-            )
-
-            parent_item = SortableGroupItem(group, original_index=idx)
-            parent_item.setText(1, group_header)
-            parent_item.setFirstColumnSpanned(True)
-            parent_item.setFont(1, bold_font)
-            parent_item.setBackground(0, bg_brush)
-            parent_item.setForeground(1, fg_brush)
-
-            # Child items: Files in group
-            child_items: List[QTreeWidgetItem] = []
-            for file_idx, file_rec in enumerate(group.files):
-                child_item = SortableFileItem(file_rec, group.similarity, original_index=file_idx)
-
-                # Name
-                child_item.setText(1, file_rec.name)
-
-                # Size
-                child_item.setText(2, _format_size(file_rec.size))
-
-                # Date Modified
-                child_item.setText(3, _get_mtime_str(file_rec.mtime))
-
-                # Similarity
-                child_item.setText(4, sim_pct)
-
-                # Caminho Completo (coluna 5)
-                child_item.setText(5, str(file_rec.path))
-                child_item.setData(0, Qt.ItemDataRole.UserRole, file_rec)
-
-                # Selection control & Visual styling:
-                # Reference files are 100% protected, uncheckable, and painted in muted disabled gray across all columns.
-                if file_rec.is_reference:
-                    child_item.setFlags(child_item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-                    child_item.setText(0, "")
-                    for c in range(6):
-                        child_item.setBackground(c, ref_row_bg)
-                        child_item.setForeground(c, ref_row_fg)
-                        child_item.setToolTip(c, "Protected file (Reference Folder). Cannot be selected or deleted.")
-                else:
-                    child_item.setFlags(child_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    child_item.setCheckState(0, Qt.CheckState.Unchecked)
-
-                child_items.append(child_item)
-
-            parent_item.addChildren(child_items)
-            top_level_items.append(parent_item)
-
-            if idx % batch_chunk_size == 0:
-                self.tree.addTopLevelItems(top_level_items)
-                top_level_items = []
-                self.selection_progress.emit("Loading results", idx, total_groups)
-                if app:
-                    app.processEvents()
-
-        if top_level_items:
-            self.tree.addTopLevelItems(top_level_items)
-
         if total_groups > 0:
             self.selection_progress.emit("Loading results", total_groups, total_groups)
+            app = QApplication.instance()
             if app:
                 app.processEvents()
 
-        # Expande automaticamente todos os grupos recém-carregados (0.4s) sem reordenação destrutiva síncrona
-        self.tree.expandAll()
-        self.tree.header().setSectionsClickable(True)
-        self.tree.blockSignals(False)
-        self.tree.viewport().setUpdatesEnabled(True)
         self.tree.viewport().update()
-        if app:
-            app.processEvents()
+        self.file_selected.emit(None)
         self.selection_changed.emit(0, 0)
 
     def _reset_header_labels(self):
-        """Restaura os títulos limpos dos cabeçalhos sem setas de ordenação."""
-        header_item = self.tree.headerItem()
-        if header_item:
-            for i, title in enumerate(self.COLUMN_LABELS):
-                header_item.setText(i, title)
-            if self.tree.header():
-                self.tree.header().viewport().update()
+        """Force header repaint while keeping static clean column titles."""
+        header = self.tree.header()
+        if header:
+            header.viewport().update()
 
     def _on_header_double_clicked(self, col: int):
-        """Alterna a ordenação com duplo clique em 3 estados: Crescente -> Decrescente -> Normal (sem ordenação)."""
-        if not self.groups:
+        """Cycle column sort state: Ascending -> Descending -> Normal."""
+        if not self.groups or self.model.rowCount() == 0:
             return
 
-        root = self.tree.invisibleRootItem()
-        total_items = root.childCount()
-        if total_items == 0:
-            return
+        current_col = self._current_sort_col
+        current_order = self._current_sort_order
 
-        header = self.tree.header()
-        current_col = getattr(self, "_current_sort_col", None)
-        current_order = getattr(self, "_current_sort_order", None)
-
-        # Ciclo de 3 estados:
-        # Se coluna diferente ou estado Normal -> 1º clique duplo: Crescente
-        # Se mesma coluna e Crescente -> 2º clique duplo: Decrescente
-        # Se mesma coluna e Decrescente -> 3º clique duplo: Normal (Sem ordenação)
         if current_col != col or current_order is None:
-            new_order = Qt.SortOrder.AscendingOrder
+            new_order: Optional[Qt.SortOrder] = Qt.SortOrder.AscendingOrder
         elif current_order == Qt.SortOrder.AscendingOrder:
             new_order = Qt.SortOrder.DescendingOrder
         else:
             new_order = None
 
+        self._apply_sort_state(col, new_order)
+
+    def _apply_sort_state(self, col: int, new_order: Optional[Qt.SortOrder]):
+        if not self.groups or self.model.rowCount() == 0:
+            return
+
         self._current_sort_col = col if new_order is not None else None
         self._current_sort_order = new_order
 
-        # Feedback visual instantâneo: Cursor de espera + mensagem amigável no rodapé
         app = QApplication.instance()
         if app:
             app.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -380,77 +866,39 @@ class ResultsWidget(QWidget):
         if app:
             app.processEvents()
 
-        self.tree.viewport().setUpdatesEnabled(False)
-        self.tree.blockSignals(True)
+        header = self.tree.header()
         try:
-            # Estado 3: Normal / Sem ordenação (restaura a ordem original do scan)
             if new_order is None:
                 header.setSortIndicatorShown(False)
-                self._reset_header_labels()
-
-                SortableGroupItem._sort_normal = True
-                SortableFileItem._sort_normal = True
-                self.tree.sortItems(0, Qt.SortOrder.AscendingOrder)
-                SortableGroupItem._sort_normal = False
-                SortableFileItem._sort_normal = False
             else:
-                # Estados 1 e 2: Crescente ou Decrescente (o indicador nativo da grid exibe o sinal de ordenação)
                 header.setSortIndicatorShown(True)
                 header.setSortIndicator(col, new_order)
-                self._reset_header_labels()
 
-                # Se a coluna for Seleção (0), faz uma contagem rápida O(N) dos itens marcados por grupo
-                if col == 0:
-                    for i in range(total_items):
-                        g_it = root.child(i)
-                        g_it.k_chk = sum(
-                            1 for j in range(g_it.childCount())
-                            if g_it.child(j).checkState(0) == Qt.CheckState.Checked
-                        )
-
-                SortableGroupItem._sort_col = col
-                SortableFileItem._sort_col = col
-                SortableGroupItem._sort_normal = False
-                SortableFileItem._sort_normal = False
-                self.tree.sortItems(col, new_order)
-
-            # Sincroniza a lista interna self.groups com a nova ordem da árvore
-            self.groups = [root.child(i).group for i in range(total_items)]
+            self.groups = self.model.sort_entries(col, new_order)
+            self._reset_header_labels()
         finally:
-            self.tree.blockSignals(False)
-            self.tree.viewport().setUpdatesEnabled(True)
             self.tree.viewport().update()
-            if header:
-                header.viewport().update()
             self.status_message.emit("")
             if app:
                 app.restoreOverrideCursor()
 
-    # Alias para compatibilidade e chamadas diretas
     _on_header_clicked = _on_header_double_clicked
 
     def clear(self):
-        """Limpa os resultados da árvore e reseta a seleção mantendo os títulos e colunas permanentemente visíveis."""
+        """Clear results while preserving headers and column geometry."""
         self.groups = []
         self._selected_count = 0
         self._selected_bytes = 0
         self._current_sort_col = None
         self._current_sort_order = None
+        self.tree.header().setSortIndicatorShown(False)
         self._reset_header_labels()
-        self.tree.viewport().setUpdatesEnabled(False)
-        self.tree.blockSignals(True)
-        try:
-            if self.tree.topLevelItemCount() > 0:
-                self.tree.invisibleRootItem().takeChildren()
-        finally:
-            self.tree.blockSignals(False)
-            self.tree.viewport().setUpdatesEnabled(True)
+        self.model.clear_entries()
         self.tree.viewport().update()
         self.file_selected.emit(None)
         self.selection_changed.emit(0, 0)
 
     def has_selected_files(self) -> bool:
-        """Retorna True se há pelo menos um arquivo marcado, em tempo O(1) sem varrer a árvore."""
         return self._selected_count > 0
 
     def get_selected_count(self) -> int:
@@ -459,412 +907,206 @@ class ResultsWidget(QWidget):
     def get_selected_bytes(self) -> int:
         return self._selected_bytes
 
-    def _emit_selection_stats(self):
-        """Calcula em tempo real quantos arquivos estão marcados e emite sinal para a janela principal."""
-        count = 0
-        total_bytes = 0
-        root = self.tree.invisibleRootItem()
-        for i in range(root.childCount()):
-            parent = root.child(i)
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                file_rec: Optional[FileRecord] = child.data(0, Qt.ItemDataRole.UserRole)
-                if file_rec and not file_rec.is_reference and child.checkState(0) == Qt.CheckState.Checked:
-                    count += 1
-                    total_bytes += file_rec.size
-        self._selected_count = count
-        self._selected_bytes = total_bytes
-        self.selection_changed.emit(count, total_bytes)
-
     def expand_all(self):
-        """Expande todos os grupos de duplicatas da árvore."""
-        self.tree.expandAll()
+        self.model.set_all_expanded(True)
 
     def collapse_all(self):
-        """Recolhe todos os grupos de duplicatas da árvore."""
-        self.tree.collapseAll()
+        self.model.set_all_expanded(False)
+
+    def _run_batch_selection(self, progress_title: str, updater: Callable[[_GroupEntry], Tuple[int, int]]) -> None:
+        if not self.groups:
+            return
+        app = QApplication.instance()
+        try:
+            def _on_prog(curr: int, total: int):
+                self.selection_progress.emit(progress_title, curr, total)
+                if app:
+                    app.processEvents()
+
+            count, total_bytes = self.model.apply_selection(updater, progress_callback=_on_prog)
+            self._selected_count = count
+            self._selected_bytes = total_bytes
+        finally:
+            self.selection_progress.emit("", 0, 0)
+            self.selection_changed.emit(self._selected_count, self._selected_bytes)
 
     def select_smart_duplicates(self):
-        """
-        Aplica a seleção inteligente em lote sem congelar a interface:
-        - Protege 100% dos arquivos de referência.
-        - Se houver arquivos de referência no grupo, marca os demais.
-        - Se não houver referência, mantém o maior/mais recente e marca os outros.
-        - Atualiza a barra de progresso em lotes e emite processEvents para garantir 60fps.
-        """
-        root = self.tree.invisibleRootItem()
-        total_groups = root.childCount()
-        if total_groups == 0:
-            return
-
-        self.tree.blockSignals(True)
-        self.tree.viewport().setUpdatesEnabled(False)
-
-        selected_count = 0
-        selected_bytes = 0
-
-        try:
-            # 1. Pré-calcula os caminhos a remover diretamente dos metadados em memória (< 5ms)
-            paths_to_remove = set()
-            for i in range(total_groups):
-                parent_item = root.child(i)
-                if isinstance(parent_item, SortableGroupItem) and getattr(parent_item, "group", None):
-                    paths_to_remove.update(apply_reference_rules(parent_item.group))
+        """Select duplicates per group while strictly protecting Reference Folder files."""
+        def _update(entry: _GroupEntry) -> Tuple[int, int]:
+            paths_to_remove = apply_reference_rules(entry.group)
+            cnt = 0
+            b_sum = 0
+            for idx, rec in enumerate(entry.files):
+                if not rec.is_reference and rec.path in paths_to_remove:
+                    entry.checked[idx] = True
+                    cnt += 1
+                    b_sum += rec.size
                 else:
-                    group_files = []
-                    for j in range(parent_item.childCount()):
-                        rec = parent_item.child(j).data(0, Qt.ItemDataRole.UserRole)
-                        if rec:
-                            group_files.append(rec)
-                    if group_files:
-                        paths_to_remove.update(apply_reference_rules(DuplicateGroup(group_id=0, files=group_files)))
+                    entry.checked[idx] = False
+            return cnt, b_sum
 
-            # 2. Atualiza os nós da árvore em lotes com telemetria fluida
-            CHUNK_SIZE = 150
-            for i in range(total_groups):
-                parent_item = root.child(i)
-                for j in range(parent_item.childCount()):
-                    child = parent_item.child(j)
-                    file_rec: Optional[FileRecord] = child.data(0, Qt.ItemDataRole.UserRole)
-                    if file_rec and not file_rec.is_reference:
-                        if file_rec.path in paths_to_remove:
-                            child.setCheckState(0, Qt.CheckState.Checked)
-                            selected_count += 1
-                            selected_bytes += file_rec.size
-                        else:
-                            child.setCheckState(0, Qt.CheckState.Unchecked)
-
-                if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Selecting... ", i + 1, total_groups)
-                    QApplication.processEvents()
-
-        finally:
-            self.tree.viewport().setUpdatesEnabled(True)
-            self.tree.blockSignals(False)
-            self.selection_progress.emit("", 0, 0)
-            self._selected_count = selected_count
-            self._selected_bytes = selected_bytes
-            self.selection_changed.emit(selected_count, selected_bytes)
+        self._run_batch_selection("Selecting... ", _update)
 
     def select_custom(self, rule: str):
-        """
-        Aplica regras de seleção avançadas por grupo.
-        Arquivos de referência são 100% protegidos e nunca marcados.
-        """
-        root = self.tree.invisibleRootItem()
-        total_groups = root.childCount()
-        if total_groups == 0:
-            return
+        """Apply custom per-group selection rule, keeping Reference files unchecked."""
+        def _update(entry: _GroupEntry) -> Tuple[int, int]:
+            non_ref = [(idx, rec) for idx, rec in enumerate(entry.files) if not rec.is_reference]
+            if not non_ref:
+                return 0, 0
 
-        self.tree.blockSignals(True)
-        self.tree.viewport().setUpdatesEnabled(False)
+            if rule == "invert_in_group":
+                cnt = 0
+                b_sum = 0
+                for idx, rec in non_ref:
+                    new_state = not entry.checked[idx]
+                    entry.checked[idx] = new_state
+                    if new_state:
+                        cnt += 1
+                        b_sum += rec.size
+                return cnt, b_sum
 
-        selected_count = 0
-        selected_bytes = 0
-        CHUNK_SIZE = 150
+            if any(rec.is_reference for rec in entry.files):
+                cnt = 0
+                b_sum = 0
+                for idx, rec in non_ref:
+                    entry.checked[idx] = True
+                    cnt += 1
+                    b_sum += rec.size
+                return cnt, b_sum
 
-        try:
-            for i in range(total_groups):
-                parent_item = root.child(i)
-                child_items = []
-                non_ref_children = []
+            preserved_idx: Optional[int] = None
+            if rule == "except_biggest_size":
+                preserved_idx = max(non_ref, key=lambda x: x[1].size)[0]
+            elif rule == "except_smallest_size":
+                preserved_idx = min(non_ref, key=lambda x: x[1].size)[0]
+            elif rule == "except_newest":
+                preserved_idx = max(non_ref, key=lambda x: x[1].mtime)[0]
+            elif rule == "except_oldest":
+                preserved_idx = min(non_ref, key=lambda x: x[1].mtime)[0]
+            elif rule == "except_longest_path":
+                preserved_idx = max(non_ref, key=lambda x: len(str(x[1].path)))[0]
+            elif rule == "except_shortest_path":
+                preserved_idx = min(non_ref, key=lambda x: len(str(x[1].path)))[0]
 
-                for j in range(parent_item.childCount()):
-                    child = parent_item.child(j)
-                    file_rec: FileRecord = child.data(0, Qt.ItemDataRole.UserRole)
-                    child_items.append((child, file_rec))
-                    if not file_rec.is_reference:
-                        non_ref_children.append((child, file_rec))
+            cnt = 0
+            b_sum = 0
+            for idx, rec in non_ref:
+                if idx == preserved_idx:
+                    entry.checked[idx] = False
+                else:
+                    entry.checked[idx] = True
+                    cnt += 1
+                    b_sum += rec.size
+            return cnt, b_sum
 
-                if not non_ref_children:
-                    continue
-
-                # Inverter seleção dentro do próprio grupo
-                if rule == "invert_in_group":
-                    for child, rec in non_ref_children:
-                        curr = child.checkState(0)
-                        new_st = Qt.CheckState.Unchecked if curr == Qt.CheckState.Checked else Qt.CheckState.Checked
-                        child.setCheckState(0, new_st)
-                        if new_st == Qt.CheckState.Checked:
-                            selected_count += 1
-                            selected_bytes += rec.size
-                    continue
-
-                has_reference = any(rec.is_reference for _, rec in child_items)
-                if has_reference:
-                    for child, rec in non_ref_children:
-                        child.setCheckState(0, Qt.CheckState.Checked)
-                        selected_count += 1
-                        selected_bytes += rec.size
-                    continue
-
-                # Se não há referência, preserva exatamente 1 arquivo conforme a regra
-                preserved_child = None
-                if rule == "except_biggest_size":
-                    preserved_child = max(non_ref_children, key=lambda x: x[1].size)[0]
-                elif rule == "except_smallest_size":
-                    preserved_child = min(non_ref_children, key=lambda x: x[1].size)[0]
-                elif rule == "except_newest":
-                    preserved_child = max(non_ref_children, key=lambda x: x[1].mtime)[0]
-                elif rule == "except_oldest":
-                    preserved_child = min(non_ref_children, key=lambda x: x[1].mtime)[0]
-                elif rule == "except_longest_path":
-                    preserved_child = max(non_ref_children, key=lambda x: len(str(x[1].path)))[0]
-                elif rule == "except_shortest_path":
-                    preserved_child = min(non_ref_children, key=lambda x: len(str(x[1].path)))[0]
-
-                for child, rec in non_ref_children:
-                    if child is preserved_child:
-                        child.setCheckState(0, Qt.CheckState.Unchecked)
-                    else:
-                        child.setCheckState(0, Qt.CheckState.Checked)
-                        selected_count += 1
-                        selected_bytes += rec.size
-
-                if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Selecting... ", i + 1, total_groups)
-                    QApplication.processEvents()
-
-        finally:
-            self.tree.viewport().setUpdatesEnabled(True)
-            self.tree.blockSignals(False)
-            self.selection_progress.emit("", 0, 0)
-            self._selected_count = selected_count
-            self._selected_bytes = selected_bytes
-            self.selection_changed.emit(selected_count, selected_bytes)
+        self._run_batch_selection("Selecting... ", _update)
 
     def invert_all(self):
-        """Inverte a seleção de todos os arquivos não-referência da árvore inteira."""
-        root = self.tree.invisibleRootItem()
-        total_groups = root.childCount()
-        if total_groups == 0:
-            return
+        """Invert selection across all non-reference files."""
+        def _update(entry: _GroupEntry) -> Tuple[int, int]:
+            cnt = 0
+            b_sum = 0
+            for idx, rec in enumerate(entry.files):
+                if not rec.is_reference:
+                    new_state = not entry.checked[idx]
+                    entry.checked[idx] = new_state
+                    if new_state:
+                        cnt += 1
+                        b_sum += rec.size
+            return cnt, b_sum
 
-        self.tree.blockSignals(True)
-        self.tree.viewport().setUpdatesEnabled(False)
-
-        selected_count = 0
-        selected_bytes = 0
-        CHUNK_SIZE = 150
-
-        try:
-            for i in range(total_groups):
-                parent = root.child(i)
-                for j in range(parent.childCount()):
-                    child = parent.child(j)
-                    file_rec: FileRecord = child.data(0, Qt.ItemDataRole.UserRole)
-                    if file_rec and not file_rec.is_reference:
-                        curr = child.checkState(0)
-                        new_st = Qt.CheckState.Unchecked if curr == Qt.CheckState.Checked else Qt.CheckState.Checked
-                        child.setCheckState(0, new_st)
-                        if new_st == Qt.CheckState.Checked:
-                            selected_count += 1
-                            selected_bytes += file_rec.size
-
-                if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Inverting... ", i + 1, total_groups)
-                    QApplication.processEvents()
-        finally:
-            self.tree.viewport().setUpdatesEnabled(True)
-            self.tree.blockSignals(False)
-            self.selection_progress.emit("", 0, 0)
-            self._selected_count = selected_count
-            self._selected_bytes = selected_bytes
-            self.selection_changed.emit(selected_count, selected_bytes)
+        self._run_batch_selection("Inverting... ", _update)
 
     def select_all(self):
-        """Marca todos os arquivos (exceto os de referência)."""
-        root = self.tree.invisibleRootItem()
-        total_groups = root.childCount()
-        if total_groups == 0:
-            return
+        """Check all non-reference files."""
+        def _update(entry: _GroupEntry) -> Tuple[int, int]:
+            cnt = 0
+            b_sum = 0
+            for idx, rec in enumerate(entry.files):
+                if not rec.is_reference:
+                    entry.checked[idx] = True
+                    cnt += 1
+                    b_sum += rec.size
+            return cnt, b_sum
 
-        self.tree.blockSignals(True)
-        self.tree.viewport().setUpdatesEnabled(False)
-
-        selected_count = 0
-        selected_bytes = 0
-        CHUNK_SIZE = 150
-
-        try:
-            for i in range(total_groups):
-                parent = root.child(i)
-                for j in range(parent.childCount()):
-                    child = parent.child(j)
-                    file_rec: FileRecord = child.data(0, Qt.ItemDataRole.UserRole)
-                    if file_rec and not file_rec.is_reference:
-                        child.setCheckState(0, Qt.CheckState.Checked)
-                        selected_count += 1
-                        selected_bytes += file_rec.size
-
-                if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Selecting... ", i + 1, total_groups)
-                    QApplication.processEvents()
-        finally:
-            self.tree.viewport().setUpdatesEnabled(True)
-            self.tree.blockSignals(False)
-            self.selection_progress.emit("", 0, 0)
-            self._selected_count = selected_count
-            self._selected_bytes = selected_bytes
-            self.selection_changed.emit(selected_count, selected_bytes)
+        self._run_batch_selection("Selecting... ", _update)
 
     def unselect_all(self):
-        """Desmarca todos os arquivos."""
-        root = self.tree.invisibleRootItem()
-        total_groups = root.childCount()
-        if total_groups == 0:
-            return
+        """Uncheck all files."""
+        def _update(entry: _GroupEntry) -> Tuple[int, int]:
+            for idx in range(len(entry.checked)):
+                entry.checked[idx] = False
+            return 0, 0
 
-        self.tree.blockSignals(True)
-        self.tree.viewport().setUpdatesEnabled(False)
-        CHUNK_SIZE = 150
-
-        try:
-            for i in range(total_groups):
-                parent = root.child(i)
-                for j in range(parent.childCount()):
-                    child = parent.child(j)
-                    file_rec: FileRecord = child.data(0, Qt.ItemDataRole.UserRole)
-                    if file_rec and not file_rec.is_reference:
-                        child.setCheckState(0, Qt.CheckState.Unchecked)
-
-                if (i + 1) % CHUNK_SIZE == 0 or (i + 1) == total_groups:
-                    self.selection_progress.emit("Unselecting... ", i + 1, total_groups)
-                    QApplication.processEvents()
-        finally:
-            self.tree.viewport().setUpdatesEnabled(True)
-            self.tree.blockSignals(False)
-            self.selection_progress.emit("", 0, 0)
-            self._selected_count = 0
-            self._selected_bytes = 0
-            self.selection_changed.emit(0, 0)
+        self._run_batch_selection("Unselecting... ", _update)
 
     def get_selected_files(self) -> List[Path]:
-        """Retorna os caminhos de todos os arquivos selecionados para exclusão."""
-        selected: List[Path] = []
-        root = self.tree.invisibleRootItem()
-        for i in range(root.childCount()):
-            parent = root.child(i)
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                file_rec: FileRecord = child.data(0, Qt.ItemDataRole.UserRole)
-                if file_rec and not file_rec.is_reference and child.checkState(0) == Qt.CheckState.Checked:
-                    selected.append(file_rec.path)
-        return selected
+        """Return paths of all checked non-reference files."""
+        return [rec.path for rec in self.get_selected_records()]
 
     def get_selected_records(self) -> List[FileRecord]:
-        """Retorna os registros de todos os arquivos selecionados para exclusão."""
+        """Return FileRecord objects for all checked non-reference files."""
         selected: List[FileRecord] = []
-        root = self.tree.invisibleRootItem()
-        for i in range(root.childCount()):
-            parent = root.child(i)
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                file_rec: Optional[FileRecord] = child.data(0, Qt.ItemDataRole.UserRole)
-                if file_rec and not file_rec.is_reference and child.checkState(0) == Qt.CheckState.Checked:
-                    selected.append(file_rec)
+        for entry in self.model._entries:
+            order = entry.display_order if entry.display_order is not None else range(len(entry.files))
+            for fi in order:
+                rec = entry.files[fi]
+                if entry.checked[fi] and not rec.is_reference:
+                    selected.append(rec)
         return selected
 
-    def _on_item_changed(self, item: QTreeWidgetItem, column: int):
-        """Garante que nenhum item de referência possa ter checkState marcado e atualiza telemetria de seleção em O(1)."""
-        if column == 0 and item.childCount() == 0:
-            file_rec: Optional[FileRecord] = item.data(0, Qt.ItemDataRole.UserRole)
-            if file_rec:
-                if file_rec.is_reference:
-                    if item.checkState(0) != Qt.CheckState.Unchecked:
-                        item.setCheckState(0, Qt.CheckState.Unchecked)
-                    return
-
-                is_checked = (item.checkState(0) == Qt.CheckState.Checked)
-                prev_state = getattr(item, "_last_checked", False)
-                if is_checked != prev_state:
-                    item._last_checked = is_checked
-                    if is_checked:
-                        self._selected_count += 1
-                        self._selected_bytes += file_rec.size
-                    else:
-                        self._selected_count = max(0, self._selected_count - 1)
-                        self._selected_bytes = max(0, self._selected_bytes - file_rec.size)
-                    self.selection_changed.emit(self._selected_count, self._selected_bytes)
-
     def remove_deleted_files(self, deleted_paths: Set[Path]):
-        """Remove da árvore os arquivos que foram excluídos com sucesso sem travar a interface."""
+        """Remove deleted paths from the model and discard groups left with <= 1 file."""
         if not deleted_paths:
             return
 
-        self.tree.blockSignals(True)
-        self.tree.viewport().setUpdatesEnabled(False)
+        cur_idx = self.tree.currentIndex()
+        if cur_idx.isValid():
+            info = self.model.file_at_row(cur_idx.row())
+            if info is not None and info[2].path in deleted_paths:
+                self.file_selected.emit(None)
 
-        try:
-            cur_item = self.tree.currentItem()
-            if cur_item and cur_item.childCount() == 0:
-                cur_rec: Optional[FileRecord] = cur_item.data(0, Qt.ItemDataRole.UserRole)
-                if cur_rec and cur_rec.path in deleted_paths:
-                    self.file_selected.emit(None)
+        self.groups = self.model.remove_deleted_paths(deleted_paths)
+        self._selected_count = self.model._selected_count
+        self._selected_bytes = self.model._selected_bytes
+        self.selection_changed.emit(self._selected_count, self._selected_bytes)
 
-            root = self.tree.invisibleRootItem()
-            for i in range(root.childCount() - 1, -1, -1):
-                parent = root.child(i)
-                for j in range(parent.childCount() - 1, -1, -1):
-                    child = parent.child(j)
-                    file_rec: Optional[FileRecord] = child.data(0, Qt.ItemDataRole.UserRole)
-                    if file_rec and file_rec.path in deleted_paths:
-                        parent.removeChild(child)
-
-                # Se o grupo ficou com 1 ou 0 arquivos, remove o grupo inteiro
-                if parent.childCount() <= 1:
-                    root.removeChild(parent)
-        finally:
-            # Mantém a lista interna self.groups sincronizada com as remoções
-            updated_groups = []
-            for g in self.groups:
-                rem = [f for f in g.files if f.path not in deleted_paths]
-                if len(rem) > 1:
-                    g.files = rem
-                    updated_groups.append(g)
-            self.groups = updated_groups
-
-            self.tree.viewport().setUpdatesEnabled(True)
-            self.tree.blockSignals(False)
-            self._emit_selection_stats()
-
-    def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
-        """Ao clicar com 1 clique em um arquivo, emite sinal para o preview."""
-        if item and item.childCount() == 0:
-            file_rec: Optional[FileRecord] = item.data(0, Qt.ItemDataRole.UserRole)
-            self.file_selected.emit(file_rec)
-        else:
+    def _emit_preview_for_index(self, index: QModelIndex) -> None:
+        if not index.isValid():
             self.file_selected.emit(None)
+            return
+        info = self.model.file_at_row(index.row())
+        self.file_selected.emit(info[2] if info is not None else None)
 
-    def _on_current_item_changed(self, current: Optional[QTreeWidgetItem], previous: Optional[QTreeWidgetItem]):
-        """Ao navegar com o teclado ou mudar a seleção na árvore, atualiza o preview."""
-        if current and current.childCount() == 0:
-            file_rec: Optional[FileRecord] = current.data(0, Qt.ItemDataRole.UserRole)
-            self.file_selected.emit(file_rec)
-        else:
-            self.file_selected.emit(None)
+    def _on_index_clicked(self, index: QModelIndex):
+        self._emit_preview_for_index(index)
 
-    def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int):
-        """Ao clicar duas vezes em um arquivo, abre no player ou visualizador padrão do Windows."""
-        # Se for cabeçalho de grupo (tem filhos), preserva o comportamento de expandir/recolher
-        if item.childCount() > 0:
+    def _on_current_index_changed(self, current: QModelIndex, previous: QModelIndex):
+        self._emit_preview_for_index(current)
+
+    def _on_index_double_clicked(self, index: QModelIndex):
+        if not index.isValid():
+            return
+        row = index.row()
+        if self.model.is_group_row(row):
+            self.model.toggle_group_at_row(row)
             return
 
-        file_rec: FileRecord = item.data(0, Qt.ItemDataRole.UserRole)
-        if file_rec and file_rec.path.exists():
+        info = self.model.file_at_row(row)
+        if info is not None and info[2].path.exists():
             try:
-                os.startfile(str(file_rec.path))
+                os.startfile(str(info[2].path))
             except Exception:
                 pass
 
     def _show_context_menu(self, pos):
-        item = self.tree.itemAt(pos)
+        idx = self.tree.indexAt(pos)
         menu = QMenu(self)
 
-        # Se clicou em um arquivo específico, oferece opções de arquivo
-        if item and item.childCount() == 0:
-            file_rec: Optional[FileRecord] = item.data(0, Qt.ItemDataRole.UserRole)
-            if file_rec:
+        if idx.isValid():
+            info = self.model.file_at_row(idx.row())
+            if info is not None:
+                file_rec = info[2]
                 act_open_folder = QAction("Open Containing Folder", self)
                 act_open_folder.triggered.connect(lambda: self._open_in_explorer(file_rec.path))
                 menu.addAction(act_open_folder)
@@ -885,6 +1127,5 @@ class ResultsWidget(QWidget):
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _open_in_explorer(self, path: Path):
-        """Abre o Windows Explorer com o arquivo selecionado."""
         if path.exists():
             subprocess.run(["explorer", f"/select,{path}"])

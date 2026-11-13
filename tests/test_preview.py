@@ -112,17 +112,17 @@ class TestPreviewIntegration(unittest.TestCase):
         received_recs = []
         widget.file_selected.connect(lambda r: received_recs.append(r))
 
-        # Seleciona o primeiro filho (o arquivo)
-        parent_item = widget.tree.topLevelItem(0)
-        child_item = parent_item.child(0)
-        widget.tree.setCurrentItem(child_item)
+        # Seleciona o primeiro filho (linha 1: arquivo abaixo do cabeçalho na linha 0)
+        child_index = widget.model.index(1, 1)
+        widget.tree.setCurrentIndex(child_index)
         app.processEvents()
 
         self.assertTrue(len(received_recs) > 0)
         self.assertEqual(received_recs[-1].path, self.img1_path)
 
-        # Clica no cabeçalho do grupo (deve emitir None)
-        widget.tree.setCurrentItem(parent_item)
+        # Seleciona o cabeçalho do grupo (linha 0: deve emitir None)
+        group_index = widget.model.index(0, 1)
+        widget.tree.setCurrentIndex(group_index)
         app.processEvents()
         self.assertIsNone(received_recs[-1])
 
