@@ -44,6 +44,145 @@ def _fast_gpu_greedy_clique(cand_sims: torch.Tensor, thresh: float) -> torch.Ten
     return in_clique
 
 
+_BMM_CLIQUE_MAX_K = 96
+
+
+def _resolve_clique_from_precomputed(
+    sub_adj: np.ndarray,
+    sub_sims: np.ndarray,
+    cands: List[int],
+    idx_val: int,
+    keep_pos: List[int],
+) -> Tuple[List[int], float]:
+    """Resolve Complete Linkage em matriz de adjacência/similaridade já computada na GPU sem roundtrips CUDA."""
+    k_members = len(cands)
+    lp = cands.index(idx_val) if idx_val in cands else -1
+    if lp > 0:
+        cands[0], cands[lp] = cands[lp], cands[0]
+        keep_pos[0], keep_pos[lp] = keep_pos[lp], keep_pos[0]
+
+    kp = np.asarray(keep_pos, dtype=np.intp)
+    local_adj = sub_adj[kp[:, None], kp]
+    local_sims = sub_sims[kp[:, None], kp]
+
+    if local_adj.all():
+        diag_sum = float(np.trace(local_sims, dtype=np.float32))
+        total_sum = float(local_sims.sum(dtype=np.float32))
+        avg_sim = (total_sum - diag_sum) / (k_members * (k_members - 1)) if k_members > 1 else 1.0
+        return cands, min(1.0, max(0.0, round(avg_sim, 4)))
+
+    in_clique = np.zeros(k_members, dtype=bool)
+    in_clique[0] = True
+    pool = local_adj[0].copy()
+    pool[0] = False
+
+    while pool.any():
+        pool_idx = np.flatnonzero(pool)
+        if pool_idx.size == 1:
+            next_node = int(pool_idx[0])
+        else:
+            deg = local_adj[pool_idx[:, None], pool_idx].sum(axis=1)
+            next_node = int(pool_idx[int(np.argmax(deg))])
+        in_clique[next_node] = True
+        pool &= local_adj[next_node]
+        pool[in_clique] = False
+
+    chosen = np.flatnonzero(in_clique)
+    k_clique = chosen.size
+    if k_clique <= 1:
+        return [], 1.0
+
+    clique_sims = local_sims[chosen[:, None], chosen]
+    diag_sum = float(np.trace(clique_sims, dtype=np.float32))
+    total_sum = float(clique_sims.sum(dtype=np.float32))
+    avg_sim = (total_sum - diag_sum) / (k_clique * (k_clique - 1))
+    return [cands[int(i)] for i in chosen], min(1.0, max(0.0, round(avg_sim, 4)))
+
+
+def _precompute_batch_bmm_matrices(
+    cands_by_row: List[List[int]],
+    embeddings: torch.Tensor,
+    similarity_threshold: float,
+) -> Tuple[Dict[int, np.ndarray], Dict[int, np.ndarray]]:
+    """Pré-calcula em lote via Tensor Core BMM todas as matrizes KxK (3 <= K <= 96) do batch."""
+    buckets: Tuple[List[int], List[int]] = ([], [])
+    for b, cl in enumerate(cands_by_row):
+        lc = len(cl)
+        if 3 <= lc <= 24:
+            buckets[0].append(b)
+        elif 24 < lc <= _BMM_CLIQUE_MAX_K:
+            buckets[1].append(b)
+
+    pre_adj: Dict[int, np.ndarray] = {}
+    pre_sims: Dict[int, np.ndarray] = {}
+    device = embeddings.device
+
+    for b_list in buckets:
+        if not b_list:
+            continue
+        # Sub-chunks limitam pico de memória em placas de 8 GB mesmo se K_max = 96
+        for start in range(0, len(b_list), 256):
+            chunk_b = b_list[start:start + 256]
+            k_max = max(len(cands_by_row[b]) for b in chunk_b)
+            pad_np = np.zeros((len(chunk_b), k_max), dtype=np.int64)
+            for slot, b in enumerate(chunk_b):
+                cl = cands_by_row[b]
+                pad_np[slot, :len(cl)] = cl
+
+            pad_t = torch.from_numpy(pad_np).to(device)
+            pad_embs = embeddings[pad_t]
+            sims_t = torch.bmm(pad_embs, pad_embs.transpose(1, 2))
+            adj_np = (sims_t >= similarity_threshold).cpu().numpy()
+            sims_np = sims_t.cpu().numpy()
+
+            for slot, b in enumerate(chunk_b):
+                ln = len(cands_by_row[b])
+                pre_adj[b] = adj_np[slot, :ln, :ln]
+                pre_sims[b] = sims_np[slot, :ln, :ln]
+
+    return pre_adj, pre_sims
+
+
+def _resolve_multi_member_clique(
+    cands: List[int],
+    idx_val: int,
+    embeddings: torch.Tensor,
+    similarity_threshold: float,
+) -> Tuple[List[int], float]:
+    """Extrai na GPU o subgrupo coeso máximo (Complete Linkage) contendo o líder idx_val."""
+    ordered = list(cands)
+    if idx_val in ordered:
+        pos_leader = ordered.index(idx_val)
+        if pos_leader != 0:
+            ordered[0], ordered[pos_leader] = ordered[pos_leader], ordered[0]
+
+    k_members = len(ordered)
+    cand_t = torch.tensor(ordered, dtype=torch.int64, device=embeddings.device)
+    cand_embs = embeddings[cand_t]
+    cand_sims = torch.matmul(cand_embs, cand_embs.t())
+
+    if (cand_sims.min(dim=1).values >= similarity_threshold).all():
+        cand_sims_f = cand_sims.float()
+        diag_sum = cand_sims_f.diagonal().sum().item()
+        avg_sim = (cand_sims_f.sum().item() - diag_sum) / (k_members * (k_members - 1)) if k_members > 1 else 1.0
+        return ordered, min(1.0, max(0.0, round(float(avg_sim), 4)))
+
+    clique_mask = _fast_gpu_greedy_clique(cand_sims, similarity_threshold)
+    clique_indices = cand_t[clique_mask]
+    k_clique = clique_indices.numel()
+    if k_clique <= 1:
+        return [], 1.0
+
+    sub_sims_f = cand_sims[clique_mask][:, clique_mask].float()
+    diag_sum = sub_sims_f.diagonal().sum().item()
+    avg_sim = (sub_sims_f.sum().item() - diag_sum) / (k_clique * (k_clique - 1))
+    members_list = clique_indices.cpu().tolist()
+    if idx_val in members_list:
+        members_list.remove(idx_val)
+        members_list.insert(0, idx_val)
+    return members_list, min(1.0, max(0.0, round(float(avg_sim), 4)))
+
+
 def cluster_by_similarity(
     records: List[FileRecord],
     embeddings: torch.Tensor,
@@ -126,7 +265,9 @@ def cluster_by_similarity(
         cand_degrees = degrees[candidates]
         cand_refs = is_ref_tensor[candidates]
         composite_keys = (cand_refs.to(torch.int64) * 1_000_000_000) + cand_degrees.to(torch.int64)
-        sorted_order = candidates[torch.argsort(composite_keys, descending=True)]
+        sorted_perm = torch.argsort(composite_keys, descending=True)
+        sorted_order = candidates[sorted_perm]
+        sorted_degrees_cpu = cand_degrees[sorted_perm].cpu().tolist()
 
         # Mantém índice em CPU para pular membros já alocados com zero sincronização CUDA
         sorted_cpu = sorted_order.cpu().tolist()
@@ -140,17 +281,17 @@ def cluster_by_similarity(
         active_durations = durations[active_indices] if durations is not None else None
         active_remaining = total_candidates
 
-        # 4. Formação de grupos por Cohesive Clique Clustering acelerado na GPU
+        # 4. Formação de grupos por Cohesive Clique Clustering em lote nos Tensor Cores da GPU
         duplicate_groups: List[DuplicateGroup] = []
         group_id = 1
         processed_candidates = 0
+        pos = 0
+        edge_budget = 250_000
+        item_label = "images" if mode == ScanMode.IMAGES else ("videos" if mode == ScanMode.VIDEOS else "files")
 
-        for idx_val in sorted_cpu:
+        while pos < total_candidates:
             if stop_check and stop_check():
                 return []
-
-            if not unassigned_cpu[idx_val]:
-                continue
 
             if active_remaining > 2048 and active_remaining <= (active_indices.numel() * 3) // 4:
                 active_indices = torch.nonzero(unassigned).squeeze(1)
@@ -158,80 +299,132 @@ def cluster_by_similarity(
                 if durations is not None:
                     active_durations = durations[active_indices]
 
-            sim_vec = torch.mv(active_embs, embeddings[idx_val])
-            match_mask = unassigned[active_indices] & (sim_vec >= similarity_threshold)
+            active_count = max(1, active_indices.numel())
+            max_batch_rows = max(64, min(512, int(target_chunk_bytes / (active_count * 4))))
+
+            batch_leaders: List[int] = []
+            est_edges = 0
+            while pos < total_candidates and len(batch_leaders) < max_batch_rows:
+                idx_val = sorted_cpu[pos]
+                deg_val = max(1, sorted_degrees_cpu[pos])
+                pos += 1
+                if not unassigned_cpu[idx_val]:
+                    continue
+                if batch_leaders and (est_edges + deg_val) > edge_budget:
+                    pos -= 1
+                    break
+                batch_leaders.append(idx_val)
+                est_edges += deg_val + 1
+
+            if not batch_leaders:
+                break
+
+            # Único GEMM Tensor Core [B, D] @ [D, M] e transferência D2H para todo o lote de líderes
+            lead_t = torch.tensor(batch_leaders, dtype=torch.int64, device=device)
+            batch_sims = torch.matmul(embeddings[lead_t], active_embs.t())
+            batch_masks = unassigned[active_indices].unsqueeze(0) & (batch_sims >= similarity_threshold)
 
             if active_durations is not None:
-                lead_dur = durations[idx_val]
-                if lead_dur > 0:
-                    has_dur = (lead_dur > 0) & (active_durations > 0)
-                    dur_max = torch.maximum(lead_dur, active_durations)
-                    dur_diff = torch.abs(lead_dur - active_durations) / torch.clamp(dur_max, min=1e-5)
-                    dur_valid = (~has_dur) | (dur_diff <= 0.08)
-                    match_mask = match_mask & dur_valid
+                lead_durs = durations[lead_t].unsqueeze(1)
+                act_durs = active_durations.unsqueeze(0)
+                has_dur = (lead_durs > 0) & (act_durs > 0)
+                dur_max = torch.maximum(lead_durs, act_durs)
+                dur_diff = torch.abs(lead_durs - act_durs) / torch.clamp(dur_max, min=1e-5)
+                batch_masks = batch_masks & ((~has_dur) | (dur_diff <= 0.08))
 
-            cand_indices = active_indices[match_mask]
-            k_members = cand_indices.numel()
+            nz_rows, nz_cols = torch.nonzero(batch_masks, as_tuple=True)
+            nz_rec = active_indices[nz_cols]
+            nz_scores = batch_sims[nz_rows, nz_cols]
 
-            if k_members <= 1:
-                unassigned[idx_val] = False
-                unassigned_cpu[idx_val] = 0
-                active_remaining -= 1
-                processed_candidates += 1
-            else:
-                cand_embs = embeddings[cand_indices]
-                cand_sims = torch.matmul(cand_embs, cand_embs.t())
+            rows_cpu = nz_rows.cpu().tolist()
+            recs_cpu = nz_rec.cpu().tolist()
+            scores_cpu = nz_scores.cpu().tolist()
 
-                # 1. Verifica se todos os candidatos já formam um clique perfeito
-                if (cand_sims.min(dim=1).values >= similarity_threshold).all():
-                    clique_indices = cand_indices
-                    k_clique = k_members
-                    avg_sim = (cand_sims.sum() - k_clique).item() / (k_clique * (k_clique - 1)) if k_clique > 1 else 1.0
-                else:
-                    # 2. Extrai na GPU o clique maximal contendo o líder
-                    clique_mask = _fast_gpu_greedy_clique(cand_sims, similarity_threshold)
-                    clique_indices = cand_indices[clique_mask]
-                    k_clique = clique_indices.numel()
-                    if k_clique > 1:
-                        sub_sims = cand_sims[clique_mask][:, clique_mask]
-                        avg_sim = (sub_sims.sum() - k_clique).item() / (k_clique * (k_clique - 1))
+            cands_by_row: List[List[int]] = [[] for _ in range(len(batch_leaders))]
+            scores_by_row: List[List[float]] = [[] for _ in range(len(batch_leaders))]
+            for r_b, rec_i, sc in zip(rows_cpu, recs_cpu, scores_cpu):
+                cands_by_row[r_b].append(rec_i)
+                scores_by_row[r_b].append(sc)
+
+            pre_adj, pre_sims = _precompute_batch_bmm_matrices(
+                cands_by_row, embeddings, similarity_threshold
+            )
+
+            batch_claimed: List[int] = []
+            for b, idx_val in enumerate(batch_leaders):
+                if stop_check and stop_check():
+                    return []
+                if not unassigned_cpu[idx_val]:
+                    continue
+
+                cands: List[int] = []
+                c_scores: List[float] = []
+                keep_pos: List[int] = []
+                for pos_i, (r_i, sc) in enumerate(zip(cands_by_row[b], scores_by_row[b])):
+                    if unassigned_cpu[r_i]:
+                        cands.append(r_i)
+                        c_scores.append(sc)
+                        keep_pos.append(pos_i)
+
+                k_members = len(cands)
+                if k_members <= 1:
+                    unassigned_cpu[idx_val] = 0
+                    batch_claimed.append(idx_val)
+                    active_remaining -= 1
+                    processed_candidates += 1
+                elif k_members == 2:
+                    # Pares (k=2) já tiveram similaridade mútua validada pelo GEMM em lote
+                    if cands[0] == idx_val:
+                        other, sc_val = cands[1], c_scores[1]
                     else:
-                        clique_indices = torch.empty(0, dtype=torch.int64, device=device)
-                        avg_sim = 1.0
-
-                if clique_indices.numel() > 1:
-                    members_list = clique_indices.cpu().tolist()
-                    # Garante que o líder seja o primeiro elemento da lista
-                    if idx_val in members_list:
-                        members_list.remove(idx_val)
-                        members_list.insert(0, idx_val)
-
-                    group_files = [records[m] for m in members_list]
-
+                        other, sc_val = cands[0], c_scores[0]
                     duplicate_groups.append(DuplicateGroup(
                         group_id=group_id,
-                        files=group_files,
-                        similarity=round(float(avg_sim), 4),
+                        files=[records[idx_val], records[other]],
+                        similarity=min(1.0, max(0.0, round(float(sc_val), 4))),
                         kind=mode
                     ))
                     group_id += 1
-
-                    unassigned[clique_indices] = False
-                    for m in members_list:
-                        unassigned_cpu[m] = 0
-                    removed_count = len(members_list)
-                    active_remaining -= removed_count
-                    processed_candidates += removed_count
-                else:
-                    unassigned[idx_val] = False
                     unassigned_cpu[idx_val] = 0
-                    active_remaining -= 1
-                    processed_candidates += 1
+                    unassigned_cpu[other] = 0
+                    batch_claimed.extend((idx_val, other))
+                    active_remaining -= 2
+                    processed_candidates += 2
+                else:
+                    if b in pre_adj:
+                        members_list, clamped_sim = _resolve_clique_from_precomputed(
+                            pre_adj[b], pre_sims[b], cands, idx_val, keep_pos
+                        )
+                    else:
+                        members_list, clamped_sim = _resolve_multi_member_clique(
+                            cands, idx_val, embeddings, similarity_threshold
+                        )
+                    if len(members_list) > 1:
+                        duplicate_groups.append(DuplicateGroup(
+                            group_id=group_id,
+                            files=[records[m] for m in members_list],
+                            similarity=clamped_sim,
+                            kind=mode
+                        ))
+                        group_id += 1
+                        for m in members_list:
+                            unassigned_cpu[m] = 0
+                        batch_claimed.extend(members_list)
+                        removed_count = len(members_list)
+                        active_remaining -= removed_count
+                        processed_candidates += removed_count
+                    else:
+                        unassigned_cpu[idx_val] = 0
+                        batch_claimed.append(idx_val)
+                        active_remaining -= 1
+                        processed_candidates += 1
+
+            if batch_claimed:
+                unassigned[torch.tensor(batch_claimed, dtype=torch.int64, device=device)] = False
 
             now = time.time()
             if progress_callback and (now - last_progress_time >= 0.08 or processed_candidates >= total_candidates):
                 last_progress_time = now
-                item_label = "images" if mode == ScanMode.IMAGES else ("videos" if mode == ScanMode.VIDEOS else "files")
                 progress_callback(
                     f"Grouping similar {item_label} ({min(processed_candidates, total_candidates):,}/{total_candidates:,})...",
                     min(processed_candidates, total_candidates),

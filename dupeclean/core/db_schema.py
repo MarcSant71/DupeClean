@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 # Contrato estrutural esperado pelo executável atual: {tabela: (coluna_pk, {colunas})}
 EXPECTED_TABLES: Dict[str, Tuple[str, Set[str]]] = {
@@ -253,8 +253,14 @@ def _migrate_0_to_1(conn: sqlite3.Connection) -> None:
     _set_signature_version_v2(conn, invalidate_if_needed=True)
 
 
+def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
+    """Invalida apenas cache_images após recalibração visual do motor de imagens (EXIF, alpha, Hamming, ALPHA=1.2)."""
+    conn.execute("DELETE FROM cache_images;")
+
+
 MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _migrate_0_to_1,
+    1: _migrate_1_to_2,
 }
 
 

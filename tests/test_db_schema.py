@@ -125,9 +125,29 @@ class TestDbSchema(unittest.TestCase):
             self.assertIsNone(exact_row[1])  # prefix_hash v1 invalidado para v2_head_tail
             self.assertEqual((exact_row[2], exact_row[3]), (0, 0))
 
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM cache_images;").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM cache_images;").fetchone()[0], 0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM cache_videos;").fetchone()[0], 1)
             self.assertEqual(cm.get_setting("saved_folders"), {"included": ["C:\\Photos"]})
+
+    def test_v1_to_v2_migration_invalidates_only_image_cache(self):
+        """Migração v1->v2 limpa apenas cache_images preservando cache_exact, cache_videos e settings."""
+        CacheManager(self.db_path).save_setting("saved_folders", {"included": ["F:\\Photos"]})
+        with closing(sqlite3.connect(str(self.db_path))) as conn:
+            conn.execute("INSERT INTO cache_exact (path, size, mtime, prefix_hash, full_hash) VALUES ('C:\\\\a.bin', 100, 1.0, 'p', 'f');")
+            conn.execute("INSERT INTO cache_images (path, size, mtime, embedding) VALUES ('C:\\\\img.jpg', 200, 1.0, ?);", (b"\x01" * 1536,))
+            conn.execute("INSERT INTO cache_videos (path, size, mtime, duration, embedding) VALUES ('C:\\\\vid.mp4', 300, 1.0, 10.0, ?);", (b"\x02" * 7680,))
+            conn.execute("PRAGMA user_version = 1;")
+            conn.commit()
+
+        cm = CacheManager(self.db_path)
+        self.assertEqual(cm.schema_result.status, "migrated")
+        self.assertEqual(cm.schema_result.from_version, 1)
+        self.assertEqual(cm.schema_result.to_version, CURRENT_SCHEMA_VERSION)
+        stats = cm.get_stats()
+        self.assertEqual(stats["exact_count"], 1)
+        self.assertEqual(stats["images_count"], 0)
+        self.assertEqual(stats["videos_count"], 1)
+        self.assertEqual(cm.get_setting("saved_folders"), {"included": ["F:\\Photos"]})
 
     def test_missing_index_is_repaired_on_current_version(self):
         """Índice ausente em banco v1 é recriado automaticamente sem zerar cache."""

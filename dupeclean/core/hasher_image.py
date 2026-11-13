@@ -10,7 +10,7 @@ import math
 import time
 import queue
 import threading
-from PIL import Image
+from PIL import Image, ImageOps
 import torch
 import numpy as np
 
@@ -26,16 +26,33 @@ from dupeclean.core.cache import (
 IMG_SIZE = 64
 LOW_FREQ_SIZE = 16
 CHANNELS = 3
-ALPHA = 2.0  # Equalização espectral (whitening) para evitar que o fundo estático domine o sujeito
+ALPHA = 1.2  # Equalização espectral calibrada: atenua fundo estático sem amplificar ruído de compressão
 DIM_SIZE = CHANNELS * LOW_FREQ_SIZE * LOW_FREQ_SIZE  # 768 dimensões (1.536 bytes em FP16)
 _SINGLE_READ_IMAGE_THRESHOLD = 16 * 1024 * 1024  # 16 MB
 
 
+def _to_opaque_rgb(img: Image.Image) -> Image.Image:
+    """Converte qualquer modo (alpha, paleta transparente ou 16-bit) para RGB em fundo neutro."""
+    if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (128, 128, 128))
+        bg.paste(rgba, mask=rgba.getchannel("A"))
+        return bg
+    if img.mode.startswith("I;16"):
+        arr16 = np.asarray(img, dtype=np.uint16)
+        return Image.fromarray((arr16 >> 8).astype(np.uint8), mode="L").convert("RGB")
+    return img if img.mode == "RGB" else img.convert("RGB")
+
+
 def _decode_image_from_stream(stream) -> np.ndarray:
-    """Decodifica e redimensiona uma imagem a partir de um stream já aberto."""
+    """Decodifica com correção EXIF, composição de alpha e downsampling anti-aliased."""
     with Image.open(stream) as img:
-        img.draft("RGB", (IMG_SIZE, IMG_SIZE))
-        rgb = img.convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.Resampling.BILINEAR)
+        img.draft("RGB", (IMG_SIZE * 2, IMG_SIZE * 2))
+        try:
+            ImageOps.exif_transpose(img, in_place=True)
+        except Exception:
+            pass
+        rgb = _to_opaque_rgb(img).resize((IMG_SIZE, IMG_SIZE), Image.Resampling.HAMMING)
         return np.asarray(rgb, dtype=np.uint8)
 
 
@@ -182,12 +199,12 @@ def extract_image_embeddings(
     # enquanto a GPU (Tensor Cores) e o SQLite operam sem tempo ocioso em paralelo.
     to_process.sort(key=lambda r: str(r.path.parent))
 
-    dct_mat = _get_dct_matrix(IMG_SIZE, device=device, dtype=dtype)
+    dct_mat = _get_dct_matrix(IMG_SIZE, device=device, dtype=torch.float32)
     dct_mat_t = dct_mat.t()
-    u = torch.arange(LOW_FREQ_SIZE, device=device).unsqueeze(1)
-    v = torch.arange(LOW_FREQ_SIZE, device=device).unsqueeze(0)
+    u = torch.arange(LOW_FREQ_SIZE, device=device, dtype=torch.float32).unsqueeze(1)
+    v = torch.arange(LOW_FREQ_SIZE, device=device, dtype=torch.float32).unsqueeze(0)
     # Formato (1, 1, LOW_FREQ_SIZE, LOW_FREQ_SIZE) para broadcasting perfeito em tensores RGB [B, 3, H, W]
-    spectral_weight = (u + v + 1.0).pow(ALPHA).unsqueeze(0).unsqueeze(0).to(dtype=dtype)
+    spectral_weight = (u + v + 1.0).pow(ALPHA).unsqueeze(0).unsqueeze(0)
 
     num_workers = min(32, max(4, os.cpu_count() or 4))
     uncached_total = len(to_process)
@@ -275,20 +292,18 @@ def extract_image_embeddings(
                     if len(batch_records) >= target_batch or processed_count == uncached_total:
                         if batch_images:
                             stacked = np.stack(batch_images)
-                            # Permuta de (B, H, W, C) para (B, C, H, W) preservando os 3 canais de cor (RGB)
-                            t_batch = torch.from_numpy(stacked).permute(0, 3, 1, 2).to(device=device, dtype=dtype) / 255.0
+                            # Calcula DCT, equalização e norma L2 em FP32 para máxima precisão antes de quantizar em FP16
+                            t_batch = torch.from_numpy(stacked).permute(0, 3, 1, 2).to(device=device, dtype=torch.float32) / 255.0
                             dct_3d = torch.matmul(dct_mat, torch.matmul(t_batch, dct_mat_t))
                             low_freq = dct_3d[:, :, :LOW_FREQ_SIZE, :LOW_FREQ_SIZE].clone()
-                            # Em perceptual hashing (pHash), o coeficiente DC (0,0) representa a luminância média da imagem.
-                            # Zeramos o DC em cada canal RGB para que a comparação seja puramente baseada em frequências espaciais AC (texturas, bordas, padrões).
+                            # Zera o componente DC (0,0) em cada canal RGB para comparar apenas frequências espaciais AC
                             low_freq[:, :, 0, 0] = 0.0
-                            # Equalização espectral (whitening): contrabalanceia o decaimento 1/f^2 natural das imagens,
-                            # impedindo que fundos estáticos (paredes, pisos) dominem a similaridade em detrimento do sujeito
+                            # Equalização espectral (whitening): evita que fundos estáticos dominem o sujeito
                             weighted = low_freq * spectral_weight
                             flat = weighted.reshape(weighted.shape[0], -1)
 
                             norms = torch.norm(flat, p=2, dim=1, keepdim=True).clamp(min=1e-6)
-                            normalized = flat / norms
+                            normalized = (flat / norms).to(dtype=dtype)
 
                             all_embeddings_list.append(normalized)
                             valid_records.extend(batch_records)

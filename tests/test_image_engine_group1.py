@@ -139,6 +139,59 @@ class TestImageEngineGroup1(unittest.TestCase):
             self.assertTrue(grp.files[0].is_reference)
         self.assertTrue(any("Grouping similar images" in m for m, _, _ in events))
 
+    def test_matcher_bmm_multi_member_cliques_and_parity(self):
+        """Valida Complete Linkage em lote (BMM k>=3), cadeia parcial não-transitividade e fallback GPU."""
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if device == "cuda" else torch.float32
+        torch.manual_seed(7)
+
+        dim = 64
+        basis = torch.eye(4, dim, device=device, dtype=torch.float32)
+
+        # Grupo 1 (k=5 completo, com arquivo Reference não no índice 0)
+        g1 = basis[0:1] + 0.01 * torch.randn((5, dim), device=device)
+
+        # Grupo 2 (k=4 parcial não-clique: líder 0 próximo de 1, 2 e 3, mas 2 e 3 abaixo do limiar entre si)
+        anchor = basis[1]
+        v_shared = anchor
+        v_a = 0.92 * anchor + np.sqrt(1 - 0.92**2) * basis[2]
+        v_b = 0.92 * anchor + np.sqrt(1 - 0.92**2) * (-basis[2])
+        # dot(v_a, v_b) = 0.92^2 - (1 - 0.92^2) = 2*0.8464 - 1 = 0.6928 < 0.85
+        g2 = torch.stack([anchor, v_shared, v_a, v_b], dim=0)
+
+        # Grupo 3 (k=2 par idêntico)
+        g3 = basis[3:4].repeat(2, 1)
+
+        vecs = torch.cat([g1, g2, g3], dim=0)
+        vecs = (vecs / torch.norm(vecs, dim=1, keepdim=True)).to(dtype)
+
+        recs = [
+            FileRecord(path=Path(self.temp_dir) / f"img_{i}.jpg", size=100, mtime=float(i), is_reference=(i == 3))
+            for i in range(vecs.shape[0])
+        ]
+
+        groups_bmm = cluster_by_similarity(recs, vecs, similarity_threshold=0.85, mode=ScanMode.IMAGES)
+        with patch("dupeclean.core.matcher._BMM_CLIQUE_MAX_K", 3):
+            groups_fallback = cluster_by_similarity(recs, vecs, similarity_threshold=0.85, mode=ScanMode.IMAGES)
+
+        # Paridade exata entre caminho BMM em lote e caminho GPU direto
+        self.assertEqual(len(groups_bmm), len(groups_fallback))
+        for ga, gb in zip(groups_bmm, groups_fallback):
+            self.assertEqual([f.path for f in ga.files], [f.path for f in gb.files])
+            self.assertAlmostEqual(ga.similarity, gb.similarity, places=4)
+
+        # Verifica invariantes dos cliques retornados
+        g1_found = [g for g in groups_bmm if any(f.path.name == "img_3.jpg" for f in g.files)]
+        self.assertEqual(len(g1_found), 1)
+        self.assertEqual(len(g1_found[0].files), 5)
+        self.assertEqual(g1_found[0].files[0].path.name, "img_3.jpg")
+        self.assertGreaterEqual(g1_found[0].similarity, 0.95)
+
+        # Grupo parcial g2 NÃO pode unir v_a (img_7) e v_b (img_8) no mesmo clique
+        for grp in groups_bmm:
+            names = {f.path.name for f in grp.files}
+            self.assertFalse({"img_7.jpg", "img_8.jpg"}.issubset(names))
+
 
 if __name__ == "__main__":
     unittest.main()
