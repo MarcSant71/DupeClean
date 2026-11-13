@@ -1,5 +1,9 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.2.1
+- **In-App Help Dialog Visual Polish (`help_dialog.py`):**
+  - Rounded the corners of the Help `QTabWidget::pane` container (`border-radius: 6px`) and switched the embedded `ZoomableBrowser` body/viewport background to transparent so rounded pane borders render cleanly without square inner corners.
+
 ### What's New in v1.2.0
 - **Virtualized Results Grid (`QTableView` + `QAbstractTableModel`) (`results_table.py`, `theme.py`):**
   - Migrated the results grid from `QTreeWidget` to a lightweight, fully virtualized `QTableView` backed by `ResultsModel`, `_ResultsCellDelegate`, and `_GroupEntry` with $O(1)$ lazy visible-viewport rendering across hundreds of thousands of rows.
