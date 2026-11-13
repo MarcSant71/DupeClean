@@ -117,7 +117,10 @@ class HelpDialog(QDialog):
             }
             QTabWidget::pane {
                 border: 1px solid #3f3f46;
+                border-radius: 6px;
+                border-top-left-radius: 0px;
                 background-color: #18181b;
+                padding: 2px;
                 top: -1px;
             }
             QTabBar::tab {
@@ -279,7 +282,8 @@ class HelpDialog(QDialog):
         """Cria um visualizador rich-text com suporte a rolagem suave e zoom."""
         browser = ZoomableBrowser()
         browser.setFrameShape(QFrame.Shape.NoFrame)
-        browser.setStyleSheet("border: none; background-color: transparent;")
+        browser.viewport().setAutoFillBackground(False)
+        browser.setStyleSheet("QTextBrowser { border: none; background-color: transparent; }")
 
         browser.setHtml(f"""
         <html>
@@ -290,8 +294,8 @@ class HelpDialog(QDialog):
                     font-size: 13.5px;
                     line-height: 1.6;
                     color: #d4d4d8;
-                    background-color: #18181b;
-                    margin: 16px 24px;
+                    background-color: transparent;
+                    margin: 14px 22px;
                 }}
                 h2 {{
                     color: #38bdf8;
