@@ -9,7 +9,6 @@ block_cipher = None
 # Hidden imports required by dynamic loaders
 hiddenimports = [
     'torch',
-    'torchvision',
     'xxhash',
     'send2trash',
     'PySide6',

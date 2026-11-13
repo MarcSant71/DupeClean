@@ -1,10 +1,12 @@
 # DupeClean - Python Dependencies
 # 
-# Step 1: Install PyTorch with CUDA support for your GPU architecture:
+# Step 1: Install PyTorch (CUDA for RTX GPUs, or standard CPU wheel):
 #   For RTX 30 / 40 Series (CUDA 12.4):
-#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#     pip install torch --index-url https://download.pytorch.org/whl/cu124
 #   For RTX 50 Series (Blackwell - CUDA 12.8):
-#     pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+#     pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128
+#   For CPU-only systems (no NVIDIA GPU):
+#     pip install torch
 #
 # Step 2: Install application dependencies:
 #     pip install -r requirements.txt
@@ -14,3 +16,4 @@ Pillow>=10.0.0
 numpy>=1.24.0
 xxhash>=3.0.0
 Send2Trash>=1.8.0
+av>=17.0.0

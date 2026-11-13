@@ -137,29 +137,47 @@ class MainWindow(QMainWindow):
         lbl_subtitle.setStyleSheet("font-size: 11px; color: #71717a;")
         sidebar_layout.addWidget(lbl_subtitle)
 
-        # GPU Badge (KISS: Minimalist, moldura única externa, sem bordas internas)
+        # GPU Badge (KISS: Minimalist, moldura única externa, layout unificado centralizado)
         gpu_box = QFrame()
+        gpu_box.setObjectName("gpuBox")
         gpu_box.setStyleSheet(
-            "QFrame { background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 4px 6px; } "
-            "QLabel { border: none; background: transparent; }"
+            "QFrame#gpuBox { background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 4px 6px; } "
+            "QLabel { border: none; background: transparent; padding: 0px; }"
         )
         has_gpu = bool(self.gpu_info.get("has_cuda", False))
-        gpu_layout = QHBoxLayout(gpu_box)
-        gpu_layout.setContentsMargins(4, 4, 4, 4)
         if has_gpu:
-            gpu_box.setToolTip(f"{self.gpu_info.get('arch', 'RTX')} • {self.gpu_info.get('vram_gb', 0)} GB VRAM")
-            lbl_gpu_name = QLabel(f"🟢 {self.gpu_info.get('name', 'NVIDIA GPU')}")
-            lbl_gpu_name.setStyleSheet("font-weight: 600; font-size: 11px; color: #4ade80;")
+            badge_color = "#4ade80"
+            badge_text = self.gpu_info.get("name", "NVIDIA GPU")
+            badge_tooltip = f"{self.gpu_info.get('arch', 'RTX')} • {self.gpu_info.get('vram_gb', 0)} GB VRAM"
         else:
-            gpu_box.setToolTip(
+            badge_color = "#a1a1aa"
+            badge_text = "NO GPU"
+            badge_tooltip = (
                 "Running in CPU Mode (no compatible NVIDIA RTX GPU detected). "
                 "An NVIDIA RTX GPU is recommended for superior performance."
             )
-            lbl_gpu_name = QLabel("● NO GPU")
-            lbl_gpu_name.setStyleSheet("font-weight: 600; font-size: 11px; color: #a1a1aa;")
-        self.gpu_box = gpu_box
-        self.gpu_badge_label = lbl_gpu_name
+
+        gpu_box.setToolTip(badge_tooltip)
+        gpu_layout = QHBoxLayout(gpu_box)
+        gpu_layout.setContentsMargins(4, 4, 4, 4)
+        gpu_layout.setSpacing(6)
+
+        lbl_dot = QLabel()
+        lbl_dot.setFixedSize(12, 12)
+        lbl_dot.setPixmap(self._create_status_dot_pixmap(badge_color, size=12))
+        lbl_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        lbl_gpu_name = QLabel(badge_text)
+        lbl_gpu_name.setStyleSheet(f"font-weight: 600; font-size: 11px; color: {badge_color};")
+
+        gpu_layout.addStretch()
+        gpu_layout.addWidget(lbl_dot)
         gpu_layout.addWidget(lbl_gpu_name)
+        gpu_layout.addStretch()
+
+        self.gpu_box = gpu_box
+        self.gpu_dot_label = lbl_dot
+        self.gpu_badge_label = lbl_gpu_name
         sidebar_layout.addWidget(gpu_box)
 
         sidebar_layout.addSpacing(10)
@@ -1243,6 +1261,21 @@ class MainWindow(QMainWindow):
         msg_box.setText(text)
         msg_box.setIcon(QMessageBox.Icon.Information)
         msg_box.exec()
+
+    @staticmethod
+    def _create_status_dot_pixmap(color_hex: str, size: int = 12) -> QPixmap:
+        """Gera um ícone circular nítido com antialiasing e DPR para o badge de hardware."""
+        dpr = 2
+        pixmap = QPixmap(size * dpr, size * dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        pixmap.setDevicePixelRatio(dpr)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color_hex))
+        painter.drawEllipse(QRectF(0.5, 0.5, size - 1.0, size - 1.0))
+        painter.end()
+        return pixmap
 
     def keyPressEvent(self, event) -> None:
         """Redireciona atalhos globais de zoom (Ctrl +/-/0) para a grid quando outro widget estiver em foco."""

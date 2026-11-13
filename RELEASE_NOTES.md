@@ -1,5 +1,12 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.3.1
+- **Unified Centered Hardware Badge (`main_window.py`):**
+  - Unified GPU (`#4ade80`) and CPU fallback (`#a1a1aa`) hardware badges onto a single centered layout with a crisp vector-rendered `12×12` antialiased status dot (`_create_status_dot_pixmap`) and `padding: 0px` QSS isolation.
+- **Clean Build Spec & Source Dependency Completeness (`dupeclean.spec`, `requirements.txt`, `README.md`):**
+  - Removed unused `torchvision` references from `dupeclean.spec` `hiddenimports` and installation docs.
+  - Added `av>=17.0.0` (PyAV) to `requirements.txt` and added CPU-only PyTorch installation instructions to `README.md` / `requirements.txt` so running directly from source works out of the box on both RTX and CPU-only systems.
+
 ### What's New in v1.3.0
 - **Universal CPU Fallback for Similar Images & Similar Videos (`hardware.py`, `hasher_image.py`, `hasher_video.py`, `matcher.py`, `main.py`, `main_window.py`):**
   - Removed the startup hardware block so all 3 scan modes (`Duplicate Files`, `Similar Images`, `Similar Videos`) run cleanly on systems without a compatible NVIDIA RTX GPU using AVX-accelerated FP32 CPU tensors while preserving full FP16 SQLite cache portability (`DupeClean.db`).

@@ -146,6 +146,8 @@ class TestCpuFallback(unittest.TestCase):
                 try:
                     self.assertIn("NO GPU", cpu_win.gpu_badge_label.text())
                     self.assertIn("#a1a1aa", cpu_win.gpu_badge_label.styleSheet().lower())
+                    self.assertIsNotNone(cpu_win.gpu_dot_label.pixmap())
+                    self.assertFalse(cpu_win.gpu_dot_label.pixmap().isNull())
                     for row in range(3):
                         item = cpu_win.sidebar_modes.item(row)
                         self.assertTrue(bool(item.flags() & Qt.ItemFlag.ItemIsEnabled))
@@ -156,6 +158,8 @@ class TestCpuFallback(unittest.TestCase):
                 try:
                     self.assertIn("RTX 4090", gpu_win.gpu_badge_label.text())
                     self.assertIn("#4ade80", gpu_win.gpu_badge_label.styleSheet().lower())
+                    self.assertIsNotNone(gpu_win.gpu_dot_label.pixmap())
+                    self.assertFalse(gpu_win.gpu_dot_label.pixmap().isNull())
                 finally:
                     gpu_win.close()
             _ = settings_path
