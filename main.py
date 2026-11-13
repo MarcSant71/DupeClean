@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QThread, Signal
 
 from dupeclean.core.hardware import enforce_high_performance_gpu
-from dupeclean.ui.theme import DARK_THEME_QSS
+from dupeclean.ui.theme import DARK_THEME_QSS, create_app_icon
 from dupeclean.ui.splash import SplashScreen
 
 
@@ -80,12 +80,21 @@ def main():
     # 0. Força a GPU dedicada de alta performance (NVIDIA RTX)
     enforce_high_performance_gpu()
 
+    # Identidade explícita no Windows para agrupar Splash, diálogos e janela principal sob o mesmo ícone na taskbar
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ActionSys.DupeClean")
+        except Exception:
+            pass
+
     # Suporte a High DPI no Windows
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
     app = QApplication(sys.argv)
+    app.setWindowIcon(create_app_icon())
     app.setStyleSheet(DARK_THEME_QSS)
 
     # 1. Exibe a Splash Screen imediatamente (< 50ms) com animação fluida ativa

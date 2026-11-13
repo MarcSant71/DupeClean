@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor, QFont
 
+from dupeclean.ui.theme import create_app_icon
+
 
 class SplashScreen(QWidget):
     """Splash Screen com design Dark moderno e feedback de carregamento."""
@@ -25,6 +27,8 @@ class SplashScreen(QWidget):
             Qt.WindowType.FramelessWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        app_icon = QApplication.windowIcon()
+        self.setWindowIcon(app_icon if not app_icon.isNull() else create_app_icon())
         self.setFixedSize(490, 250)
         self._init_ui()
 

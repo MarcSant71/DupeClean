@@ -225,6 +225,6 @@ class FileActionWorker(QThread):
 
             # Emite telemetria periódica (a cada 20 arquivos ou nos extremos) para manter o event loop leve e 60fps
             if idx % 20 == 0 or idx == total or idx == 1:
-                self.progress.emit(f"{verb} ({idx:,} / {total:,}) - {path.name}", idx, total)
+                self.progress.emit(f"{verb} ({idx:,}/{total:,}) - {path.name}", idx, total)
 
         self.finished_action.emit(deleted_set, errors)

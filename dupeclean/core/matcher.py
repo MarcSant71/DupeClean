@@ -128,81 +128,105 @@ def cluster_by_similarity(
         composite_keys = (cand_refs.to(torch.int64) * 1_000_000_000) + cand_degrees.to(torch.int64)
         sorted_order = candidates[torch.argsort(composite_keys, descending=True)]
 
+        # Mantém índice em CPU para pular membros já alocados com zero sincronização CUDA
+        sorted_cpu = sorted_order.cpu().tolist()
+        unassigned_cpu = bytearray(n)
+        for c in sorted_cpu:
+            unassigned_cpu[c] = 1
+
+        # Compacta pool ativo na GPU descartando imediatamente itens de grau 0
+        active_indices = sorted_order
+        active_embs = embeddings[active_indices]
+        active_durations = durations[active_indices] if durations is not None else None
+        active_remaining = total_candidates
+
         # 4. Formação de grupos por Cohesive Clique Clustering acelerado na GPU
         duplicate_groups: List[DuplicateGroup] = []
         group_id = 1
         processed_candidates = 0
 
-        for idx in sorted_order:
+        for idx_val in sorted_cpu:
             if stop_check and stop_check():
                 return []
 
-            idx_val = idx.item()
-            if not unassigned[idx_val]:
+            if not unassigned_cpu[idx_val]:
                 continue
 
-            sim_vec = torch.mv(embeddings, embeddings[idx_val])
-            match_mask = unassigned & (sim_vec >= similarity_threshold)
+            if active_remaining > 2048 and active_remaining <= (active_indices.numel() * 3) // 4:
+                active_indices = torch.nonzero(unassigned).squeeze(1)
+                active_embs = embeddings[active_indices]
+                if durations is not None:
+                    active_durations = durations[active_indices]
 
-            if durations is not None:
+            sim_vec = torch.mv(active_embs, embeddings[idx_val])
+            match_mask = unassigned[active_indices] & (sim_vec >= similarity_threshold)
+
+            if active_durations is not None:
                 lead_dur = durations[idx_val]
                 if lead_dur > 0:
-                    has_dur = (lead_dur > 0) & (durations > 0)
-                    dur_max = torch.maximum(lead_dur, durations)
-                    dur_diff = torch.abs(lead_dur - durations) / torch.clamp(dur_max, min=1e-5)
+                    has_dur = (lead_dur > 0) & (active_durations > 0)
+                    dur_max = torch.maximum(lead_dur, active_durations)
+                    dur_diff = torch.abs(lead_dur - active_durations) / torch.clamp(dur_max, min=1e-5)
                     dur_valid = (~has_dur) | (dur_diff <= 0.08)
                     match_mask = match_mask & dur_valid
 
-            cand_indices = torch.nonzero(match_mask).squeeze(1)
+            cand_indices = active_indices[match_mask]
             k_members = cand_indices.numel()
 
             if k_members <= 1:
                 unassigned[idx_val] = False
+                unassigned_cpu[idx_val] = 0
+                active_remaining -= 1
                 processed_candidates += 1
-                continue
-
-            cand_embs = embeddings[cand_indices]
-            cand_sims = torch.matmul(cand_embs, cand_embs.t())
-
-            # 1. Verifica se todos os candidatos já formam um clique perfeito
-            if (cand_sims.min(dim=1).values >= similarity_threshold).all():
-                clique_indices = cand_indices
-                k_clique = k_members
-                avg_sim = (cand_sims.sum() - k_clique).item() / (k_clique * (k_clique - 1)) if k_clique > 1 else 1.0
             else:
-                # 2. Extrai na GPU o clique maximal contendo o líder
-                clique_mask = _fast_gpu_greedy_clique(cand_sims, similarity_threshold)
-                clique_indices = cand_indices[clique_mask]
-                k_clique = clique_indices.numel()
-                if k_clique > 1:
-                    sub_sims = cand_sims[clique_mask][:, clique_mask]
-                    avg_sim = (sub_sims.sum() - k_clique).item() / (k_clique * (k_clique - 1))
+                cand_embs = embeddings[cand_indices]
+                cand_sims = torch.matmul(cand_embs, cand_embs.t())
+
+                # 1. Verifica se todos os candidatos já formam um clique perfeito
+                if (cand_sims.min(dim=1).values >= similarity_threshold).all():
+                    clique_indices = cand_indices
+                    k_clique = k_members
+                    avg_sim = (cand_sims.sum() - k_clique).item() / (k_clique * (k_clique - 1)) if k_clique > 1 else 1.0
                 else:
-                    clique_indices = torch.empty(0, dtype=torch.int64, device=device)
-                    avg_sim = 1.0
+                    # 2. Extrai na GPU o clique maximal contendo o líder
+                    clique_mask = _fast_gpu_greedy_clique(cand_sims, similarity_threshold)
+                    clique_indices = cand_indices[clique_mask]
+                    k_clique = clique_indices.numel()
+                    if k_clique > 1:
+                        sub_sims = cand_sims[clique_mask][:, clique_mask]
+                        avg_sim = (sub_sims.sum() - k_clique).item() / (k_clique * (k_clique - 1))
+                    else:
+                        clique_indices = torch.empty(0, dtype=torch.int64, device=device)
+                        avg_sim = 1.0
 
-            if clique_indices.numel() > 1:
-                members_list = clique_indices.cpu().tolist()
-                # Garante que o líder seja o primeiro elemento da lista
-                if idx_val in members_list:
-                    members_list.remove(idx_val)
-                    members_list.insert(0, idx_val)
+                if clique_indices.numel() > 1:
+                    members_list = clique_indices.cpu().tolist()
+                    # Garante que o líder seja o primeiro elemento da lista
+                    if idx_val in members_list:
+                        members_list.remove(idx_val)
+                        members_list.insert(0, idx_val)
 
-                group_files = [records[m] for m in members_list]
+                    group_files = [records[m] for m in members_list]
 
-                duplicate_groups.append(DuplicateGroup(
-                    group_id=group_id,
-                    files=group_files,
-                    similarity=round(float(avg_sim), 4),
-                    kind=mode
-                ))
-                group_id += 1
+                    duplicate_groups.append(DuplicateGroup(
+                        group_id=group_id,
+                        files=group_files,
+                        similarity=round(float(avg_sim), 4),
+                        kind=mode
+                    ))
+                    group_id += 1
 
-                unassigned[clique_indices] = False
-                processed_candidates += clique_indices.numel()
-            else:
-                unassigned[idx_val] = False
-                processed_candidates += 1
+                    unassigned[clique_indices] = False
+                    for m in members_list:
+                        unassigned_cpu[m] = 0
+                    removed_count = len(members_list)
+                    active_remaining -= removed_count
+                    processed_candidates += removed_count
+                else:
+                    unassigned[idx_val] = False
+                    unassigned_cpu[idx_val] = 0
+                    active_remaining -= 1
+                    processed_candidates += 1
 
             now = time.time()
             if progress_callback and (now - last_progress_time >= 0.08 or processed_candidates >= total_candidates):

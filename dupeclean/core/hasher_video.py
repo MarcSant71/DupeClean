@@ -312,7 +312,7 @@ def extract_video_embeddings(
         del cached_mat
 
     if progress_callback and cached_count > 0:
-        progress_callback(f"Loading cached videos ({cached_count}/{total})...", cached_count, total)
+        progress_callback(f"Loading cached videos ({cached_count:,}/{total:,})...", cached_count, total)
 
     # 2. Se todos os vídeos já estavam em cache, retorna de imediato
     if not to_process or (stop_check and stop_check()):

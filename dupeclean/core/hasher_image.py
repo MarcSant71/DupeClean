@@ -4,6 +4,7 @@ Usa DCT 2D em lote com tensores FP16 para calcular embeddings visuais e pHash em
 """
 
 from typing import List, Callable, Optional, Tuple
+import io
 import os
 import math
 import time
@@ -14,7 +15,12 @@ import torch
 import numpy as np
 
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
-from dupeclean.core.cache import CacheManager, compute_prefix_hash, populate_record_file_id
+from dupeclean.core.scanner import get_volume_capabilities
+from dupeclean.core.cache import (
+    CacheManager,
+    compute_prefix_hash_from_bytes,
+    compute_prefix_hash_from_stream,
+)
 
 # Parâmetros de extração de assinaturas visuais de alta discriminação
 IMG_SIZE = 64
@@ -22,21 +28,15 @@ LOW_FREQ_SIZE = 16
 CHANNELS = 3
 ALPHA = 2.0  # Equalização espectral (whitening) para evitar que o fundo estático domine o sujeito
 DIM_SIZE = CHANNELS * LOW_FREQ_SIZE * LOW_FREQ_SIZE  # 768 dimensões (1.536 bytes em FP16)
+_SINGLE_READ_IMAGE_THRESHOLD = 16 * 1024 * 1024  # 16 MB
 
 
-def _load_single_image(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, np.ndarray]]:
-    """Carrega e redimensiona uma imagem em paralelo liberando o GIL do Python."""
-    rec, stop_check = args
-    if stop_check and stop_check():
-        return None
-    try:
-        with Image.open(rec.path) as img:
-            img.draft("RGB", (IMG_SIZE, IMG_SIZE))
-            rgb = img.convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.Resampling.BILINEAR)
-            arr = np.asarray(rgb, dtype=np.uint8)
-            return rec, arr
-    except Exception:
-        return None
+def _decode_image_from_stream(stream) -> np.ndarray:
+    """Decodifica e redimensiona uma imagem a partir de um stream já aberto."""
+    with Image.open(stream) as img:
+        img.draft("RGB", (IMG_SIZE, IMG_SIZE))
+        rgb = img.convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.Resampling.BILINEAR)
+        return np.asarray(rgb, dtype=np.uint8)
 
 
 def _get_dct_matrix(n: int, device: str = "cuda", dtype=torch.float16) -> torch.Tensor:
@@ -130,6 +130,9 @@ def extract_image_embeddings(
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
 
     # 1. Consulta em lote ao cache persistente com telemetria contínua
+    if progress_callback:
+        progress_callback(f"Checking cache ({total:,} images)...", 0, 0)
+
     cached_map = cache.get_image_cache(records, expected_bytes=dim_size * 2, progress_callback=progress_callback, stop_check=stop_check)
     if stop_check and stop_check():
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
@@ -139,13 +142,14 @@ def extract_image_embeddings(
     cached_recs: List[FileRecord] = []
     to_process: List[FileRecord] = []
 
-    # Separa imagens já cacheadas das que precisam de processamento
+    # Separa imagens já cacheadas (ignorando tombstones de b"") das que precisam de processamento
     for rec in records:
         if stop_check and stop_check():
             return [], torch.empty((0, dim_size), device=device, dtype=dtype)
         p_key = str(rec.path)
         if p_key in cached_map:
-            cached_recs.append(rec)
+            if len(cached_map[p_key]) > 0:
+                cached_recs.append(rec)
         else:
             to_process.append(rec)
 
@@ -162,7 +166,7 @@ def extract_image_embeddings(
         del cached_mat
 
     if progress_callback and cached_count > 0:
-        progress_callback(f"Loading cached images ({cached_count}/{total})...", cached_count, total)
+        progress_callback(f"Loading cached images ({cached_count:,}/{total:,})...", cached_count, total)
 
     # 2. Se todas estavam no cache, finaliza imediatamente!
     if not to_process or (stop_check and stop_check()):
@@ -170,6 +174,7 @@ def extract_image_embeddings(
             return [], torch.empty((0, dim_size), device=device, dtype=dtype)
         with torch.inference_mode():
             all_embeddings = torch.cat(all_embeddings_list, dim=0)
+            all_embeddings_list.clear()
         return valid_records, all_embeddings
 
     # 3. Processamento de Altíssimo Throughput: Streaming Producer-Consumer Concorrente
@@ -196,17 +201,30 @@ def extract_image_embeddings(
         for rec in records_slice:
             if stop_event.is_set() or (stop_check and stop_check()):
                 break
+            opened_ok = False
             try:
-                populate_record_file_id(rec)
-                if rec.prefix_hash is None:
-                    rec.prefix_hash = compute_prefix_hash(rec.path, rec.size)
-                with Image.open(rec.path) as img:
-                    img.draft("RGB", (IMG_SIZE, IMG_SIZE))
-                    rgb = img.convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.Resampling.BILINEAR)
-                    arr = np.asarray(rgb, dtype=np.uint8)
-                    item = (rec, arr)
+                supports_fid = get_volume_capabilities(rec.path)[1]
+                with open(rec.path, "rb") as f:
+                    opened_ok = True
+                    if supports_fid and (rec.volume_id == 0 or rec.file_id == 0):
+                        st = os.fstat(f.fileno())
+                        rec.volume_id = getattr(st, "st_dev", 0) or 0
+                        rec.file_id = getattr(st, "st_ino", 0) or 0
+
+                    if rec.size <= _SINGLE_READ_IMAGE_THRESHOLD:
+                        raw_bytes = f.read()
+                        if rec.prefix_hash is None:
+                            rec.prefix_hash = compute_prefix_hash_from_bytes(raw_bytes)
+                        arr = _decode_image_from_stream(io.BytesIO(raw_bytes))
+                    else:
+                        if rec.prefix_hash is None:
+                            rec.prefix_hash = compute_prefix_hash_from_stream(f, rec.size)
+                            f.seek(0)
+                        arr = _decode_image_from_stream(f)
+                item = (rec, arr, False)
             except Exception:
-                item = (rec, None)
+                # Só grava tombstone permanente se o arquivo abriu e o conteúdo falhou na decodificação
+                item = (rec, None, opened_ok)
 
             while not stop_event.is_set():
                 if stop_check and stop_check():
@@ -232,6 +250,7 @@ def extract_image_embeddings(
     # Consumidor: Alimenta a GPU em blocos contínuos e delega persistência para o AsyncCacheWriter
     batch_records: List[FileRecord] = []
     batch_images: List[np.ndarray] = []
+    tombstone_entries: List[Tuple] = []
     processed_count = 0
     last_progress_time = 0.0
 
@@ -243,11 +262,13 @@ def extract_image_embeddings(
                     break
 
                 try:
-                    rec, arr = img_queue.get(timeout=0.05)
+                    rec, arr, is_tombstone = img_queue.get(timeout=0.05)
                     processed_count += 1
                     if arr is not None:
                         batch_records.append(rec)
                         batch_images.append(arr)
+                    elif is_tombstone:
+                        tombstone_entries.append((str(rec.path), rec.size, rec.mtime, b"", rec.volume_id, rec.file_id, rec.prefix_hash))
 
                     # Processa lote na GPU (inicia com 64 para resposta instantânea <30ms, depois escala para effective_batch)
                     target_batch = 64 if processed_count < 256 else effective_batch
@@ -282,6 +303,10 @@ def extract_image_embeddings(
                             batch_records.clear()
                             batch_images.clear()
 
+                    if tombstone_entries and (len(tombstone_entries) >= 512 or processed_count == uncached_total):
+                        cache_writer.add_batch(tombstone_entries)
+                        tombstone_entries.clear()
+
                     now = time.time()
                     if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
                         last_progress_time = now
@@ -295,6 +320,9 @@ def extract_image_embeddings(
                     if all(not t.is_alive() for t in worker_threads) and img_queue.empty():
                         break
     finally:
+        if tombstone_entries:
+            cache_writer.add_batch(tombstone_entries)
+            tombstone_entries.clear()
         stop_event.set()
         cache_writer.close()
         for t in worker_threads:
@@ -305,4 +333,5 @@ def extract_image_embeddings(
 
     with torch.inference_mode():
         all_embeddings = torch.cat(all_embeddings_list, dim=0)
+        all_embeddings_list.clear()
     return valid_records, all_embeddings

@@ -381,3 +381,38 @@ QSplitter::handle:vertical {
     height: 4px;
 }
 """
+
+
+def create_app_icon():
+    """Carrega o ícone oficial (.ico) da aplicação ou gera fallback vetorial."""
+    import sys
+    from pathlib import Path
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap
+
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "assets" / "icon.ico")
+    candidates.append(Path(__file__).resolve().parent.parent.parent / "assets" / "icon.ico")
+
+    for icon_path in candidates:
+        if icon_path.is_file():
+            icon = QIcon(str(icon_path))
+            if not icon.isNull():
+                return icon
+
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font_size = int(size * 0.72)
+        font = QFont("Segoe UI Emoji", max(10, font_size))
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "⚡")
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
+

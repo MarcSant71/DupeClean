@@ -62,20 +62,9 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _create_app_icon() -> QIcon:
-        """Gera o ícone com o raio de energia para a barra de títulos e barra de tarefas do Windows."""
-        icon = QIcon()
-        for size in (16, 24, 32, 48, 64, 128):
-            pixmap = QPixmap(size, size)
-            pixmap.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            font_size = int(size * 0.72)
-            font = QFont("Segoe UI Emoji", max(10, font_size))
-            painter.setFont(font)
-            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "⚡")
-            painter.end()
-            icon.addPixmap(pixmap)
-        return icon
+        """Retorna o ícone oficial do aplicativo para a barra de títulos e barra de tarefas."""
+        from dupeclean.ui.theme import create_app_icon
+        return create_app_icon()
 
     def __init__(self, gpu_info: Dict[str, Any]):
         super().__init__()
@@ -199,9 +188,10 @@ class MainWindow(QMainWindow):
 
         # Similarity Parameter Box (for Images & Videos)
         self.container_slider = QFrame()
+        self.container_slider.setObjectName("sliderContainer")
         self.container_slider.setStyleSheet(
-            "QFrame { background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 6px; }"
-            "QFrame:disabled { background-color: #18181b; border: 1px solid #222226; }"
+            "QFrame#sliderContainer { background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 6px; }"
+            "QFrame#sliderContainer:disabled { background-color: #18181b; border: 1px solid #222226; }"
         )
         slider_box_layout = QVBoxLayout(self.container_slider)
         slider_box_layout.setContentsMargins(6, 6, 6, 6)
@@ -209,15 +199,22 @@ class MainWindow(QMainWindow):
 
         slider_header = QHBoxLayout()
         lbl_sim = QLabel("Similarity Threshold:")
-        lbl_sim.setStyleSheet("QLabel { font-size: 11px; color: #a1a1aa; font-weight: 500; } QLabel:disabled { color: #52525b; }")
+        lbl_sim.setStyleSheet(
+            "QLabel { font-size: 11px; color: #a1a1aa; font-weight: 500; border: none; background: transparent; padding: 0; }"
+            "QLabel:disabled { color: #52525b; }"
+        )
         self.lbl_sim_val = QLabel("85%")
-        self.lbl_sim_val.setStyleSheet("QLabel { font-size: 12px; font-weight: bold; color: #38bdf8; } QLabel:disabled { color: #52525b; }")
+        self.lbl_sim_val.setStyleSheet(
+            "QLabel { font-size: 12px; font-weight: bold; color: #38bdf8; border: none; background: transparent; padding: 0; }"
+            "QLabel:disabled { color: #52525b; }"
+        )
         slider_header.addWidget(lbl_sim)
         slider_header.addStretch()
         slider_header.addWidget(self.lbl_sim_val)
         slider_box_layout.addLayout(slider_header)
 
         self.slider_sim = QSlider(Qt.Orientation.Horizontal)
+        self.slider_sim.setStyleSheet("QSlider { background: transparent; }")
         self.slider_sim.setRange(70, 100)
         self.slider_sim.setValue(85)
         self.slider_sim.valueChanged.connect(lambda v: self.lbl_sim_val.setText(f"{v}%"))
@@ -540,12 +537,14 @@ class MainWindow(QMainWindow):
             fraction = min(1.0, max(0.0, current / total))
             pct = 100 if current >= total else min(99, int(fraction * 100))
 
+            is_scan_mount = title == "Loading results" and getattr(self, "_is_scan_mounting", False)
             display_title = title
-            if title == "Loading results" and getattr(self, "_is_scan_mounting", False):
+            display_total_stages = getattr(self, "total_stages", 3) + 1
+            if is_scan_mount:
                 # Mantém a coerência visual estrita do scan:
                 # Linha de cima: 'Current Stage:' avança de 0% a 100% da montagem
                 # Linha intermediária: 'All Stages:' avança proporcionalmente dos estágios anteriores até 100%
-                # Linha de baixo: 'Loading results (X / Y)...'
+                # Linha de baixo: 'Stage N/N: Loading results (X/Y)...'
                 display_title = "Loading results"
                 self.lbl_stage_current.setText("Current Stage:")
                 self.lbl_stage_all.setVisible(True)
@@ -553,7 +552,6 @@ class MainWindow(QMainWindow):
                 self.lbl_pct_all.setVisible(True)
 
                 total_stages = getattr(self, "total_stages", 3)
-                display_total_stages = total_stages + 1
                 base_pct = (total_stages / display_total_stages) * 100.0
                 stage_weight = (1.0 / display_total_stages) * 100.0
                 if current >= total:
@@ -605,8 +603,13 @@ class MainWindow(QMainWindow):
                 self.progress_current.setRange(0, 100)
             self.progress_current.setValue(pct)
             self.lbl_pct_current.setText(f"{pct}%")
-            clean_title = display_title.rstrip(". :")
-            self.lbl_status.setText(f"{clean_title} ({current:,} / {total:,})...")
+            if is_scan_mount:
+                self.lbl_status.setText(
+                    f"Stage {display_total_stages}/{display_total_stages}: Loading results ({current:,}/{total:,})..."
+                )
+            else:
+                clean_title = display_title.rstrip(". :")
+                self.lbl_status.setText(f"{clean_title} ({current:,}/{total:,})...")
         else:
             self.stage_widget.setVisible(False)
             self.lbl_stage_all.setVisible(True)
@@ -726,13 +729,14 @@ class MainWindow(QMainWindow):
         self.current_stage_num = 1
         self.stage_start_time = time.time()
         self.total_stages = 3 if self.current_mode == ScanMode.EXACT else 4
+        display_total_stages = self.total_stages + 1
         self.stage_widget.setVisible(True)
         self.progress_current.setRange(0, 0)
         self.lbl_pct_current.setText("...")
         self.progress_all.setRange(0, 100)
         self.progress_all.setValue(0)
         self.lbl_pct_all.setText("0%")
-        self.lbl_status.setText(f"Stage 1/{self.total_stages}: Scanning folders...")
+        self.lbl_status.setText(f"Stage 1/{display_total_stages}: Scanning folders...")
 
         # Inicializa o temporizador
         self.start_time = time.time()
@@ -846,8 +850,9 @@ class MainWindow(QMainWindow):
         self.latest_current = current
         self.latest_total = total
 
-        # Rótulo de status 100% estável (nunca pisca e mantém o padrão de estágio)
-        self.lbl_status.setText(f"Stage {stage_num}/{total_stages}: {msg}")
+        # Inclui o estágio final de montagem dos resultados para coerência total com a barra All Stages
+        display_total_stages = total_stages + 1 if total_stages > 0 else total_stages
+        self.lbl_status.setText(f"Stage {stage_num}/{display_total_stages}: {msg}")
 
         # 1. Progresso do Estágio Atual (Current Stage)
         if total > 0:
@@ -865,8 +870,6 @@ class MainWindow(QMainWindow):
         # 2. Progresso Geral Acumulado (All Stages)
         if total_stages > 0:
             fraction = min(1.0, max(0.0, current / total)) if total > 0 else 0.0
-            # Inclui o estágio final de carregamento na grade (+1) para que 'All Stages' nunca chegue a 100% prematuramente
-            display_total_stages = total_stages + 1
             overall_pct = int(min(99, max(0, ((stage_num - 1 + fraction) / display_total_stages) * 100)))
             if self.progress_all.maximum() != 100 or self.progress_all.minimum() != 0:
                 self.progress_all.setRange(0, 100)
@@ -880,7 +883,10 @@ class MainWindow(QMainWindow):
         self._was_cancelled = False
 
         if groups:
-            self.lbl_status.setText(f"Loading results ({len(groups):,} duplicate groups)...")
+            display_total_stages = getattr(self, "total_stages", 3) + 1
+            self.lbl_status.setText(
+                f"Stage {display_total_stages}/{display_total_stages}: Loading results ({len(groups):,} duplicate groups)..."
+            )
             app = QApplication.instance()
             if app:
                 app.processEvents()

@@ -45,6 +45,34 @@ def populate_record_file_id(rec: FileRecord) -> None:
     _stat_record_file_id(rec)
 
 
+def compute_prefix_hash_from_bytes(data: bytes) -> str:
+    """Calcula a assinatura rápida (Head 4KB + Tail 4KB ou <=8KB total) a partir de bytes em RAM."""
+    if len(data) <= 8192:
+        return xxhash.xxh64(data).hexdigest()
+    h = xxhash.xxh64()
+    h.update(data[:4096])
+    h.update(data[-4096:])
+    return h.hexdigest()
+
+
+def compute_prefix_hash_from_stream(f, size: int) -> str:
+    """Calcula a assinatura rápida (Head 4KB + Tail 4KB ou <=8KB total) usando um stream já aberto."""
+    if size <= 8192:
+        data = f.read(8192)
+        return xxhash.xxh64(data).hexdigest()
+    head = f.read(4096)
+    try:
+        f.seek(-4096, os.SEEK_END)
+        tail = f.read(4096)
+    except OSError:
+        tail = b""
+    h = xxhash.xxh64()
+    h.update(head)
+    if tail:
+        h.update(tail)
+    return h.hexdigest()
+
+
 def compute_prefix_hash(path: Path, size: int) -> Optional[str]:
     """
     Calcula a assinatura rápida (Head 4KB + Tail 4KB ou <=8KB total) via xxHash64.
@@ -52,21 +80,7 @@ def compute_prefix_hash(path: Path, size: int) -> Optional[str]:
     """
     try:
         with open(path, "rb") as f:
-            if size <= 8192:
-                data = f.read(8192)
-                return xxhash.xxh64(data).hexdigest()
-            else:
-                head = f.read(4096)
-                try:
-                    f.seek(-4096, os.SEEK_END)
-                    tail = f.read(4096)
-                except OSError:
-                    tail = b""
-                h = xxhash.xxh64()
-                h.update(head)
-                if tail:
-                    h.update(tail)
-                return h.hexdigest()
+            return compute_prefix_hash_from_stream(f, size)
     except (OSError, PermissionError):
         return None
 
@@ -424,7 +438,7 @@ class CacheManager:
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos renomeados/movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
             if progress_callback and len(uncached) > 2000:
-                progress_callback(f"Checking cache index ({len(uncached):,})...", 0, 0)
+                progress_callback(f"Checking cache ({len(uncached):,})...", 0, 0)
             l2_candidates = self._find_l2_candidates(conn, "cache_exact", uncached, stop_check=stop_check)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
@@ -538,20 +552,23 @@ class CacheManager:
                     c_path, c_size, c_mtime, emb_blob, c_vol_id, c_f_id, c_prefix = row
                     rec = record_map.get(c_path)
                     if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
-                        if expected_bytes is None or len(emb_blob) == expected_bytes:
+                        is_tombstone = len(emb_blob) == 0
+                        if is_tombstone or expected_bytes is None or len(emb_blob) == expected_bytes:
                             results[c_path] = emb_blob
                             if c_vol_id == 0 or c_f_id == 0:
                                 backfill_recs.append(rec)
 
                 if progress_callback and total_recs > 2000 and (i % 2700 == 0 or i + chunk_size >= total_recs):
                     done = min(i + chunk_size, total_recs)
-                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", done, total_recs)
+                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", 0, 0)
 
             if backfill_recs:
                 self._backfill_l1_file_ids(conn, "cache_images", backfill_recs, stop_check=stop_check)
 
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
+            if progress_callback and len(uncached) > 2000:
+                progress_callback(f"Checking cache ({len(uncached):,})...", 0, 0)
             l2_candidates = self._find_l2_candidates(conn, "cache_images", uncached, stop_check=stop_check)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
@@ -574,7 +591,8 @@ class CacheManager:
                     )
                     for row in cursor.fetchall():
                         c_path, c_size, c_mtime, emb_blob, c_vol_id, c_f_id, c_prefix = row
-                        if expected_bytes is not None and len(emb_blob) != expected_bytes:
+                        is_tombstone = len(emb_blob) == 0
+                        if not is_tombstone and expected_bytes is not None and len(emb_blob) != expected_bytes:
                             continue
                         for rec in l2_map.get((c_f_id, c_vol_id), ()):
                             if rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
@@ -602,6 +620,8 @@ class CacheManager:
                 known_sizes = self._prefilter_known_sizes(conn, "cache_images", uncached_l3, "prefix_hash IS NOT NULL")
                 if known_sizes:
                     sieve_candidates = [r for r in uncached_l3 if r.size in known_sizes]
+                    if progress_callback and len(sieve_candidates) > 500:
+                        progress_callback(f"Checking cache signatures ({len(sieve_candidates):,})...", 0, 0)
                     self._populate_prefix_hashes_parallel(sieve_candidates, stop_check=stop_check)
                     hashed_candidates = [r for r in sieve_candidates if r.prefix_hash]
                     l3_upserts = []
@@ -620,7 +640,8 @@ class CacheManager:
                         )
                         match_map: Dict[Tuple[int, str], bytes] = {}
                         for r_size, r_phash, emb_blob in cursor.fetchall():
-                            if expected_bytes is None or len(emb_blob) == expected_bytes:
+                            is_tombstone = len(emb_blob) == 0
+                            if is_tombstone or expected_bytes is None or len(emb_blob) == expected_bytes:
                                 match_map.setdefault((r_size, r_phash), emb_blob)
 
                         for rec in chunk:
