@@ -1,5 +1,17 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.15
+- **Visual Signature Precision & Image Engine v2 (`hasher_image.py`, `db_schema.py`):**
+  - Applied opaque alpha compositing (`_to_opaque_rgb`), EXIF orientation normalization (`exif_transpose`), JPEG `draft()` fast-decode prescaling, Hamming resampling, `ALPHA = 1.2` whitening calibration, and FP32 GPU DCT/L2 normalization quantized cleanly to FP16 embeddings.
+  - Bumped database schema to `v2` (`_migrate_1_to_2`), invalidating only `cache_images` once on startup while preserving `cache_exact`, `cache_videos`, and `app_settings`.
+- **High-Throughput Image I/O & GPU Tensor Core Clustering (`cache.py`, `matcher.py`):**
+  - Eliminated Stage 4 CPU↔GPU synchronization bottlenecks with batched Tensor Core GEMM leader scanning, fast paths for pairs (`k == 2`), active pool compaction, and batched `torch.bmm` precomputation for multi-member cliques (`3 <= k <= 96`).
+  - Optimized single-read image streaming thresholds, tombstones for unreadable/corrupt images, and asynchronous prefix-hash caching.
+- **UI Responsiveness, Flicker Fix & Status Polish (`main_window.py`, `preview_panel.py`, `results_table.py`, `splash.py`, `theme.py`):**
+  - Eliminated preview thumbnail resize flicker when switching files (`QStackedLayout` + `QSizePolicy.Ignored`) and kept the previous frame visible during rapid switches.
+  - Fixed missing native application icon on startup splash screen/taskbar.
+  - Simplified the similarity slider container border styling, unified stage progress labels (`Checking cache...`, `Loading results...`), and removed redundant similarity labels from group header rows (preserving the `Similarity` column and sorting).
+
 ### What's New in v1.1.14
 - **Startup Database Schema Validation & Migration (`db_schema.py`):**
   - Added versioned SQLite schema tracking (`PRAGMA user_version`) and structural validation (tables, primary keys, columns, and partial indexes) on startup.
