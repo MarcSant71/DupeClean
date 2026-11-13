@@ -1,5 +1,11 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.14
+- **Startup Database Schema Validation & Migration (`db_schema.py`):**
+  - Added versioned SQLite schema tracking (`PRAGMA user_version`) and structural validation (tables, primary keys, columns, and partial indexes) on startup.
+  - Legacy databases are adapted silently during initialization, missing indexes are auto-repaired, and unrecoverable/corrupted databases reset cleanly while preserving `app_settings` (such as saved folders).
+  - Separated database initialization errors and future-version (`v > current`) detection from GPU hardware errors in `main.py` with explicit user prompts.
+
 ### What's New in v1.1.13
 - **Stage 2 Status Feedback Polish:**
   - Refined the Tier 2 cache lookup status label to `"Checking cache index (N)..."` for clear, accurate feedback across both newly added and moved files.
