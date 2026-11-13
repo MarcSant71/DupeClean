@@ -523,7 +523,7 @@ class CacheManager:
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos renomeados/movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
             if progress_callback and len(uncached) > 2000:
-                progress_callback(f"Checking moved files ({len(uncached):,})...", 0, 0)
+                progress_callback(f"Checking cache index ({len(uncached):,})...", 0, 0)
             l2_candidates = self._find_l2_candidates(conn, "cache_exact", uncached, stop_check=stop_check)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
