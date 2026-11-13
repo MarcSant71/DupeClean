@@ -386,6 +386,8 @@ class TestFolderMoveResilience(unittest.TestCase):
         self.assertTrue(any("Checking cache" in m for m, _, _ in events))
         self.assertTrue(all(tot == len(dummy_records) for _, _, tot in events))
         self.assertEqual(events[-1][1], len(dummy_records))
+        # Nenhum evento intermediário deve cravar 100% antes do retorno completo
+        self.assertTrue(all(curr < len(dummy_records) for _, curr, _ in events[:-1]))
         currs = [curr for _, curr, _ in events]
         self.assertEqual(currs, sorted(currs))
 

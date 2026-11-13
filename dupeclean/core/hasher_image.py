@@ -15,6 +15,7 @@ import torch
 import numpy as np
 
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
+from dupeclean.core.hardware import get_compute_device
 from dupeclean.core.scanner import get_volume_capabilities
 from dupeclean.core.cache import (
     CacheManager,
@@ -135,10 +136,9 @@ def extract_image_embeddings(
     Carrega imagens em paralelo maximizando a eficiência de CPU e throughput de I/O,
     alimenta a RTX 5090 em lotes de alto rendimento e calcula embeddings normalizados.
     Utiliza cache SQLite persistente (WAL) para carregar instantaneamente imagens já analisadas.
-    Retorna (registros_validos, tensor_embeddings_gpu).
+    Retorna (registros_validos, tensor_embeddings).
     """
-    device = "cuda"
-    dtype = torch.float16
+    device, dtype = get_compute_device()
     cache = cache_manager or CacheManager()
 
     total = len(records)
@@ -147,10 +147,19 @@ def extract_image_embeddings(
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
 
     # 1. Consulta em lote ao cache persistente com telemetria contínua
-    if progress_callback:
-        progress_callback(f"Checking cache ({total:,} images)...", 0, total)
+    def _image_cache_cb(msg: str, curr: int, tot: int):
+        if progress_callback:
+            progress_callback(msg, curr, tot * 2)
 
-    cached_map = cache.get_image_cache(records, expected_bytes=dim_size * 2, progress_callback=progress_callback, stop_check=stop_check)
+    if progress_callback:
+        progress_callback(f"Checking cache ({total:,} images)...", 0, total * 2)
+
+    cached_map = cache.get_image_cache(
+        records,
+        expected_bytes=dim_size * 2,
+        progress_callback=_image_cache_cb if progress_callback else None,
+        stop_check=stop_check,
+    )
     if stop_check and stop_check():
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
     cached_count = len(cached_map)
@@ -182,8 +191,13 @@ def extract_image_embeddings(
             all_embeddings_list.append(torch.from_numpy(cached_mat).to(device=device, dtype=dtype))
         del cached_mat
 
+    stage_total = total + len(to_process)
     if progress_callback and cached_count > 0:
-        progress_callback(f"Loading cached images ({cached_count:,}/{total:,})...", cached_count, total)
+        progress_callback(
+            f"Loading cached images ({cached_count:,}/{total:,})...",
+            total,
+            stage_total if to_process else total,
+        )
 
     # 2. Se todas estavam no cache, finaliza imediatamente!
     if not to_process or (stop_check and stop_check()):
@@ -308,7 +322,7 @@ def extract_image_embeddings(
                             all_embeddings_list.append(normalized)
                             valid_records.extend(batch_records)
 
-                            norm_cpu_np = normalized.cpu().numpy()
+                            norm_cpu_np = normalized.to(dtype=torch.float16).cpu().numpy()
                             new_entries = [
                                 (str(b_rec.path), b_rec.size, b_rec.mtime, norm_cpu_np[b_idx:b_idx + 1].tobytes(), b_rec.volume_id, b_rec.file_id, b_rec.prefix_hash)
                                 for b_idx, b_rec in enumerate(batch_records)
@@ -328,8 +342,8 @@ def extract_image_embeddings(
                         done_count = cached_count + processed_count
                         progress_callback(
                             f"Processing images ({done_count:,}/{total:,})...",
-                            done_count,
-                            total
+                            total + processed_count,
+                            stage_total
                         )
                 except queue.Empty:
                     if all(not t.is_alive() for t in worker_threads) and img_queue.empty():

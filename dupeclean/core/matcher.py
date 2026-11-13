@@ -217,7 +217,9 @@ def cluster_by_similarity(
         from dupeclean.core.hardware import get_optimal_gpu_budgets
         budgets = get_optimal_gpu_budgets()
         target_chunk_bytes = budgets.get("target_chunk_bytes", 256 * 1024 * 1024)
-        chunk_size = max(128, min(4096, int(target_chunk_bytes / (n * 2))))
+        elem_bytes = max(2, embeddings.element_size())
+        max_chunk = 1024 if device.type == "cpu" else 4096
+        chunk_size = max(64, min(max_chunk, int(target_chunk_bytes / (n * elem_bytes))))
         emb_t = embeddings.t()
 
         degrees = torch.zeros(n, dtype=torch.int32, device=device)

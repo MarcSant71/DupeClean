@@ -2,14 +2,14 @@
 
 **GPU-Accelerated Duplicate File Finder**
 
-[![GitHub Release](https://img.shields.io/github/v/release/MarcSant71/DupeClean?color=007acc&logo=github&v=1.2.1)](https://github.com/MarcSant71/DupeClean/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/MarcSant71/DupeClean?color=007acc&logo=github&v=1.3.0)](https://github.com/MarcSant71/DupeClean/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-blue?logo=windows)](https://github.com/MarcSant71/DupeClean/releases/latest)
-[![GPU](https://img.shields.io/badge/NVIDIA-RTX%20GPU%20Required-76b900?logo=nvidia)](https://github.com/MarcSant71/DupeClean/releases/latest)
+[![Compute](https://img.shields.io/badge/NVIDIA-RTX%20Accelerated%20%2B%20CPU%20Fallback-76b900?logo=nvidia)](https://github.com/MarcSant71/DupeClean/releases/latest)
 
-High-performance duplicate file, image, and video finder engineered and optimized exclusively for **NVIDIA GeForce RTX (30, 40, and 50 Series)** GPUs with Ampere, Ada Lovelace, and Blackwell architectures.
+High-precision duplicate file, image, and video finder featuring **universal CPU fallback** and full hardware acceleration on **NVIDIA GeForce RTX (30, 40, and 50 Series)** GPUs. DupeClean compares continuous 2D DCT embeddings (**768-D** for images / **3,840-D** for videos) via dense all-against-all (**N × N**) matrix multiplication for superior matching quality — and while all scan modes run on any CPU, **an NVIDIA RTX GPU is recommended for superior performance**.
 
 > 📦 **Portable Release (No Python Installation Required):**  
-> Download the pre-built standalone package [**`DupeClean-v1.2.1-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
+> Download the pre-built standalone package [**`DupeClean-v1.3.0-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
 
 <p align="center">
   <img src="assets/dupeclean_main_screenshot.png" alt="DupeClean GPU Duplicate Finder Interface" width="100%">
@@ -19,26 +19,24 @@ High-performance duplicate file, image, and video finder engineered and optimize
 
 ## ⚡ Why DupeClean? (DupeClean vs. Traditional Tools)
 
-Most popular deduplicators (Czkawka, dupeGuru, Duplicate Cleaner, etc.) were built for a previous computing era: they run all image hashing, vector calculations, and video decoding on the **CPU**. 
+Most popular deduplicators (Czkawka, dupeGuru, Duplicate Cleaner, etc.) rely on coarse binary perceptual hashes (`pHash` / blockhash) compared with fast bit-level Hamming heuristics — trading away visual nuance on resized, cropped, or re-encoded media, and executing strictly on CPU loops.
 
-When scanning libraries with **100,000+ RAW photos or 4K videos**, legacy tools spike CPU usage to 100%, trigger thermal throttling, spin fans at maximum speed, and take **hours or days** - while your multi-thousand-dollar GPU sits completely idle.
+**DupeClean compares continuous 2D DCT embeddings (768-D for images / 3,840-D for videos) via dense all-against-all (N × N) matrix multiplication, delivering superior visual matching quality:** it runs universally out of the box via automatic **CPU fallback (FP32)** so any PC can run all three modes cleanly, while **an NVIDIA RTX GPU (CUDA FP16 Tensor Cores) is strongly recommended for superior performance** on large media libraries.
 
-**DupeClean changes the paradigm by moving the entire workload into dedicated NVIDIA silicon:**
-
-| Feature | 🐢 Traditional Tools (Czkawka, dupeGuru, etc.) | ⚡ DupeClean (GPU-Accelerated) |
+| Feature | 🐢 Traditional Tools (Czkawka, dupeGuru, etc.) | ⚡ DupeClean (Dense Embedding Engine) |
 | :--- | :--- | :--- |
-| **Compute Engine** | CPU-bound (Software loop, high thermal load) | **GPU Tensor Cores & CUDA** (Batches executed in VRAM) |
-| **Similarity Intelligence** | Basic low-res pixel hashes (Gradient/Blockhash) | **GPU Frequency Signatures (2D DCT)** via PyTorch |
-| **Throughput & Speed** | ~20–50 images/second (CPU bottlenecked) | **600+ images/second** (Parallel decoding + GPU compute) |
-| **Video Keyframe Extraction** | Full sequential decoding (Slow, heavy lag) | **Fast Keyframe Seek + GPU Signatures** (150+ videos/s) |
+| **Compute Engine** | CPU-only software loops | **NVIDIA RTX Tensor Cores (CUDA FP16)** + **Universal CPU Fallback (FP32)** |
+| **Similarity Intelligence** | Coarse binary pixel hashes (Gradient / Blockhash) | **Continuous 2D DCT Embeddings (768-D / 3,840-D)** with spectral whitening |
+| **Duplicate Grouping** | Hamming distance / hash bucket heuristics | **Dense All-Against-All (N × N) Cosine Matrix Multiplication** |
+| **Throughput & Speed** | ~20–50 images/second | **600+ images/s** & **150+ videos/s** on RTX GPUs *(RTX recommended for best speed)* |
 | **UI Design Philosophy** | Crowded interfaces with dozens of technical options | **KISS Principle**: Clean dark mode, zero fluff, instant feedback |
-| **Caching Pipeline** | In-memory or fragile cache | **SQLite WAL Engine**: Resumable, crash-safe, instant rescans |
+| **Caching Pipeline** | In-memory or fragile cache | **SQLite WAL Engine**: Resumable, crash-safe, portable FP16 cache across CPU & GPU |
 
 ---
 
 ## 🚀 Engineering Highlights
 
-* **Zero CPU Bottlenecks:** Frequency feature extraction, normalizations, and similarity comparisons execute directly in GPU **VRAM** and **Tensor Cores** via PyTorch CUDA.
+* **Universal CPU Fallback + RTX Acceleration:** Continuous 768-D / 3,840-D feature extraction and dense all-against-all (N × N) matrix comparisons run automatically on CPU (FP32) or accelerate onto **NVIDIA RTX Tensor Cores (FP16 CUDA)** when present — an **RTX GPU is recommended for superior performance** on tens or hundreds of thousands of files.
 * **Parallel Multi-Process Extraction:** Multi-threaded image decoding feeds the GPU, while temporal video keyframe extraction pinpoints 5 distinct timeline samples without reading full files.
 * **Reference Folder Protection (`Ref`):** Designate any master/backup folder as a **Reference**. DupeClean matches duplicate files against it, while ensuring reference files are strictly locked and never marked for deletion.
 * **Modern Ergonomics & Usability:**
@@ -81,32 +79,29 @@ Every scan operates in **3 distinct, deterministic stages**, tailored specifical
 
 ---
 
-### 2. 🖼️ Similar Images Mode (Perceptual 2D DCT on GPU)
+### 2. 🖼️ Similar Images Mode (Continuous 768-D 2D DCT Embeddings)
 
 * **Stage 1/3: Scanning Folders (Image Discovery & Spatial Sorting):**
   * Gathers photos and graphics (`.jpg`, `.png`, `.webp`, `.tiff`, `.bmp`, `.raw`), filters corrupted files, and applies parent directory sorting for optimal NTFS seek efficiency.
-* **Stage 2/3: Extracting Visual Signatures (Parallel Decoding & GPU Tensor Hashing):**
-  * Consults SQLite WAL cache for pre-computed 1,536-byte visual feature vectors.
-  * Multi-threaded CPU workers (`4` to `32` threads) decode uncached images, convert them to normalized grayscale/RGB tensors, and transfer batches (`256`–`1,024` items depending on VRAM) to GPU VRAM.
-  * NVIDIA RTX Tensor Cores compute **2D Discrete Cosine Transform (2D DCT)** frequency signatures in half-precision (FP16) in less than 0.5 ms per batch.
-* **Stage 3/3: Comparing Visual Similarity (Mass Tensor Core Matrix Multiplication):**
-  * All image vectors reside in GPU VRAM as a contiguous matrix.
-  * The GPU executes all-to-all cosine similarity matrix multiplication across the entire dataset simultaneously.
-* **Result Phase:** Applies **Mutual Similarity Grouping** based on the interactive similarity slider (70% to 100%). Identifies duplicates even across different resolutions, crops, color adjustments, or format conversions (e.g., RAW vs JPEG).
+* **Stage 2/3: Extracting Visual Signatures (Parallel Decoding & 768-D Tensor Hashing):**
+  * Consults SQLite WAL cache for pre-computed 1,536-byte (FP16) visual feature vectors — portable across CPU and GPU runs.
+  * Multi-threaded CPU workers (`4` to `32` threads) decode uncached images, compute normalized **768-D continuous 2D DCT embeddings** with spectral whitening on **RTX Tensor Cores (FP16 CUDA)** or **CPU fallback (FP32)**, and stream embeddings back to SQLite.
+* **Stage 3/3: Comparing Visual Similarity (Dense N × N Cosine Matrix Multiplication):**
+  * Performs dense all-against-all (**N × N**) cosine similarity matrix multiplication across all candidate embeddings in chunked memory blocks (VRAM on RTX GPUs or system RAM on CPU).
+* **Result Phase:** Applies **Mutual Similarity Grouping** based on the interactive similarity slider (70% to 100%). Identifies duplicates with superior visual fidelity across different resolutions, crops, color adjustments, or format conversions (e.g., RAW vs JPEG).
 
 ---
 
-### 3. 🎬 Similar Videos Mode (Multi-Point Keyframe Extraction & Temporal GPU Clustering)
+### 3. 🎬 Similar Videos Mode (Continuous 3,840-D Multi-Keyframe Embeddings)
 
 * **Stage 1/3: Scanning Folders (Container Discovery & Metadata Crawl):**
   * Enumerates video files across all common formats (`.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`) as well as raw surveillance DVR containers (`.dav`).
-* **Stage 2/3: Extracting Video Signatures (PyAV Temporal Micro-Sampling + GPU Embeddings):**
-  * Consults cache for 7,680-byte multi-keyframe temporal embeddings.
+* **Stage 2/3: Extracting Video Signatures (PyAV Temporal Micro-Sampling + 3,840-D Embeddings):**
+  * Consults cache for 7,680-byte (FP16) multi-keyframe temporal embeddings.
   * **Balanced Multi-Core Architecture:** Automatically allocates half of your CPU threads to seek and decode exactly **5 distinct temporal keyframes** across each video's duration (1–2 ms per keyframe) without decoding the entire video stream.
-  * Extracted keyframes are batched to the GPU to generate concatenated 2D DCT frequency vectors.
-* **Stage 3/3: Comparing Video Similarity (High-Dimensional Temporal Tensor Matching):**
-  * Matches multi-point temporal vectors across candidate videos in GPU VRAM.
-  * Evaluates sequence-wide structural similarity across all sampled keyframes.
+  * Extracted keyframes are batched to generate concatenated **3,840-D continuous 2D DCT embeddings** (CUDA FP16 on RTX GPUs, FP32 fallback on CPU).
+* **Stage 3/3: Comparing Video Similarity (Dense N × N Temporal Tensor Matching):**
+  * Executes dense all-against-all (**N × N**) similarity matching across all 3,840-D temporal vectors with an 8% duration tolerance guard.
 * **Result Phase:** Applies strict **Mutual Similarity Grouping** to guarantee that every video in a cluster directly matches all other videos in that cluster, completely eliminating transitive false-positive chaining.
 
 ---
@@ -128,6 +123,9 @@ During Stage 2, CPU workers decode images and extract video keyframes from disk.
 Worker allocation scales dynamically from `os.cpu_count()`:
 * **Exact Hashing & Image Decoding:** Scales from **4 to 32 concurrent threads** matching your CPU logical core count.
 * **Video Keyframe Extraction (`ProcessPoolExecutor`):** Allocates roughly **50% of logical cores (4 to 16 parallel processes)** so system responsiveness stays intact even on massive multi-process DVR decodes (e.g., 16 video processes on a 32-thread CPU, or 6 processes on a 12-thread CPU).
+
+#### *"Can DupeClean scan photos and videos without an NVIDIA RTX GPU?"*
+Yes! When no compatible RTX GPU (Compute Capability ≥ 8.6) is detected, DupeClean displays a `● NO GPU` badge and automatically switches to **universal CPU Mode (FP32)** using the exact same continuous **768-D / 3,840-D 2D DCT embeddings** and dense **N × N** matching engine. Results and SQLite caches are 100% identical and portable — however, **an NVIDIA RTX GPU is strongly recommended for superior performance** on massive photo or video libraries.
 
 #### *"Does it automatically optimize for different RTX GPUs (RTX 3070 vs. 3090 vs. 5090)?"*
 Yes. The `get_optimal_gpu_budgets()` engine inspects VRAM capacity and free headroom in real time via `torch.cuda.mem_get_info()`:
@@ -166,7 +164,7 @@ Traditional deduplicators are lightweight single-binary executables because they
 
 For 99% of users, **no installation, no Python, and no command line setup is required**:
 
-1. Download [**`DupeClean-v1.2.1-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
+1. Download [**`DupeClean-v1.3.0-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
 2. Extract the archive using [7-Zip](https://www.7-zip.org/) or WinRAR.
 3. Launch **`DupeClean.exe`** directly. Everything (Python runtime, CUDA 12 libraries, and GPU models) is pre-bundled and runs out of the box.
 
@@ -174,10 +172,9 @@ For 99% of users, **no installation, no Python, and no command line setup is req
 
 ## 💻 System Requirements
 
-* **GPU:** Dedicated NVIDIA GeForce RTX (30, 40, or 50 Series) with Compute Capability ≥ 8.6 (Ampere, Ada Lovelace, or Blackwell).
-* **VRAM:** 4 GB minimum (8 GB+ recommended for massive photo and video libraries).
 * **Operating System:** Windows 10 or Windows 11 (64-bit).
-* **NVIDIA Driver:** Driver version **550.xx or higher** (supporting CUDA 12.4+ / 12.8+).
+* **Processor (CPU):** Any 64-bit x86_64 multi-core CPU (universal CPU fallback supports all 3 modes out of the box).
+* **GPU (Recommended for Superior Performance):** Dedicated NVIDIA GeForce RTX (30, 40, or 50 Series) with Compute Capability ≥ 8.6 (4 GB VRAM minimum, 8 GB+ recommended) and Driver **550.xx+**. Without a compatible RTX GPU, DupeClean runs in CPU Mode (`NO GPU`).
 
 *(Note: Python and PyTorch are **not** required if you use the pre-built portable package above).*
 

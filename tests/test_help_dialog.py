@@ -57,14 +57,55 @@ class TestHelpDialog(unittest.TestCase):
         self.assertAlmostEqual(dlg.width(), int(1920 * 0.82), delta=5)
         self.assertAlmostEqual(dlg.height(), int(1080 * 0.86), delta=5)
 
-        # Zoom functionality
+        # Zoom functionality & actual text scaling + focus-independent shortcuts
+        from PySide6.QtGui import QTextCursor
+        from PySide6.QtTest import QTest
         from dupeclean.ui.help_dialog import ZoomableBrowser
-        browser = dlg.tabs.widget(0)
+
+        dlg.tabs.setCurrentIndex(3)
+        dlg.show()
+        self.app.processEvents()
+
+        browser = dlg.tabs.currentWidget()
         self.assertIsInstance(browser, ZoomableBrowser)
-        browser.zoom_in()
+
+        def _body_px_and_height():
+            self.app.processEvents()
+            doc = browser.document()
+            b = doc.begin().next()
+            c = QTextCursor(b)
+            c.movePosition(QTextCursor.MoveOperation.NextCharacter)
+            return c.charFormat().font().pixelSize(), doc.size().height()
+
+        px_0, h_0 = _body_px_and_height()
+        # Focus starts on QTabBar, NOT ZoomableBrowser: shortcuts must still work
+        fw = dlg.focusWidget()
+        self.assertIsNotNone(fw)
+        QTest.keyClick(fw, Qt.Key.Key_Equal, Qt.KeyboardModifier.ControlModifier)
         self.assertEqual(browser._zoom_level, 1)
-        browser.zoom_out()
+        QTest.keyClick(fw, Qt.Key.Key_Plus, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(browser._zoom_level, 2)
+        px_2, h_2 = _body_px_and_height()
+        self.assertGreater(px_2, px_0)
+        self.assertGreater(h_2, h_0)
+
+        QTest.keyClick(fw, Qt.Key.Key_0, Qt.KeyboardModifier.ControlModifier)
         self.assertEqual(browser._zoom_level, 0)
+        px_reset, _ = _body_px_and_height()
+        self.assertEqual(px_reset, px_0)
+
+        # Focused directly on ZoomableBrowser: must step by 1 (never double-trigger)
+        browser.setFocus()
+        self.app.processEvents()
+        QTest.keyClick(browser, Qt.Key.Key_Minus, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(browser._zoom_level, -1)
+        px_neg, h_neg = _body_px_and_height()
+        self.assertLess(px_neg, px_0)
+        self.assertLess(h_neg, h_0)
+
+        browser.reset_zoom()
+        self.assertEqual(browser._zoom_level, 0)
+        dlg.close()
 
 
 if __name__ == "__main__":

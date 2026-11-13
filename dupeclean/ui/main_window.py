@@ -143,11 +143,22 @@ class MainWindow(QMainWindow):
             "QFrame { background-color: #202024; border: 1px solid #2e2e33; border-radius: 6px; padding: 4px 6px; } "
             "QLabel { border: none; background: transparent; }"
         )
-        gpu_box.setToolTip(f"{self.gpu_info.get('arch', 'RTX')} • {self.gpu_info.get('vram_gb', 0)} GB VRAM")
+        has_gpu = bool(self.gpu_info.get("has_cuda", False))
         gpu_layout = QHBoxLayout(gpu_box)
         gpu_layout.setContentsMargins(4, 4, 4, 4)
-        lbl_gpu_name = QLabel(f"🟢 {self.gpu_info.get('name', 'NVIDIA GPU')}")
-        lbl_gpu_name.setStyleSheet("font-weight: 600; font-size: 11px; color: #4ade80;")
+        if has_gpu:
+            gpu_box.setToolTip(f"{self.gpu_info.get('arch', 'RTX')} • {self.gpu_info.get('vram_gb', 0)} GB VRAM")
+            lbl_gpu_name = QLabel(f"🟢 {self.gpu_info.get('name', 'NVIDIA GPU')}")
+            lbl_gpu_name.setStyleSheet("font-weight: 600; font-size: 11px; color: #4ade80;")
+        else:
+            gpu_box.setToolTip(
+                "Running in CPU Mode (no compatible NVIDIA RTX GPU detected). "
+                "An NVIDIA RTX GPU is recommended for superior performance."
+            )
+            lbl_gpu_name = QLabel("● NO GPU")
+            lbl_gpu_name.setStyleSheet("font-weight: 600; font-size: 11px; color: #a1a1aa;")
+        self.gpu_box = gpu_box
+        self.gpu_badge_label = lbl_gpu_name
         gpu_layout.addWidget(lbl_gpu_name)
         sidebar_layout.addWidget(gpu_box)
 
@@ -811,7 +822,7 @@ class MainWindow(QMainWindow):
         elapsed_str = self._format_duration(elapsed)
 
         # Durante o Estágio 1 (descoberta de arquivos), exibe apenas o tempo decorrido.
-        # A taxa de iteração (it/s) é calculada e exibida a partir do Estágio 2.
+        # A taxa de iteração (it/s) é calculada e exibida a partir do Estágio 2 quando há avanço real.
         stage_num = getattr(self, "current_stage_num", 1)
         if stage_num > 1 and self.latest_total > 0 and self.latest_current > 1 and elapsed > 0.5:
             if not hasattr(self, "_telemetry_window"):
@@ -825,25 +836,35 @@ class MainWindow(QMainWindow):
             t_old, c_old = self._telemetry_window[0]
             dt = now - t_old
             dc = self.latest_current - c_old
+            stale_sec = now - getattr(self, "_last_progress_change_time", now)
 
-            if dt >= 0.8 and dc > 0:
+            if stale_sec >= 1.0 and dc <= 0:
+                # Sem avanço real recente: evita calcular it/s artificial decrescente sobre total congelado
+                self.lbl_timer.setText(f"{elapsed_str}")
+            elif dt >= 0.8 and dc > 0:
                 rate = dc / dt
-            else:
+                self.lbl_timer.setText(f"{rate:,.0f} it/s • {elapsed_str}")
+            elif dt < 0.8 and dc > 0:
                 stage_elapsed = max(0.001, now - getattr(self, "stage_start_time", self.start_time))
                 rate = self.latest_current / stage_elapsed
-
-            self.lbl_timer.setText(f"{rate:,.0f} it/s • {elapsed_str}")
+                self.lbl_timer.setText(f"{rate:,.0f} it/s • {elapsed_str}")
+            else:
+                self.lbl_timer.setText(f"{elapsed_str}")
         else:
             self.lbl_timer.setText(f"{elapsed_str}")
 
     @Slot(str, "qint64", "qint64", int, int)
     def _on_stage_progress(self, msg: str, current: int, total: int, stage_num: int, total_stages: int):
+        now = time.time()
         # Se mudou de estágio, reseta o temporizador interno da fase e a janela deslizante
         if getattr(self, "current_stage_num", 1) != stage_num:
             self.current_stage_num = stage_num
-            self.stage_start_time = time.time()
+            self.stage_start_time = now
+            self._last_progress_change_time = now
             if hasattr(self, "_telemetry_window"):
                 self._telemetry_window.clear()
+        elif current != getattr(self, "latest_current", 0):
+            self._last_progress_change_time = now
 
         self.current_stage_num = stage_num
         self.total_stages = total_stages
@@ -927,8 +948,7 @@ class MainWindow(QMainWindow):
             file_word = "file" if total_files == 1 else "files"
             self.lbl_status.setText(
                 f"Scan completed{time_suffix}! Found {len(groups)} duplicate {group_word} "
-                f"({total_files} {file_word}). Estimated space to free: {reclaim_mb} MB. "
-                "Mark files to delete using checkboxes or the Select menu."
+                f"({total_files} {file_word}). Estimated space to free: {reclaim_mb} MB."
             )
         else:
             self.lbl_status.setText(f"Scan completed{time_suffix}. No duplicates found with current filters.")
@@ -1196,16 +1216,22 @@ class MainWindow(QMainWindow):
 
     def _show_about_dialog(self):
         """Exibe o diálogo compacto Sobre o DupeClean."""
-        gpu_name = self.gpu_info.get("name", "NVIDIA GPU")
-        arch = self.gpu_info.get("arch", "RTX")
-        vram = self.gpu_info.get("vram_gb", 0)
+        has_gpu = bool(self.gpu_info.get("has_cuda", False))
+        if has_gpu:
+            gpu_name = self.gpu_info.get("name", "NVIDIA GPU")
+            arch = self.gpu_info.get("arch", "RTX")
+            vram = self.gpu_info.get("vram_gb", 0)
+            hw_line = f"<b>GPU Hardware:</b> {gpu_name} ({arch}, {vram} GB VRAM)<br>"
+        else:
+            hw_line = "<b>Compute Engine:</b> CPU Mode (FP32 Fallback &bull; RTX GPU recommended for superior speed)<br>"
         text = (
             f"<h3 style='color: #38bdf8; margin-top: 0px;'>⚡ DupeClean v{__version__}</h3>"
             f"<p><b>GPU-Accelerated Duplicate File, Image & Video Finder</b></p>"
-            f"<p>Engineered and optimized exclusively for NVIDIA GeForce RTX GPUs "
-            f"leveraging Tensor Cores, half-precision spatial matrices, and NVDEC hardware acceleration.</p>"
+            f"<p>Compares continuous 2D DCT perceptual embeddings (768-D images / 3840-D videos) via "
+            f"dense all-against-all (N &times; N) matrix multiplication on NVIDIA RTX GPUs (CUDA FP16) "
+            f"or universal CPU fallback. An NVIDIA RTX GPU is recommended for superior performance.</p>"
             f"<hr style='border: none; border-top: 1px solid #3f3f46;'>"
-            f"<p><b>GPU Hardware:</b> {gpu_name} ({arch}, {vram} GB VRAM)<br>"
+            f"<p>{hw_line}"
             f"<b>Developer:</b> Marcelo Santos &bull; Dominio Digital<br>"
             f"<b>Contact:</b> <a style='color: #38bdf8;' href='mailto:contato@dominiodigital.dev.br'>contato@dominiodigital.dev.br</a><br>"
             f"<b>Platform:</b> Windows 10 / 11 x64 (Standalone)<br>"
@@ -1217,3 +1243,20 @@ class MainWindow(QMainWindow):
         msg_box.setText(text)
         msg_box.setIcon(QMessageBox.Icon.Information)
         msg_box.exec()
+
+    def keyPressEvent(self, event) -> None:
+        """Redireciona atalhos globais de zoom (Ctrl +/-/0) para a grid quando outro widget estiver em foco."""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self.results_widget.tree.zoom_in()
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_Minus:
+                self.results_widget.tree.zoom_out()
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_0:
+                self.results_widget.tree.reset_zoom()
+                event.accept()
+                return
+        super().keyPressEvent(event)

@@ -27,11 +27,7 @@ datas = [
     ('assets/icon.ico', 'assets'),
 ]
 
-# Binaries: Embed ffmpeg and ffprobe if present in bin/
 binaries = []
-if os.path.exists('bin/ffmpeg.exe') and os.path.exists('bin/ffprobe.exe'):
-    binaries.append(('bin/ffmpeg.exe', 'bin'))
-    binaries.append(('bin/ffprobe.exe', 'bin'))
 
 a = Analysis(
     ['main.py'],

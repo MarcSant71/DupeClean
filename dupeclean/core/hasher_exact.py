@@ -225,11 +225,12 @@ def find_exact_duplicates(
         # -------------------------------------------------------------------------
         flat_candidates = [f for grp in candidates_by_size for f in grp]
         if progress_callback:
-            _emit_progress(progress_callback, f"Checking cache ({total_candidates:,} candidates)...", 0, total_candidates, 2)
+            _emit_progress(progress_callback, f"Checking cache ({total_candidates:,} candidates)...", 0, total_candidates * 2, 2)
 
         def _exact_cache_cb(msg: str, curr: int, tot: int):
             if progress_callback:
-                _emit_progress(progress_callback, msg, curr, tot, 2)
+                # Reserva 0% -> 50% do Estágio 2 para consulta ao cache, evitando 100% precoce e regressão
+                _emit_progress(progress_callback, msg, curr, tot * 2, 2)
 
         cached_exact = cache.get_exact_cache(
             flat_candidates,
@@ -260,9 +261,26 @@ def find_exact_duplicates(
                     to_header_check.append(rec)
 
         cache_hits_prefix = total_candidates - len(to_header_check)
+        remaining_headers = len(to_header_check)
+        stage2_total = total_candidates + remaining_headers
 
-        if progress_callback and cache_hits_prefix > 0:
-            _emit_progress(progress_callback, f"Loading cached partial hashes ({cache_hits_prefix:,}/{total_candidates:,})...", cache_hits_prefix, total_candidates, 2)
+        if progress_callback:
+            if remaining_headers == 0:
+                _emit_progress(
+                    progress_callback,
+                    f"Loading cached partial hashes ({total_candidates:,}/{total_candidates:,})...",
+                    total_candidates,
+                    total_candidates,
+                    2,
+                )
+            elif cache_hits_prefix > 0:
+                _emit_progress(
+                    progress_callback,
+                    f"Loading cached partial hashes ({cache_hits_prefix:,}/{total_candidates:,})...",
+                    total_candidates,
+                    stage2_total,
+                    2,
+                )
 
         if to_header_check and not (stop_check and stop_check()):
             # Otimização espacial (Directory Locality): agrupa leituras por pasta pai
@@ -354,12 +372,17 @@ def find_exact_duplicates(
                             cache_writer.add((str(rec.path), rec.size, rec.mtime, h, None, rec.volume_id, rec.file_id))
 
                     now = time.perf_counter()
-                    if progress_callback and (now - last_progress_time >= 0.1 or header_processed % 256 == 0):
+                    if progress_callback and (
+                        now - last_progress_time >= 0.1
+                        or header_processed % 256 == 0
+                        or header_processed == total_candidates
+                    ):
+                        stage2_done = total_candidates + (header_processed - cache_hits_prefix)
                         _emit_progress(
                             progress_callback,
                             f"Calculating partial hashes ({header_processed:,}/{total_candidates:,})...",
-                            header_processed,
-                            total_candidates,
+                            stage2_done,
+                            stage2_total,
                             2
                         )
                         last_progress_time = now

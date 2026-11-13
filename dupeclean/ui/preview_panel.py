@@ -11,8 +11,8 @@ from typing import Optional, Dict, Any, Tuple
 from collections import OrderedDict
 
 from PIL import Image, ImageOps
-from PySide6.QtCore import Qt, Signal, Slot, QThread, QObject, QSize
-from PySide6.QtGui import QPixmap, QImage, QColor, QFont, QPainter, QIcon
+from PySide6.QtCore import Qt, Signal, Slot, QThread, QObject, QSize, QPointF, QRectF
+from PySide6.QtGui import QPixmap, QImage, QColor, QFont, QPainter, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QStackedLayout, QLabel, QPushButton,
     QFrame, QSizePolicy, QApplication
@@ -25,36 +25,157 @@ from dupeclean.ui.results_table import format_size
 
 class AspectRatioPixmapLabel(QLabel):
     """
-    QLabel que redimensiona dinamicamente a imagem mantendo o aspect ratio
-    conforme o usuário redimensiona o painel ou o splitter.
+    QLabel que renderiza dinamicamente a imagem com aspect ratio preservado,
+    suportando zoom suave (Ctrl + Scroll / Ctrl +/- / duplo clique) e pan com arraste.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(120, 120)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._pixmap: Optional[QPixmap] = None
+        self._zoom_factor: float = 1.0
+        self._pan_offset: QPointF = QPointF(0.0, 0.0)
+        self._drag_last_pos: Optional[QPointF] = None
 
     def set_pixmap(self, pixmap: Optional[QPixmap]):
         self._pixmap = pixmap
-        self._update_scaled_pixmap()
+        self._zoom_factor = 1.0
+        self._pan_offset = QPointF(0.0, 0.0)
+        self._drag_last_pos = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.update()
+
+    def _fit_size(self) -> Tuple[float, float]:
+        if not self._pixmap or self._pixmap.isNull():
+            return 0.0, 0.0
+        avail_w = max(self.width() - 8, 32)
+        avail_h = max(self.height() - 8, 32)
+        pw = float(self._pixmap.width())
+        ph = float(self._pixmap.height())
+        if pw <= 0 or ph <= 0:
+            return 0.0, 0.0
+        scale = min(avail_w / pw, avail_h / ph)
+        return pw * scale, ph * scale
+
+    def _clamp_pan(self) -> None:
+        fit_w, fit_h = self._fit_size()
+        draw_w = fit_w * self._zoom_factor
+        draw_h = fit_h * self._zoom_factor
+        max_dx = max(0.0, (draw_w - self.width()) * 0.5 + 8.0)
+        max_dy = max(0.0, (draw_h - self.height()) * 0.5 + 8.0)
+        if self._zoom_factor <= 1.0:
+            self._pan_offset = QPointF(0.0, 0.0)
+            return
+        self._pan_offset = QPointF(
+            max(-max_dx, min(max_dx, self._pan_offset.x())),
+            max(-max_dy, min(max_dy, self._pan_offset.y())),
+        )
+
+    def zoom_in(self) -> None:
+        if not self._pixmap or self._pixmap.isNull():
+            return
+        self._zoom_factor = min(6.0, self._zoom_factor * 1.25)
+        self._clamp_pan()
+        self.setCursor(Qt.CursorShape.OpenHandCursor if self._zoom_factor > 1.0 else Qt.CursorShape.ArrowCursor)
+        self.update()
+
+    def zoom_out(self) -> None:
+        if not self._pixmap or self._pixmap.isNull():
+            return
+        next_zoom = self._zoom_factor / 1.25
+        if next_zoom <= 1.02:
+            self.reset_zoom()
+            return
+        self._zoom_factor = next_zoom
+        self._clamp_pan()
+        self.update()
+
+    def reset_zoom(self) -> None:
+        if self._zoom_factor != 1.0 or self._pan_offset != QPointF(0.0, 0.0):
+            self._zoom_factor = 1.0
+            self._pan_offset = QPointF(0.0, 0.0)
+            self._drag_last_pos = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.update()
+
+    def wheelEvent(self, event):
+        if self._pixmap and not self._pixmap.isNull() and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.zoom_in()
+            elif delta < 0:
+                self.zoom_out()
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def mousePressEvent(self, event):
+        if self._zoom_factor > 1.0 and event.button() == Qt.MouseButton.LeftButton:
+            self._drag_last_pos = event.position() if hasattr(event, "position") else QPointF(event.pos())
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_last_pos is not None and self._zoom_factor > 1.0:
+            pos = event.position() if hasattr(event, "position") else QPointF(event.pos())
+            delta = pos - self._drag_last_pos
+            self._drag_last_pos = pos
+            self._pan_offset += delta
+            self._clamp_pan()
+            self.update()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_last_pos is not None:
+            self._drag_last_pos = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor if self._zoom_factor > 1.0 else Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if self._pixmap and not self._pixmap.isNull() and event.button() == Qt.MouseButton.LeftButton:
+            if self._zoom_factor > 1.0:
+                self.reset_zoom()
+            else:
+                self._zoom_factor = 2.5
+                self._clamp_pan()
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+                self.update()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._update_scaled_pixmap()
+        self._clamp_pan()
+        self.update()
 
-    def _update_scaled_pixmap(self):
-        if self._pixmap and not self._pixmap.isNull():
-            w = max(self.width() - 8, 32)
-            h = max(self.height() - 8, 32)
-            scaled = self._pixmap.scaled(
-                w, h,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            super().setPixmap(scaled)
-        else:
-            super().setPixmap(QPixmap())
+    def paintEvent(self, event):
+        if not self._pixmap or self._pixmap.isNull():
+            super().paintEvent(event)
+            return
+        fit_w, fit_h = self._fit_size()
+        if fit_w <= 0 or fit_h <= 0:
+            return
+        draw_w = fit_w * self._zoom_factor
+        draw_h = fit_h * self._zoom_factor
+        cx = self.width() * 0.5 + self._pan_offset.x()
+        cy = self.height() * 0.5 + self._pan_offset.y()
+        target_rect = QRectF(cx - draw_w * 0.5, cy - draw_h * 0.5, draw_w, draw_h)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        try:
+            painter.drawPixmap(target_rect, self._pixmap, QRectF(self._pixmap.rect()))
+        finally:
+            painter.end()
 
 
 class PreviewWorker(QThread):
@@ -315,6 +436,20 @@ class PreviewPanel(QFrame):
 
         # Inicializa em estado limpo
         self.clear()
+
+        # Atalhos de zoom para o painel de preview quando focado
+        for seq in ("Ctrl++", "Ctrl+="):
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(self.lbl_image.zoom_in)
+
+        sc_out = QShortcut(QKeySequence("Ctrl+-"), self)
+        sc_out.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc_out.activated.connect(self.lbl_image.zoom_out)
+
+        sc_reset = QShortcut(QKeySequence("Ctrl+0"), self)
+        sc_reset.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc_reset.activated.connect(self.lbl_image.reset_zoom)
 
     def _on_close_clicked(self):
         self.setVisible(False)

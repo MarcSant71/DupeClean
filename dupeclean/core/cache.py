@@ -9,6 +9,8 @@ import os
 import shutil
 import sqlite3
 import sys
+import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -21,6 +23,58 @@ import xxhash
 from dupeclean.core.models import FileRecord, ScanMode, ScanPath
 from dupeclean.core.db_schema import SchemaInitResult, ensure_database_schema
 from dupeclean.core.scanner import get_volume_capabilities
+
+
+class _CacheProgressTracker:
+    """Rastreia progresso monotônico e throttled através das múltiplas camadas de cache (L1/L2/L3)."""
+
+    def __init__(
+        self,
+        callback: Optional[Callable[[str, int, int], None]],
+        total_recs: int,
+        base_label: str,
+        min_records: int = 2000,
+    ):
+        self._callback = callback
+        self.total = total_recs
+        self.base_label = base_label
+        self.enabled = bool(callback) and total_recs > min_records
+        self._last_curr = 0
+        self._last_emit = 0.0
+        self._lock = threading.Lock()
+
+    def emit_range(
+        self,
+        sub_label: str,
+        start_frac: float,
+        end_frac: float,
+        done: int,
+        sub_total: int,
+        force: bool = False,
+    ) -> None:
+        """Emite progresso estritamente monotônico dentro da fração [start_frac, end_frac] (limitado < total)."""
+        if not self.enabled or not self._callback or sub_total <= 0:
+            return
+        with self._lock:
+            now = time.perf_counter()
+            frac = min(1.0, max(0.0, done / sub_total))
+            target = int((start_frac + frac * (end_frac - start_frac)) * self.total)
+            target = max(1, min(self.total - 1, target))
+            curr = max(self._last_curr, target)
+            if not force and (now - self._last_emit < 0.08):
+                return
+            self._last_curr = curr
+            self._last_emit = now
+            self._callback(sub_label, curr, self.total)
+
+    def finish(self) -> None:
+        """Emite 100% do estágio de cache somente após conclusão de todas as camadas."""
+        if not self.enabled or not self._callback:
+            return
+        with self._lock:
+            self._last_curr = self.total
+            self._last_emit = time.perf_counter()
+            self._callback(f"{self.base_label} ({self.total:,}/{self.total:,})...", self.total, self.total)
 
 
 def _stat_record_file_id(rec: FileRecord) -> None:
@@ -239,11 +293,19 @@ class CacheManager:
     # Helpers Compartilhados (Arquitetura Tríbrida L1 -> L2 Lazy -> L3 Parallel)
     # -------------------------------------------------------------------------
 
+    def _table_has_rows(self, conn: sqlite3.Connection, table: str, condition: str = "1=1") -> bool:
+        """Verifica em O(1) via índice se há ao menos um registro elegível na tabela."""
+        cur = conn.execute(f"SELECT 1 FROM {table} WHERE {condition} LIMIT 1;")
+        return cur.fetchone() is not None
+
     def _populate_file_ids_parallel(
         self,
         records: List[FileRecord],
         stop_check: Optional[Callable[[], bool]] = None,
-        assume_supported: bool = False
+        assume_supported: bool = False,
+        tracker: Optional[_CacheProgressTracker] = None,
+        progress_range: Tuple[float, float] = (0.65, 0.80),
+        progress_label: str = "Checking cache (file IDs)...",
     ) -> None:
         """Preenche (volume_id, file_id) via os.stat() em lotes paralelos apenas onde necessário."""
         if assume_supported:
@@ -264,21 +326,36 @@ class CacheManager:
 
         chunk_size = 2000
         chunks = [to_stat[i:i + chunk_size] for i in range(0, len(to_stat), chunk_size)]
+        total_stat = len(to_stat)
 
-        def _stat_chunk(batch: List[FileRecord]) -> None:
+        def _stat_chunk(batch: List[FileRecord]) -> int:
             for rec in batch:
                 if stop_check and stop_check():
-                    return
+                    return 0
                 _stat_record_file_id(rec)
+            return len(batch)
 
         workers = min(16, max(4, os.cpu_count() or 4))
+        done = 0
+        s_frac, e_frac = progress_range
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            list(pool.map(_stat_chunk, chunks))
+            for processed in pool.map(_stat_chunk, chunks):
+                if stop_check and stop_check():
+                    return
+                done += processed
+                if tracker:
+                    tracker.emit_range(
+                        f"{progress_label} ({done:,}/{total_stat:,})...",
+                        s_frac, e_frac, done, total_stat,
+                    )
 
     def _populate_prefix_hashes_parallel(
         self,
         records: List[FileRecord],
-        stop_check: Optional[Callable[[], bool]] = None
+        stop_check: Optional[Callable[[], bool]] = None,
+        tracker: Optional[_CacheProgressTracker] = None,
+        progress_range: Tuple[float, float] = (0.91, 0.97),
+        progress_label: str = "Checking cache signatures",
     ) -> None:
         """Calcula prefix_hash (Head 4KB + Tail 4KB) em paralelo para candidatos do L3."""
         to_hash = [r for r in records if r.prefix_hash is None]
@@ -297,22 +374,51 @@ class CacheManager:
                 _hash_one(r)
             return
 
+        chunk_size = 512
+        chunks = [to_hash[i:i + chunk_size] for i in range(0, len(to_hash), chunk_size)]
+        total_hash = len(to_hash)
+
+        def _hash_chunk(batch: List[FileRecord]) -> int:
+            for rec in batch:
+                if stop_check and stop_check():
+                    return 0
+                _hash_one(rec)
+            return len(batch)
+
         workers = min(16, max(4, os.cpu_count() or 4))
+        done = 0
+        s_frac, e_frac = progress_range
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            list(pool.map(_hash_one, to_hash))
+            for processed in pool.map(_hash_chunk, chunks):
+                if stop_check and stop_check():
+                    return
+                done += processed
+                if tracker:
+                    tracker.emit_range(
+                        f"{progress_label} ({done:,}/{total_hash:,})...",
+                        s_frac, e_frac, done, total_hash,
+                    )
 
     def _prefilter_known_sizes(
         self,
         conn: sqlite3.Connection,
         table: str,
         records: List[FileRecord],
-        condition: str
+        condition: str,
+        tracker: Optional[_CacheProgressTracker] = None,
+        progress_range: Tuple[float, float] = (0.55, 0.65),
+        progress_label: str = "Checking cache",
+        stop_check: Optional[Callable[[], bool]] = None,
     ) -> Set[int]:
         """Consulta tamanhos existentes em SQLite usando o índice idx_*_size antes de tocar no disco."""
         candidate_sizes = list({r.size for r in records})
         known_sizes: Set[int] = set()
         chunk_size = 900
-        for i in range(0, len(candidate_sizes), chunk_size):
+        total_sizes = len(candidate_sizes)
+        s_frac, e_frac = progress_range
+        for i in range(0, total_sizes, chunk_size):
+            if stop_check and stop_check():
+                return known_sizes
             chunk_s = candidate_sizes[i:i + chunk_size]
             placeholders = ",".join("?" for _ in chunk_s)
             cur = conn.execute(
@@ -320,6 +426,12 @@ class CacheManager:
                 chunk_s
             )
             known_sizes.update(row[0] for row in cur.fetchall())
+            if tracker and total_sizes > 1800:
+                done = min(i + chunk_size, total_sizes)
+                tracker.emit_range(
+                    f"{progress_label} ({len(records):,} pending)...",
+                    s_frac, e_frac, done, total_sizes,
+                )
         return known_sizes
 
     def _backfill_l1_file_ids(
@@ -327,12 +439,19 @@ class CacheManager:
         conn: sqlite3.Connection,
         table: str,
         backfill_recs: List[FileRecord],
-        stop_check: Optional[Callable[[], bool]] = None
+        stop_check: Optional[Callable[[], bool]] = None,
+        tracker: Optional[_CacheProgressTracker] = None,
     ) -> None:
         """Atualiza em lote (volume_id, file_id) para registros legados acertados no L1."""
         if not backfill_recs or (stop_check and stop_check()):
             return
-        self._populate_file_ids_parallel(backfill_recs, stop_check=stop_check)
+        self._populate_file_ids_parallel(
+            backfill_recs,
+            stop_check=stop_check,
+            tracker=tracker,
+            progress_range=(0.50, 0.55),
+            progress_label="Indexing cache file IDs",
+        )
         updates = [
             (r.volume_id, r.file_id, str(r.path))
             for r in backfill_recs
@@ -349,22 +468,38 @@ class CacheManager:
         conn: sqlite3.Connection,
         table: str,
         uncached: List[FileRecord],
-        stop_check: Optional[Callable[[], bool]] = None
+        stop_check: Optional[Callable[[], bool]] = None,
+        tracker: Optional[_CacheProgressTracker] = None,
     ) -> List[FileRecord]:
         """Seleciona misses do L1 elegíveis a NTFS/ReFS com tamanho presente no banco e coleta File ID."""
         if not uncached or (stop_check and stop_check()):
             return []
-        eligible = [
+        if not self._table_has_rows(conn, table, "file_id != 0"):
+            return []
+        # Filtra primeiro por tamanhos conhecidos em SQLite antes de consultar get_volume_capabilities
+        known_sizes = self._prefilter_known_sizes(
+            conn, table, uncached, "file_id != 0",
+            tracker=tracker,
+            progress_range=(0.55, 0.65),
+            progress_label=tracker.base_label if tracker else "Checking cache",
+            stop_check=stop_check,
+        )
+        if not known_sizes or (stop_check and stop_check()):
+            return []
+        candidates = [
             r for r in uncached
-            if (r.volume_id > 0 and r.file_id > 0) or get_volume_capabilities(r.path)[1]
+            if r.size in known_sizes and ((r.volume_id > 0 and r.file_id > 0) or get_volume_capabilities(r.path)[1])
         ]
-        if not eligible:
+        if not candidates or (stop_check and stop_check()):
             return []
-        known_sizes = self._prefilter_known_sizes(conn, table, eligible, "file_id != 0")
-        if not known_sizes:
-            return []
-        candidates = [r for r in eligible if r.size in known_sizes]
-        self._populate_file_ids_parallel(candidates, stop_check=stop_check, assume_supported=True)
+        self._populate_file_ids_parallel(
+            candidates,
+            stop_check=stop_check,
+            assume_supported=True,
+            tracker=tracker,
+            progress_range=(0.65, 0.80),
+            progress_label="Checking cache file IDs",
+        )
         return [r for r in candidates if r.volume_id > 0 and r.file_id > 0]
 
     def _cleanup_dead_paths(
@@ -406,6 +541,7 @@ class CacheManager:
         chunk_size = 900
         total_recs = len(records)
         backfill_recs: List[FileRecord] = []
+        tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking cache")
 
         with self._get_connection() as conn:
             # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
@@ -428,24 +564,27 @@ class CacheManager:
                         if c_vol_id == 0 or c_f_id == 0:
                             backfill_recs.append(rec)
 
-                if progress_callback and total_recs > 2000 and (i % 9000 == 0 or i + chunk_size >= total_recs):
-                    done = min(i + chunk_size, total_recs)
-                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", done, total_recs)
+                done = min(i + chunk_size, total_recs)
+                if done == total_recs or i % 2700 == 0:
+                    tracker.emit_range(
+                        f"Checking cache ({done:,}/{total_recs:,})...",
+                        0.0, 0.50, done, total_recs,
+                        force=(done == total_recs),
+                    )
 
             if backfill_recs:
-                self._backfill_l1_file_ids(conn, "cache_exact", backfill_recs, stop_check=stop_check)
+                self._backfill_l1_file_ids(conn, "cache_exact", backfill_recs, stop_check=stop_check, tracker=tracker)
 
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos renomeados/movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
-            if progress_callback and len(uncached) > 2000:
-                progress_callback(f"Checking cache ({len(uncached):,})...", total_recs, total_recs)
-            l2_candidates = self._find_l2_candidates(conn, "cache_exact", uncached, stop_check=stop_check)
+            l2_candidates = self._find_l2_candidates(conn, "cache_exact", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
                 stale_candidates: Set[str] = set()
                 active_new_paths: Set[str] = set()
+                total_l2 = len(l2_candidates)
 
-                for i in range(0, len(l2_candidates), chunk_size):
+                for i in range(0, total_l2, chunk_size):
                     if stop_check and stop_check():
                         return results
                     chunk = l2_candidates[i:i + chunk_size]
@@ -470,6 +609,13 @@ class CacheManager:
                                 if c_path != new_path_str:
                                     stale_candidates.add(c_path)
 
+                    done_l2 = min(i + chunk_size, total_l2)
+                    tracker.emit_range(
+                        f"Checking cache moved files ({done_l2:,}/{total_l2:,})...",
+                        0.80, 0.96, done_l2, total_l2,
+                        force=(done_l2 == total_l2),
+                    )
+
                 if upserts:
                     conn.executemany("""
                         INSERT INTO cache_exact (path, size, mtime, prefix_hash, full_hash, volume_id, file_id)
@@ -481,6 +627,7 @@ class CacheManager:
                             volume_id=excluded.volume_id, file_id=excluded.file_id;
                     """, upserts)
                 self._cleanup_dead_paths(conn, "cache_exact", stale_candidates, active_new_paths)
+        tracker.finish()
         return results
 
     def save_exact_batch(self, entries: List[Tuple]):
@@ -534,6 +681,7 @@ class CacheManager:
         chunk_size = 900
         total_recs = len(records)
         backfill_recs: List[FileRecord] = []
+        tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking cache")
 
         with self._get_connection() as conn:
             # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
@@ -558,24 +706,27 @@ class CacheManager:
                             if c_vol_id == 0 or c_f_id == 0:
                                 backfill_recs.append(rec)
 
-                if progress_callback and total_recs > 2000 and (i % 2700 == 0 or i + chunk_size >= total_recs):
-                    done = min(i + chunk_size, total_recs)
-                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", done, total_recs)
+                done = min(i + chunk_size, total_recs)
+                if done == total_recs or i % 2700 == 0:
+                    tracker.emit_range(
+                        f"Checking cache ({done:,}/{total_recs:,})...",
+                        0.0, 0.50, done, total_recs,
+                        force=(done == total_recs),
+                    )
 
             if backfill_recs:
-                self._backfill_l1_file_ids(conn, "cache_images", backfill_recs, stop_check=stop_check)
+                self._backfill_l1_file_ids(conn, "cache_images", backfill_recs, stop_check=stop_check, tracker=tracker)
 
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
-            if progress_callback and len(uncached) > 2000:
-                progress_callback(f"Checking cache ({len(uncached):,})...", total_recs, total_recs)
-            l2_candidates = self._find_l2_candidates(conn, "cache_images", uncached, stop_check=stop_check)
+            l2_candidates = self._find_l2_candidates(conn, "cache_images", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
                 stale_candidates: Set[str] = set()
                 active_new_paths: Set[str] = set()
+                total_l2 = len(l2_candidates)
 
-                for i in range(0, len(l2_candidates), chunk_size):
+                for i in range(0, total_l2, chunk_size):
                     if stop_check and stop_check():
                         return results
                     chunk = l2_candidates[i:i + chunk_size]
@@ -603,6 +754,13 @@ class CacheManager:
                                 if c_path != new_path_str:
                                     stale_candidates.add(c_path)
 
+                    done_l2 = min(i + chunk_size, total_l2)
+                    tracker.emit_range(
+                        f"Checking cache moved files ({done_l2:,}/{total_l2:,})...",
+                        0.80, 0.88, done_l2, total_l2,
+                        force=(done_l2 == total_l2),
+                    )
+
                 if upserts:
                     conn.executemany("""
                         INSERT INTO cache_images (path, size, mtime, embedding, volume_id, file_id, prefix_hash)
@@ -616,17 +774,28 @@ class CacheManager:
 
             # 3. Tier 3 (L3 - Content Sieve Paralelo em Lote): Para exFAT, FAT32 ou cópias entre volumes
             uncached_l3 = [r for r in records if str(r.path) not in results]
-            if uncached_l3 and not (stop_check and stop_check()):
-                known_sizes = self._prefilter_known_sizes(conn, "cache_images", uncached_l3, "prefix_hash IS NOT NULL")
-                if known_sizes:
+            if uncached_l3 and not (stop_check and stop_check()) and self._table_has_rows(conn, "cache_images", "prefix_hash IS NOT NULL"):
+                known_sizes = self._prefilter_known_sizes(
+                    conn, "cache_images", uncached_l3, "prefix_hash IS NOT NULL",
+                    tracker=tracker,
+                    progress_range=(0.88, 0.91),
+                    progress_label="Checking cache signatures",
+                    stop_check=stop_check,
+                )
+                if known_sizes and not (stop_check and stop_check()):
                     sieve_candidates = [r for r in uncached_l3 if r.size in known_sizes]
-                    if progress_callback and len(sieve_candidates) > 500:
-                        progress_callback(f"Checking cache signatures ({len(sieve_candidates):,})...", total_recs, total_recs)
-                    self._populate_prefix_hashes_parallel(sieve_candidates, stop_check=stop_check)
+                    self._populate_prefix_hashes_parallel(
+                        sieve_candidates,
+                        stop_check=stop_check,
+                        tracker=tracker,
+                        progress_range=(0.91, 0.97),
+                        progress_label="Checking cache signatures",
+                    )
                     hashed_candidates = [r for r in sieve_candidates if r.prefix_hash]
                     l3_upserts = []
+                    total_l3 = len(hashed_candidates)
 
-                    for i in range(0, len(hashed_candidates), chunk_size):
+                    for i in range(0, total_l3, chunk_size):
                         if stop_check and stop_check():
                             return results
                         chunk = hashed_candidates[i:i + chunk_size]
@@ -652,6 +821,13 @@ class CacheManager:
                                 results[new_path_str] = emb_blob
                                 l3_upserts.append((new_path_str, rec.size, rec.mtime, emb_blob, rec.volume_id, rec.file_id, rec.prefix_hash))
 
+                        done_l3 = min(i + chunk_size, total_l3)
+                        tracker.emit_range(
+                            f"Checking cache signatures ({done_l3:,}/{total_l3:,})...",
+                            0.97, 0.99, done_l3, total_l3,
+                            force=(done_l3 == total_l3),
+                        )
+
                     if l3_upserts:
                         conn.executemany("""
                             INSERT INTO cache_images (path, size, mtime, embedding, volume_id, file_id, prefix_hash)
@@ -662,6 +838,7 @@ class CacheManager:
                                 file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_images.file_id END,
                                 prefix_hash=excluded.prefix_hash;
                         """, l3_upserts)
+        tracker.finish()
         return results
 
     def save_image_batch(self, entries: List[Tuple]):
@@ -715,6 +892,7 @@ class CacheManager:
         chunk_size = 900
         total_recs = len(records)
         backfill_recs: List[FileRecord] = []
+        tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking video cache")
 
         with self._get_connection() as conn:
             # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
@@ -742,22 +920,27 @@ class CacheManager:
                             if c_vol_id == 0 or c_f_id == 0:
                                 backfill_recs.append(rec)
 
-                if progress_callback and total_recs > 2000 and (i % 2700 == 0 or i + chunk_size >= total_recs):
-                    done = min(i + chunk_size, total_recs)
-                    progress_callback(f"Checking video cache ({done:,}/{total_recs:,})...", done, total_recs)
+                done = min(i + chunk_size, total_recs)
+                if done == total_recs or i % 2700 == 0:
+                    tracker.emit_range(
+                        f"Checking video cache ({done:,}/{total_recs:,})...",
+                        0.0, 0.50, done, total_recs,
+                        force=(done == total_recs),
+                    )
 
             if backfill_recs:
-                self._backfill_l1_file_ids(conn, "cache_videos", backfill_recs, stop_check=stop_check)
+                self._backfill_l1_file_ids(conn, "cache_videos", backfill_recs, stop_check=stop_check, tracker=tracker)
 
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
-            l2_candidates = self._find_l2_candidates(conn, "cache_videos", uncached, stop_check=stop_check)
+            l2_candidates = self._find_l2_candidates(conn, "cache_videos", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
                 stale_candidates: Set[str] = set()
                 active_new_paths: Set[str] = set()
+                total_l2 = len(l2_candidates)
 
-                for i in range(0, len(l2_candidates), chunk_size):
+                for i in range(0, total_l2, chunk_size):
                     if stop_check and stop_check():
                         return results
                     chunk = l2_candidates[i:i + chunk_size]
@@ -785,6 +968,13 @@ class CacheManager:
                                 if c_path != new_path_str:
                                     stale_candidates.add(c_path)
 
+                    done_l2 = min(i + chunk_size, total_l2)
+                    tracker.emit_range(
+                        f"Checking video cache moved files ({done_l2:,}/{total_l2:,})...",
+                        0.80, 0.88, done_l2, total_l2,
+                        force=(done_l2 == total_l2),
+                    )
+
                 if upserts:
                     conn.executemany("""
                         INSERT INTO cache_videos (path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash)
@@ -798,15 +988,28 @@ class CacheManager:
 
             # 3. Tier 3 (L3 - Content Sieve Paralelo em Lote): Para exFAT, FAT32 ou cópias entre volumes
             uncached_l3 = [r for r in records if str(r.path) not in results]
-            if uncached_l3 and not (stop_check and stop_check()):
-                known_sizes = self._prefilter_known_sizes(conn, "cache_videos", uncached_l3, "prefix_hash IS NOT NULL")
-                if known_sizes:
+            if uncached_l3 and not (stop_check and stop_check()) and self._table_has_rows(conn, "cache_videos", "prefix_hash IS NOT NULL"):
+                known_sizes = self._prefilter_known_sizes(
+                    conn, "cache_videos", uncached_l3, "prefix_hash IS NOT NULL",
+                    tracker=tracker,
+                    progress_range=(0.88, 0.91),
+                    progress_label="Checking video cache signatures",
+                    stop_check=stop_check,
+                )
+                if known_sizes and not (stop_check and stop_check()):
                     sieve_candidates = [r for r in uncached_l3 if r.size in known_sizes]
-                    self._populate_prefix_hashes_parallel(sieve_candidates, stop_check=stop_check)
+                    self._populate_prefix_hashes_parallel(
+                        sieve_candidates,
+                        stop_check=stop_check,
+                        tracker=tracker,
+                        progress_range=(0.91, 0.97),
+                        progress_label="Checking video cache signatures",
+                    )
                     hashed_candidates = [r for r in sieve_candidates if r.prefix_hash]
                     l3_upserts = []
+                    total_l3 = len(hashed_candidates)
 
-                    for i in range(0, len(hashed_candidates), chunk_size):
+                    for i in range(0, total_l3, chunk_size):
                         if stop_check and stop_check():
                             return results
                         chunk = hashed_candidates[i:i + chunk_size]
@@ -844,6 +1047,13 @@ class CacheManager:
                                 results[new_path_str] = (dur, emb_blob)
                                 l3_upserts.append((new_path_str, rec.size, rec.mtime, dur, emb_blob, rec.volume_id, rec.file_id, rec.prefix_hash))
 
+                        done_l3 = min(i + chunk_size, total_l3)
+                        tracker.emit_range(
+                            f"Checking video cache signatures ({done_l3:,}/{total_l3:,})...",
+                            0.97, 0.99, done_l3, total_l3,
+                            force=(done_l3 == total_l3),
+                        )
+
                     if l3_upserts:
                         conn.executemany("""
                             INSERT INTO cache_videos (path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash)
@@ -855,6 +1065,7 @@ class CacheManager:
                                 file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_videos.file_id END,
                                 prefix_hash=excluded.prefix_hash;
                         """, l3_upserts)
+        tracker.finish()
         return results
 
     def save_video_batch(self, entries: List[Tuple]):

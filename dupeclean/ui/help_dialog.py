@@ -6,7 +6,7 @@ hardware allocation details, and keyboard shortcuts without developer/installati
 
 from typing import Dict, Any, Optional
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtGui import QDesktopServices, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -24,13 +24,146 @@ import dupeclean
 
 
 class ZoomableBrowser(QTextBrowser):
-    """Visualizador rich-text com suporte a zoom via Ctrl + Scroll e Ctrl +/-."""
+    """Visualizador rich-text com suporte a zoom proporcional via Ctrl + Scroll e Ctrl +/-."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._zoom_level = 0
+        self._body_html = ""
         self.setOpenExternalLinks(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
+
+    def set_styled_html(self, body_html: str) -> None:
+        """Define o HTML base e aplica a escala de zoom atual a todos os estilos CSS."""
+        self._body_html = body_html
+        self._apply_zoom()
+
+    def _apply_zoom(self) -> None:
+        """Re-renderiza o HTML escalando proporcionalmente fontes, tabelas e espaçamentos."""
+        scale = 1.0 + 0.1 * self._zoom_level
+        sb = self.verticalScrollBar()
+        prev_max = sb.maximum()
+        scroll_ratio = (sb.value() / prev_max) if prev_max > 0 else 0.0
+
+        body_px = round(13.5 * scale, 1)
+        h2_px = round(17.0 * scale, 1)
+        h3_px = round(14.5 * scale, 1)
+        code_px = round(12.5 * scale, 1)
+        badge_px = round(11.0 * scale, 1)
+        table_px = round(12.5 * scale, 1)
+
+        base_font = self.font()
+        base_font.setPointSizeF(round(9.0 * scale, 1))
+        self.setFont(base_font)
+
+        self.setHtml(f"""
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+                    font-size: {body_px}px;
+                    line-height: 1.6;
+                    color: #d4d4d8;
+                    background-color: transparent;
+                    margin: 14px 22px;
+                }}
+                h2 {{
+                    color: #38bdf8;
+                    font-size: {h2_px}px;
+                    margin-top: 0px;
+                    margin-bottom: 12px;
+                    border-bottom: 1px solid #2e2e33;
+                    padding-bottom: 6px;
+                }}
+                h3 {{
+                    color: #38bdf8;
+                    font-size: {h3_px}px;
+                    margin-top: 18px;
+                    margin-bottom: 8px;
+                }}
+                p {{
+                    margin-top: 0px;
+                    margin-bottom: 12px;
+                }}
+                ul, ol {{
+                    margin-top: 4px;
+                    margin-bottom: 14px;
+                    padding-left: 22px;
+                }}
+                li {{
+                    margin-bottom: 6px;
+                }}
+                code {{
+                    font-family: 'Consolas', 'Cascadia Code', monospace;
+                    background-color: #202024;
+                    color: #38bdf8;
+                    border: 1px solid #2e2e33;
+                    border-radius: 3px;
+                    padding: 2px 5px;
+                    font-size: {code_px}px;
+                }}
+                .badge {{
+                    display: inline-block;
+                    padding: 2px 7px;
+                    border-radius: 4px;
+                    font-size: {badge_px}px;
+                    font-weight: bold;
+                }}
+                .badge-cyan {{
+                    background-color: #0c4a6e;
+                    color: #38bdf8;
+                    border: 1px solid #0284c7;
+                }}
+                .badge-green {{
+                    background-color: #14532d;
+                    color: #4ade80;
+                    border: 1px solid #16a34a;
+                }}
+                .card {{
+                    background-color: transparent;
+                    border: none;
+                    padding: 0px;
+                    margin-bottom: 18px;
+                }}
+                .callout {{
+                    background-color: transparent;
+                    border-left: 3px solid #38bdf8;
+                    padding: 4px 14px;
+                    margin: 14px 0px;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 10px;
+                    margin-bottom: 14px;
+                    font-size: {table_px}px;
+                }}
+                th {{
+                    background-color: #202024;
+                    color: #38bdf8;
+                    text-align: left;
+                    padding: 8px 12px;
+                    border: 1px solid #2e2e33;
+                }}
+                td {{
+                    padding: 7px 12px;
+                    border: 1px solid #27272a;
+                    color: #d4d4d8;
+                }}
+                tr:nth-child(even) {{
+                    background-color: #1b1b1e;
+                }}
+            </style>
+        </head>
+        <body>
+            {self._body_html}
+        </body>
+        </html>
+        """)
+
+        if scroll_ratio > 0 and sb.maximum() > 0:
+            sb.setValue(int(scroll_ratio * sb.maximum()))
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -62,19 +195,29 @@ class ZoomableBrowser(QTextBrowser):
     def zoom_in(self):
         if self._zoom_level < 8:
             self._zoom_level += 1
-            self.zoomIn(1)
+            if self._body_html:
+                self._apply_zoom()
+            else:
+                self.zoomIn(1)
 
     def zoom_out(self):
         if self._zoom_level > -4:
             self._zoom_level -= 1
-            self.zoomOut(1)
+            if self._body_html:
+                self._apply_zoom()
+            else:
+                self.zoomOut(1)
 
     def reset_zoom(self):
-        if self._zoom_level > 0:
-            self.zoomOut(self._zoom_level)
-        elif self._zoom_level < 0:
-            self.zoomIn(-self._zoom_level)
-        self._zoom_level = 0
+        if self._zoom_level != 0:
+            prev = self._zoom_level
+            self._zoom_level = 0
+            if self._body_html:
+                self._apply_zoom()
+            elif prev > 0:
+                self.zoomOut(prev)
+            else:
+                self.zoomIn(-prev)
 
 
 class HelpDialog(QDialog):
@@ -269,6 +412,32 @@ class HelpDialog(QDialog):
 
         layout.addLayout(footer)
 
+        # Atalhos globais do diálogo para funcionar independente do widget com foco (abas, botões ou texto)
+        for seq in ("Ctrl++", "Ctrl+="):
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(lambda: self._apply_shortcut_zoom(1))
+
+        sc_out = QShortcut(QKeySequence("Ctrl+-"), self)
+        sc_out.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc_out.activated.connect(lambda: self._apply_shortcut_zoom(-1))
+
+        sc_reset = QShortcut(QKeySequence("Ctrl+0"), self)
+        sc_reset.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc_reset.activated.connect(lambda: self._apply_shortcut_zoom(0))
+
+    def _apply_shortcut_zoom(self, direction: int) -> None:
+        """Aplica zoom (+1/-1/0) à aba ativa do leitor independente do foco atual."""
+        browser = self.tabs.currentWidget()
+        if not isinstance(browser, ZoomableBrowser):
+            return
+        if direction > 0:
+            browser.zoom_in()
+        elif direction < 0:
+            browser.zoom_out()
+        else:
+            browser.reset_zoom()
+
     def open_tab(self, index: int):
         """Abre o diálogo na aba especificada."""
         if 0 <= index < self.tabs.count():
@@ -284,155 +453,51 @@ class HelpDialog(QDialog):
         browser.setFrameShape(QFrame.Shape.NoFrame)
         browser.viewport().setAutoFillBackground(False)
         browser.setStyleSheet("QTextBrowser { border: none; background-color: transparent; }")
-
-        browser.setHtml(f"""
-        <html>
-        <head>
-            <style>
-                body {{
-                    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-                    font-size: 13.5px;
-                    line-height: 1.6;
-                    color: #d4d4d8;
-                    background-color: transparent;
-                    margin: 14px 22px;
-                }}
-                h2 {{
-                    color: #38bdf8;
-                    font-size: 17px;
-                    margin-top: 0px;
-                    margin-bottom: 12px;
-                    border-bottom: 1px solid #2e2e33;
-                    padding-bottom: 6px;
-                }}
-                h3 {{
-                    color: #38bdf8;
-                    font-size: 14.5px;
-                    margin-top: 18px;
-                    margin-bottom: 8px;
-                }}
-                p {{
-                    margin-top: 0px;
-                    margin-bottom: 12px;
-                }}
-                ul, ol {{
-                    margin-top: 4px;
-                    margin-bottom: 14px;
-                    padding-left: 22px;
-                }}
-                li {{
-                    margin-bottom: 6px;
-                }}
-                code {{
-                    font-family: 'Consolas', 'Cascadia Code', monospace;
-                    background-color: #202024;
-                    color: #38bdf8;
-                    border: 1px solid #2e2e33;
-                    border-radius: 3px;
-                    padding: 2px 5px;
-                    font-size: 12.5px;
-                }}
-                .badge {{
-                    display: inline-block;
-                    padding: 2px 7px;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    font-weight: bold;
-                }}
-                .badge-cyan {{
-                    background-color: #0c4a6e;
-                    color: #38bdf8;
-                    border: 1px solid #0284c7;
-                }}
-                .badge-green {{
-                    background-color: #14532d;
-                    color: #4ade80;
-                    border: 1px solid #16a34a;
-                }}
-                .card {{
-                    background-color: transparent;
-                    border: none;
-                    padding: 0px;
-                    margin-bottom: 18px;
-                }}
-                .callout {{
-                    background-color: transparent;
-                    border-left: 3px solid #38bdf8;
-                    padding: 4px 14px;
-                    margin: 14px 0px;
-                }}
-                table {{
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-top: 10px;
-                    margin-bottom: 14px;
-                    font-size: 12.5px;
-                }}
-                th {{
-                    background-color: #202024;
-                    color: #38bdf8;
-                    text-align: left;
-                    padding: 8px 12px;
-                    border: 1px solid #2e2e33;
-                }}
-                td {{
-                    padding: 7px 12px;
-                    border: 1px solid #27272a;
-                    color: #d4d4d8;
-                }}
-                tr:nth-child(even) {{
-                    background-color: #1b1b1e;
-                }}
-            </style>
-        </head>
-        <body>
-            {html}
-        </body>
-        </html>
-        """)
+        browser.set_styled_html(html)
         return browser
 
     def _create_overview_tab(self) -> QWidget:
         html = """
-        <h2>⚡ Why DupeClean? (GPU-Accelerated vs. Legacy Tools)</h2>
+        <h2>⚡ Why DupeClean? (Superior Perceptual Quality + GPU/CPU Flexibility)</h2>
         <p>
             Most traditional file deduplicators (such as <i>Czkawka</i>, <i>dupeGuru</i>, or <i>Duplicate Cleaner</i>)
-            were architected for a previous computing era: they perform all cryptographic hashing, video decoding,
-            and perceptual image math on the <b>CPU</b>.
+            compress images into coarse binary perceptual hashes compared via bit-level Hamming distance &mdash; trading away 
+            visual nuance and missing resized, cropped, or re-compressed duplicates.
         </p>
         <p>
-            When scanning massive storage drives with <b>100,000+ RAW photos, 4K videos, or millions of files</b>,
-            traditional tools peg CPU usage to 100%, trigger thermal throttling, and take hours or days to complete &mdash;
-            while multi-thousand-dollar GPU Tensor Cores sit completely idle.
+            <b>DupeClean compares continuous 2D DCT embeddings (768-D for images / 3840-D for videos) via dense 
+            all-against-all (<i>N &times; N</i>) matrix multiplication, delivering superior visual matching quality.</b> 
+            It runs out of the box on standard CPUs (universal FP32 fallback) so every machine can use all scan modes, 
+            while <b>an NVIDIA RTX GPU is recommended for superior performance</b> on massive photo and video collections.
         </p>
         
         <div class="card">
-            <h3 style="margin-top:0px; color:#38bdf8;">Engineering Paradigm Shift</h3>
+            <h3 style="margin-top:0px; color:#38bdf8;">Engineering Comparison</h3>
             <table>
                 <tr>
                     <th>Feature</th>
-                    <th>🐢 Legacy Tools (CPU-Bound)</th>
-                    <th>⚡ DupeClean (GPU-Accelerated)</th>
+                    <th>🐢 Legacy Tools (Binary pHash)</th>
+                    <th>⚡ DupeClean (Dense Embedding Engine)</th>
                 </tr>
                 <tr>
                     <td><b>Compute Engine</b></td>
-                    <td>CPU software loops (heavy thermal & fan load)</td>
-                    <td><b>GPU Tensor Cores & CUDA</b> (Batches executed in VRAM)</td>
+                    <td>CPU software loops only</td>
+                    <td><b>NVIDIA RTX Tensor Cores (CUDA FP16)</b> + <b>Universal CPU Fallback (FP32)</b></td>
                 </tr>
                 <tr>
                     <td><b>Similarity Intelligence</b></td>
-                    <td>Basic low-res pixel gradients / blockhash</td>
-                    <td><b>GPU Frequency Signatures (2D DCT)</b> via PyTorch</td>
+                    <td>Coarse binary pHash / low-res pixel gradients</td>
+                    <td><b>Continuous 2D DCT Embeddings (768-D / 3840-D)</b> with spectral whitening</td>
                 </tr>
                 <tr>
                     <td><b>Throughput & Speed</b></td>
-                    <td>~20&ndash;50 items/second (CPU bottlenecked)</td>
-                    <td><b>600+ images/s</b> & <b>150+ videos/s</b> (Hardware-accelerated)</td>
+                    <td>~20&ndash;50 items/second</td>
+                    <td><b>600+ images/s</b> &amp; <b>150+ videos/s</b> on RTX GPUs (RTX recommended for best speed)</td>
                 </tr>
                 <tr>
                     <td><b>Duplicate Grouping</b></td>
-                    <td>Iterative $O(N^2)$ CPU comparisons</td>
-                    <td><b>Tensor Matrix Multiplication</b> in GPU VRAM</td>
+                    <td>Pairwise Hamming heuristics / bucketed hashing</td>
+                    <td><b>Dense All-Against-All (<i>N &times; N</i>) Cosine Matrix Multiplication</b></td>
                 </tr>
                 <tr>
                     <td><b>False-Positive Defense</b></td>
@@ -442,7 +507,7 @@ class HelpDialog(QDialog):
                 <tr>
                     <td><b>Storage Engine</b></td>
                     <td>Fragile in-memory caches</td>
-                    <td><b>SQLite WAL Database</b> (Crash-safe, instant rescans)</td>
+                    <td><b>SQLite WAL Database</b> (Crash-safe, instant rescans across CPU &amp; GPU)</td>
                 </tr>
             </table>
         </div>
@@ -470,9 +535,9 @@ class HelpDialog(QDialog):
         html = """
         <h2>🔬 Multi-Stage Pipeline Architecture</h2>
         <p>
-            DupeClean achieves extreme deduplication throughput by strictly assigning each task to the processor 
-            architecture best equipped for it: <b>CPU for parallel micro-sampling and sequential I/O; GPU Tensor Cores 
-            for mass similarity calculations and matrix grouping.</b>
+            DupeClean achieves superior accuracy and throughput by strictly assigning each task to the processor 
+            architecture best equipped for it: <b>CPU for parallel micro-sampling and sequential I/O; NVIDIA RTX Tensor Cores 
+            (with automatic FP32 CPU fallback when no RTX GPU is present) for mass dense <i>N &times; N</i> matrix matching.</b>
         </p>
 
         <div class="card">
@@ -539,8 +604,12 @@ class HelpDialog(QDialog):
             Worker allocation scales dynamically from <code>os.cpu_count()</code>: Exact Hashing and Image Decoding allocate between <b>4 and 32 threads</b> matching your CPU threads, while Video Keyframe Extraction caps parallel sub-processes at <b>50% of logical cores (4 to 16 processes)</b> so Windows, background audio, and the UI remain completely responsive.
         </div>
         <div class="callout">
+            <b>Can DupeClean scan photos and videos without an NVIDIA RTX GPU?</b><br>
+            Yes! DupeClean automatically runs in universal <b>CPU Mode (NO GPU)</b> using AVX-accelerated FP32 PyTorch tensors, preserving the exact same continuous 768-D / 3840-D DCT embeddings and SQLite cache format. However, <b>an NVIDIA RTX GPU (Compute Capability 8.6+) is strongly recommended for superior performance</b> on large libraries.
+        </div>
+        <div class="callout">
             <b>Does it automatically optimize for different RTX GPUs (RTX 3070 vs. 3090 vs. 5090)?</b><br>
-            Yes. The engine inspects VRAM capacity and free headroom in real time via <code>torch.cuda.mem_get_info()</code>: on 8 GB cards (e.g., RTX 3070/4060), calculation blocks are capped at <b>256 MB</b> to prevent Windows WDDM paging overhead; on 24 GB / 32 GB GPUs (e.g., RTX 3090/4090/5090), it automatically scales up to <b>2.0 GB blocks</b> and 1,024-item batches to fully saturate memory bandwidth and Tensor Cores.
+            Yes. When an RTX GPU is active, the engine inspects VRAM capacity and free headroom in real time via <code>torch.cuda.mem_get_info()</code>: on 8 GB cards (e.g., RTX 3070/4060), calculation blocks are capped at <b>256 MB</b> to prevent Windows WDDM paging overhead; on 24 GB / 32 GB GPUs (e.g., RTX 3090/4090/5090), it automatically scales up to <b>2.0 GB blocks</b> and 1,024-item batches to fully saturate memory bandwidth and Tensor Cores.
         </div>
         """
         return self._create_browser(html)
@@ -566,9 +635,9 @@ class HelpDialog(QDialog):
             <h3 style="margin-top:0px; color:#38bdf8;">🖼️ Similar Images (Visual Perceptual Matching)</h3>
             <ul>
                 <li><b>Target:</b> Photos, burst shots, resized images, recompressed JPEGs, wallpapers, and converted graphic formats.</li>
-                <li><b>Algorithm:</b> 2D Discrete Cosine Transform (<b>2D DCT</b>) frequency hashing executed in GPU VRAM via PyTorch CUDA.</li>
+                <li><b>Algorithm:</b> Continuous <b>768-D 2D DCT embeddings</b> compared via dense all-against-all (<i>N &times; N</i>) matrix multiplication (PyTorch CUDA FP16 or CPU FP32 fallback) for superior visual precision.</li>
                 <li><b>Similarity Slider:</b> Configurable threshold from <b>70% to 100%</b>. Detects identical photos even if resized, color-graded, or re-saved as PNG, JPEG, or WEBP.</li>
-                <li><b>Throughput:</b> 600+ photos/second on modern GeForce RTX GPUs.</li>
+                <li><b>Hardware Note:</b> Runs on CPU as a universal fallback; an <b>NVIDIA RTX GPU is recommended for superior performance</b> (600+ photos/second).</li>
             </ul>
         </div>
 
@@ -576,7 +645,7 @@ class HelpDialog(QDialog):
             <h3 style="margin-top:0px; color:#38bdf8;">🎬 Similar Videos (Temporal Keyframe Matching)</h3>
             <ul>
                 <li><b>Target:</b> Duplicate video clips, re-encoded movies, surveillance footage, and alternative resolutions (4K vs 1080p).</li>
-                <li><b>Algorithm:</b> Fast keyframe seek pinpoints 5 distinct temporal timeline frames per video without full decoding.</li>
+                <li><b>Algorithm:</b> Fast keyframe seek pinpoints 5 distinct temporal timeline frames per video without full decoding, producing continuous <b>3,840-D embeddings</b> matched via dense <i>N &times; N</i> similarity matrices.</li>
                 <li><b>Mutual Similarity Protection:</b> Guarantees that every video within a cluster directly matches all other videos in that cluster (eliminates false-positive chaining).</li>
                 <li><b>Surveillance & CCTV Ready:</b> Fully supports raw DVR containers (such as Dahua/Hikvision <code>.dav</code> clips) and normalized infrared night-vision footage.</li>
             </ul>
@@ -624,7 +693,7 @@ class HelpDialog(QDialog):
                 </tr>
                 <tr>
                     <td><code>Ctrl + Scroll</code> / <code>Ctrl + / -</code></td>
-                    <td>Dynamic zoom in / out on help and documentation reader (<code>Ctrl 0</code> to reset).</td>
+                    <td>Dynamic zoom in / out on the <b>Results Grid</b>, <b>Media Preview</b> (drag to pan), and <b>Help Reader</b> (<code>Ctrl 0</code> to reset).</td>
                 </tr>
                 <tr>
                     <td><code>Esc</code></td>
@@ -675,7 +744,7 @@ class HelpDialog(QDialog):
                 <b>Product:</b> DupeClean v{dupeclean.__version__}<br>
                 <b>Platform:</b> Windows 10 / 11 x64 (Standalone Portable)<br>
                 <b>License:</b> GNU General Public License v3.0 (GPLv3, Free Software)<br>
-                <b>GPU Acceleration:</b> NVIDIA RTX Tensor Cores, CUDA FP16 & NVDEC
+                <b>Compute Engine:</b> NVIDIA RTX (CUDA FP16, recommended) &amp; Universal CPU Fallback (FP32)
             </p>
         </div>
 

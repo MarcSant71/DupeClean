@@ -74,7 +74,7 @@ class SplashScreen(QWidget):
         layout.addWidget(lbl_sub)
 
         # 3. Status de Carregamento Centralizado (Escalado em 50%: 18px font, altura 28px)
-        self.lbl_status = QLabel("Initializing...")
+        self.lbl_status = QLabel("Warming up...")
         self.lbl_status.setStyleSheet("color: #e4e4e7; font-size: 18px; background: transparent;")
         self.lbl_status.setFixedHeight(28)
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)

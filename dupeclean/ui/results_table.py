@@ -622,6 +622,7 @@ class _VirtualResultsView(QTableView):
         self._chevron_pen = QPen(QColor("#a1a1aa"), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         self._group_font = QFont()
         self._group_font.setBold(True)
+        self._zoom_level: int = 0
 
         self.setModel(model)
         self.setItemDelegate(_ResultsCellDelegate(model, self))
@@ -656,6 +657,19 @@ class _VirtualResultsView(QTableView):
         super().mousePressEvent(event)
 
     def keyPressEvent(self, event) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self.zoom_in()
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_Minus:
+                self.zoom_out()
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_0:
+                self.reset_zoom()
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_Space:
             cur = self.currentIndex()
             if cur.isValid():
@@ -670,6 +684,45 @@ class _VirtualResultsView(QTableView):
                     self._model.setData(chk_idx, next_state, Qt.ItemDataRole.CheckStateRole)
                     return
         super().keyPressEvent(event)
+
+    def wheelEvent(self, event) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.zoom_in()
+            elif delta < 0:
+                self.zoom_out()
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def _apply_zoom(self) -> None:
+        """Escala fonte da tabela, cabeçalhos de grupo e altura das linhas mantendo virtualização O(1)."""
+        scale = 1.0 + 0.1 * self._zoom_level
+        font_px = max(9, round(13 * scale))
+        row_h = max(18, round(25 * scale))
+        self.setStyleSheet(f"QTableView {{ font-size: {font_px}px; }}")
+        f = self.font()
+        f.setPixelSize(font_px)
+        self.setFont(f)
+        self._group_font.setPixelSize(font_px)
+        self.verticalHeader().setDefaultSectionSize(row_h)
+        self.viewport().update()
+
+    def zoom_in(self) -> None:
+        if self._zoom_level < 6:
+            self._zoom_level += 1
+            self._apply_zoom()
+
+    def zoom_out(self) -> None:
+        if self._zoom_level > -3:
+            self._zoom_level -= 1
+            self._apply_zoom()
+
+    def reset_zoom(self) -> None:
+        if self._zoom_level != 0:
+            self._zoom_level = 0
+            self._apply_zoom()
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)

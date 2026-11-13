@@ -22,19 +22,21 @@ class HardwareInitWorker(QThread):
 
     def run(self):
         try:
-            self.progress_update.emit(25, "Initializing...")
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.init()
-
-            self.progress_update.emit(55, "Initializing...")
+            self.progress_update.emit(25, "Warming up...")
             from dupeclean.core.hardware import check_gpu_compatibility
             is_compatible, error_msg, gpu_info = check_gpu_compatibility()
+
+            self.progress_update.emit(55, "Warming up...")
+            if gpu_info.get("has_cuda", False):
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.init()
+
             if not is_compatible:
                 self.finished_init.emit(False, error_msg, gpu_info, ("skipped", None))
                 return
 
-            self.progress_update.emit(80, "Initializing...")
+            self.progress_update.emit(80, "Warming up...")
             from dupeclean.core.cache import CacheManager
             from dupeclean.core.db_schema import FutureSchemaError
             try:
@@ -45,7 +47,7 @@ class HardwareInitWorker(QThread):
             except Exception as db_exc:
                 db_outcome = ("error", db_exc)
 
-            self.progress_update.emit(90, "Initializing...")
+            self.progress_update.emit(90, "Warming up...")
             self.finished_init.emit(True, "", gpu_info, db_outcome)
         except Exception as e:
             self.finished_init.emit(False, str(e), {}, ("skipped", None))
@@ -113,7 +115,7 @@ def main():
             splash.close()
             QMessageBox.critical(
                 None,
-                "Incompatible Hardware - DupeClean",
+                "Initialization Error - DupeClean",
                 error_msg
             )
             app.exit(1)
@@ -161,7 +163,7 @@ def main():
             app.exit(1)
             return
 
-        splash.set_target_progress(95, "Initializing...")
+        splash.set_target_progress(95, "Warming up...")
         app.processEvents()
 
         # 3. Inicialização da Interface Principal

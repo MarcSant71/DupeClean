@@ -148,6 +148,84 @@ class TestPreviewIntegration(unittest.TestCase):
 
         win.close()
 
+    def test_preview_image_zoom_pan_and_reset(self):
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtGui import QPixmap, QWheelEvent
+        from PySide6.QtTest import QTest
+
+        panel = PreviewPanel()
+        panel.resize(320, 320)
+        panel.show()
+        app.processEvents()
+
+        pm = QPixmap(800, 600)
+        pm.fill(Qt.GlobalColor.blue)
+        panel.image_stack.setCurrentWidget(panel.lbl_image)
+        panel.lbl_image.set_pixmap(pm)
+
+        self.assertEqual(panel.lbl_image._zoom_factor, 1.0)
+        we_in = QWheelEvent(
+            QPointF(100, 100),
+            panel.lbl_image.mapToGlobal(QPoint(100, 100)).toPointF(),
+            QPoint(0, 0),
+            QPoint(0, 120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.ControlModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+        app.sendEvent(panel.lbl_image, we_in)
+        self.assertGreater(panel.lbl_image._zoom_factor, 1.0)
+
+        panel.lbl_image.setFocus()
+        app.processEvents()
+        QTest.keyClick(panel.lbl_image, Qt.Key.Key_0, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(panel.lbl_image._zoom_factor, 1.0)
+
+        panel.close()
+        panel._worker.stop()
+
+    def test_results_grid_zoom_scales_font_and_row_height(self):
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtGui import QWheelEvent
+        from PySide6.QtTest import QTest
+
+        win = MainWindow(gpu_info={"name": "RTX 5090", "has_cuda": True})
+        self.addCleanup(win.close)
+        win.show()
+        app.processEvents()
+
+        tree = win.results_widget.tree
+        base_row_h = tree.verticalHeader().defaultSectionSize()
+        base_font_px = tree._group_font.pixelSize()
+
+        # Ctrl+Wheel on results grid viewport
+        we_in = QWheelEvent(
+            QPointF(50, 50),
+            tree.viewport().mapToGlobal(QPoint(50, 50)).toPointF(),
+            QPoint(0, 0),
+            QPoint(0, 120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.ControlModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+        app.sendEvent(tree.viewport(), we_in)
+        self.assertEqual(tree._zoom_level, 1)
+        self.assertGreater(tree.verticalHeader().defaultSectionSize(), base_row_h)
+
+        # Ctrl+= while focus is on MainWindow/tree and Ctrl+0 reset
+        tree.setFocus()
+        app.processEvents()
+        QTest.keyClick(tree, Qt.Key.Key_Equal, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(tree._zoom_level, 2)
+
+        QTest.keyClick(tree, Qt.Key.Key_0, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(tree._zoom_level, 0)
+        self.assertEqual(tree.verticalHeader().defaultSectionSize(), base_row_h)
+        if base_font_px > 0:
+            self.assertEqual(tree._group_font.pixelSize(), base_font_px)
+
 
 if __name__ == "__main__":
     unittest.main()

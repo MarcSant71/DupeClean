@@ -19,28 +19,61 @@ def enforce_high_performance_gpu():
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 
+def _cpu_fallback_info(reason: str, capability: str = "N/A", vram_gb: float = 0.0, device_id: Any = None) -> Dict[str, Any]:
+    """Monta o dicionário de metadados padrão para execução em fallback de CPU."""
+    return {
+        "name": "NO GPU",
+        "has_cuda": False,
+        "capability": capability,
+        "arch": "CPU Mode",
+        "vram_gb": vram_gb,
+        "device_id": device_id,
+        "reason": reason,
+    }
+
+
+def _is_rtx_capability(major: int, minor: int) -> bool:
+    """Retorna True se a Compute Capability atender ao mínimo RTX 30+ (8.6)."""
+    return (major > 8) or (major == 8 and minor >= 6)
+
+
+def get_compute_device() -> Tuple[str, Any]:
+    """
+    Retorna o dispositivo de cálculo ativo e o dtype correspondente:
+    - ('cuda', torch.float16) quando uma NVIDIA RTX compatível (CC >= 8.6) está disponível.
+    - ('cpu', torch.float32) como fallback universal quando não há GPU compatível.
+    """
+    import torch
+
+    if not torch.cuda.is_available() or torch.cuda.device_count() == 0:
+        return "cpu", torch.float32
+
+    try:
+        major, minor = torch.cuda.get_device_capability(0)
+        if _is_rtx_capability(major, minor):
+            return "cuda", torch.float16
+    except Exception:
+        pass
+
+    return "cpu", torch.float32
+
+
 def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     """
-    Verifica se o sistema possui uma GPU NVIDIA compatível.
+    Inspeciona o hardware gráfico disponível para seleção de engine (CUDA RTX ou CPU Fallback).
     Executado em segundo plano pelo HardwareInitWorker enquanto a Splash Screen anima.
-    Retorna (compativel, mensagem_erro, info_hardware).
+    Retorna (pode_iniciar, mensagem_erro, info_hardware).
     """
     enforce_high_performance_gpu()
 
     import torch
 
     if not torch.cuda.is_available():
-        return (
-            False,
-            "No CUDA-capable NVIDIA GPU was detected on this system.\n\n"
-            "DupeClean is engineered specifically for hardware acceleration\n"
-            "on NVIDIA GeForce RTX GPUs (30, 40, or 50 Series).",
-            {}
-        )
+        return True, "", _cpu_fallback_info("No CUDA-capable NVIDIA GPU detected")
 
     device_count = torch.cuda.device_count()
     if device_count == 0:
-        return False, "No accessible CUDA devices found.", {}
+        return True, "", _cpu_fallback_info("No accessible CUDA devices found")
 
     # Fixa o dispositivo primário explicitamente
     device_id = 0
@@ -60,14 +93,12 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     # 8.6 / 8.9: Ampere / Ada Lovelace (RTX 30 and 40)
     # 9.0: Hopper
     # 10.0 / 12.0: Blackwell (RTX 50)
-    if (major < 8) or (major == 8 and minor < 6):
-        return (
-            False,
-            f"Incompatible GPU detected: {device_name}\n\n"
-            f"Compute Capability: {major}.{minor}\n"
-            "DupeClean requires an NVIDIA RTX 30, 40, or 50 Series GPU\n"
-            "(Compute Capability 8.6 or higher).",
-            {}
+    if not _is_rtx_capability(major, minor):
+        return True, "", _cpu_fallback_info(
+            reason=f"{device_name} (Compute Capability {major}.{minor} < 8.6)",
+            capability=f"{major}.{minor}",
+            vram_gb=vram_gb,
+            device_id=device_id,
         )
 
     # Architecture family identification
@@ -82,6 +113,7 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
 
     info = {
         "name": device_name,
+        "has_cuda": True,
         "capability": f"{major}.{minor}",
         "arch": arch_name,
         "vram_gb": vram_gb,
@@ -93,15 +125,13 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
 
 def get_optimal_gpu_budgets() -> Dict[str, Any]:
     """
-    Calcula dinamicamente os orçamentos de memória VRAM e tamanhos de lote
-    baseando-se estritamente na GPU real e na VRAM livre detectada em tempo de execução.
-    
-    Protege placas de 8 GB (RTX 3070 / 4060) contra transbordamento para RAM compartilhada,
-    ao mesmo tempo em que extrai 100% da vazão dos Tensor Cores em placas de 24 GB / 32 GB (3090, 4090, 5090).
+    Calcula dinamicamente os orçamentos de memória e tamanhos de lote
+    baseando-se no dispositivo ativo (GPU RTX em VRAM ou fallback em CPU).
     """
     try:
         import torch
-        if not torch.cuda.is_available():
+        device, _ = get_compute_device()
+        if device != "cuda":
             return {
                 "target_chunk_bytes": 128 * 1024 * 1024,
                 "image_batch_size": 128,

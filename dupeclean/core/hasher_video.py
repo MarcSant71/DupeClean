@@ -20,6 +20,7 @@ import av
 av.logging.set_level(av.logging.PANIC)
 
 from dupeclean.core.models import FileRecord
+from dupeclean.core.hardware import get_compute_device
 from dupeclean.core.hasher_image import _get_dct_matrix
 from dupeclean.core.cache import CacheManager, compute_prefix_hash
 from dupeclean.core.scanner import get_volume_capabilities
@@ -263,11 +264,10 @@ def extract_video_embeddings(
 ) -> Tuple[List[FileRecord], torch.Tensor]:
     """
     Processa vídeos em altíssima velocidade utilizando multiprocessamento paralelo (ProcessPoolExecutor)
-    e consolidação em lote na RTX 5090 (PyTorch CUDA FP16).
+    e consolidação em lote (CUDA FP16 em GPUs RTX ou CPU FP32 como fallback universal).
     Garante isolamento de memória por arquivo (zero vazamento de frames) e persistência WAL no SQLite.
     """
-    device = "cuda"
-    dtype = torch.float16
+    device, dtype = get_compute_device()
     cache = cache_manager or CacheManager()
 
     total = len(records)
@@ -276,10 +276,19 @@ def extract_video_embeddings(
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
 
     # 1. Consulta em lote ao cache persistente (valida 7.680 bytes estruturais)
-    if progress_callback:
-        progress_callback(f"Checking video cache ({total:,} videos)...", 0, total)
+    def _video_cache_cb(msg: str, curr: int, tot: int):
+        if progress_callback:
+            progress_callback(msg, curr, tot * 2)
 
-    cached_map = cache.get_video_cache(records, expected_bytes=dim_size * 2, progress_callback=progress_callback, stop_check=stop_check)
+    if progress_callback:
+        progress_callback(f"Checking video cache ({total:,} videos)...", 0, total * 2)
+
+    cached_map = cache.get_video_cache(
+        records,
+        expected_bytes=dim_size * 2,
+        progress_callback=_video_cache_cb if progress_callback else None,
+        stop_check=stop_check,
+    )
     if stop_check and stop_check():
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
     cached_count = len(cached_map)
@@ -314,8 +323,13 @@ def extract_video_embeddings(
             embeddings_list.append(torch.from_numpy(cached_mat).to(device=device, dtype=dtype))
         del cached_mat
 
+    stage_total = total + len(to_process)
     if progress_callback and cached_count > 0:
-        progress_callback(f"Loading cached videos ({cached_count:,}/{total:,})...", cached_count, total)
+        progress_callback(
+            f"Loading cached videos ({cached_count:,}/{total:,})...",
+            total,
+            stage_total if to_process else total,
+        )
 
     # 2. Se todos os vídeos já estavam em cache, retorna de imediato
     if not to_process or (stop_check and stop_check()):
@@ -366,7 +380,11 @@ def extract_video_embeddings(
                     now = time.time()
                     if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
                         last_progress_time = now
-                        progress_callback(f"Processing videos ({current_total_done:,}/{total:,})...", current_total_done, total)
+                        progress_callback(
+                            f"Processing videos ({current_total_done:,}/{total:,})...",
+                            total + processed_count,
+                            stage_total,
+                        )
 
                     if res is not None:
                         p_str, duration, frames_arr, vol_id, f_id, p_hash = res
@@ -416,7 +434,7 @@ def extract_video_embeddings(
                             embeddings_list.append(normalized)
                             valid_records.extend(batch_records)
 
-                            norm_cpu_np = normalized.cpu().numpy()
+                            norm_cpu_np = normalized.to(dtype=torch.float16).cpu().numpy()
                             for b_i, b_rec in enumerate(batch_records):
                                 b_dur = batch_durations[b_i]
                                 cache_writer.add((

@@ -1,4 +1,16 @@
-Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
+Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
+
+### What's New in v1.3.0
+- **Universal CPU Fallback for Similar Images & Similar Videos (`hardware.py`, `hasher_image.py`, `hasher_video.py`, `matcher.py`, `main.py`, `main_window.py`):**
+  - Removed the startup hardware block so all 3 scan modes (`Duplicate Files`, `Similar Images`, `Similar Videos`) run cleanly on systems without a compatible NVIDIA RTX GPU using AVX-accelerated FP32 CPU tensors while preserving full FP16 SQLite cache portability (`DupeClean.db`).
+  - Added a minimalist gray **`● NO GPU`** badge (`#a1a1aa`) in CPU fallback mode with tooltip guidance recommending an NVIDIA RTX GPU for superior performance on large libraries.
+  - Updated in-app `HelpDialog`, About dialog, and `README.md` to document continuous 2D DCT embeddings (`768-D` / `3840-D`) and dense all-against-all (`N × N`) matching across GPU and CPU.
+- **Global Interactive Zoom & Preview Pan (`results_table.py`, `preview_panel.py`, `help_dialog.py`, `main_window.py`):**
+  - Added `Ctrl + Scroll` and `Ctrl` `+` / `-` / `0` zoom scaling across the Results Grid (`ResultsTreeWidget`), Media Preview (`AspectRatioPixmapLabel` with click-drag panning when zoomed), and Help Reader (`ZoomableBrowser` with viewport-independent CSS scaling and `QShortcut`s).
+- **Stage 2 Cache Progress & Status Telemetry Polish (`cache.py`, `hasher_exact.py`, `main_window.py`, `splash.py`, `dupeclean.spec`):**
+  - Eliminated Stage 2 progress bar stalls (`100%` freeze and decaying fake `it/s`) by prefiltering unique sizes before `get_volume_capabilities`, reporting monotonic `0% -> 50% -> 100%` progress via `_CacheProgressTracker`, and dropping throughput display when stalled.
+  - Updated startup splash text to `"Warming up..."` and shortened the scan-completed status message to end cleanly at `Estimated space to free: X MB.`.
+  - Removed unused `bin/ffmpeg.exe` and `bin/ffprobe.exe` executables (~434 MiB uncompressed) from `dupeclean.spec`, as all video decoding runs directly through PyAV (`av.libs`).
 
 ### What's New in v1.2.1
 - **In-App Help Dialog Visual Polish (`help_dialog.py`):**
