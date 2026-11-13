@@ -1,5 +1,14 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.2.0
+- **Virtualized Results Grid (`QTableView` + `QAbstractTableModel`) (`results_table.py`, `theme.py`):**
+  - Migrated the results grid from `QTreeWidget` to a lightweight, fully virtualized `QTableView` backed by `ResultsModel`, `_ResultsCellDelegate`, and `_GroupEntry` with $O(1)$ lazy visible-viewport rendering across hundreds of thousands of rows.
+  - Preserved all 3-state double-click column sorting modes, collapse/expand controls, custom checkbox state tracking, and keyboard/selection preview signals with instant mounting and near-zero memory overhead on massive libraries.
+- **Exact Duplicate Fast-Path & Deterministic Cache Progress (`hasher_exact.py`, `cache.py`, `hasher_image.py`, `hasher_video.py`):**
+  - Raised `FAST_PATH_SIZE` from `8 KB` to **`256 KB`**, allowing small and medium files (such as photos and documents) to compute their full `xxHash64` digest in a single pass during Stage 2 without reopening in Stage 3, while larger files (`> 256 KB`) retain the 8 KB Head+Tail sieve.
+  - Fixed `Checking cache` callbacks across Exact, Image, and Video caches to emit deterministic `(current, total)` counts (`0% -> 100%`) instead of `(0, 0)` indeterminate marquee mode.
+  - Renamed Exact Mode stage messages for clarity (`Calculating partial hashes` in Stage 2 and `Calculating full hashes` in Stage 3) and aligned in-app Help (`help_dialog.py`) and `README.md` with accurate CPU thread/process scaling and streaming buffer architecture.
+
 ### What's New in v1.1.15
 - **Visual Signature Precision & Image Engine v2 (`hasher_image.py`, `db_schema.py`):**
   - Applied opaque alpha compositing (`_to_opaque_rgb`), EXIF orientation normalization (`exif_transpose`), JPEG `draft()` fast-decode prescaling, Hamming resampling, `ALPHA = 1.2` whitening calibration, and FP32 GPU DCT/L2 normalization quantized cleanly to FP16 embeddings.
