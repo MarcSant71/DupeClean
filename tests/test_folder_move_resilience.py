@@ -3,10 +3,12 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from dupeclean.core.cache import CacheManager, compute_prefix_hash
-from dupeclean.core.models import FileRecord
-from dupeclean.core.scanner import get_volume_capabilities
+from dupeclean.core.hasher_exact import find_exact_duplicates
+from dupeclean.core.models import FileRecord, ScanMode, ScanPath
+from dupeclean.core.scanner import crawl_directories, get_volume_capabilities
 
 
 class TestFolderMoveResilience(unittest.TestCase):
@@ -224,6 +226,134 @@ class TestFolderMoveResilience(unittest.TestCase):
 
         hit = self.cache.get_exact_cache([rec_mod])
         self.assertNotIn(str(file_a), hit)
+
+    def test_end_to_end_crawl_and_exact_move(self):
+        """Valida fluxo real completo via crawl_directories() (onde scandir retorna 0,0) e L2 Lazy após mover pasta."""
+        folder_orig = Path(self.temp_dir) / "pasta_original"
+        folder_orig.mkdir()
+        payload = b"REAL_DUP_DATA_" * 2048  # > 8 KB
+        (folder_orig / "dup1.bin").write_bytes(payload)
+        (folder_orig / "dup2.bin").write_bytes(payload)
+
+        # 1. Crawl + deduplicação real (workers capturam volume_id e file_id via os.fstat)
+        records1 = crawl_directories([ScanPath(folder_orig)], [], ScanMode.EXACT)
+        self.assertEqual(len(records1), 2)
+        self.assertEqual(records1[0].file_id, 0)  # scandir no Windows retorna 0
+
+        groups = find_exact_duplicates(records1, cache_manager=self.cache)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0].files), 2)
+
+        # 2. Renomeia a pasta inteira no NTFS
+        folder_moved = Path(self.temp_dir) / "pasta_renomeada"
+        folder_orig.rename(folder_moved)
+
+        # 3. Novo crawl retorna novos caminhos ainda com file_id=0
+        records2 = crawl_directories([ScanPath(folder_moved)], [], ScanMode.EXACT)
+        self.assertEqual(len(records2), 2)
+        self.assertEqual(records2[0].file_id, 0)
+
+        # 4. get_exact_cache deve resolver via L2 Lazy sem recalcular
+        cached = self.cache.get_exact_cache(records2)
+        self.assertEqual(len(cached), 2)
+        for rec in records2:
+            p_hash, f_hash = cached[str(rec.path)]
+            self.assertIsNotNone(f_hash)
+
+    def test_legacy_db_backfill_on_l1_then_move(self):
+        """Valida que registros de bancos antigos (volume_id=0, file_id=0) recebem backfill no L1 e sobrevivem a move."""
+        folder_orig = Path(self.temp_dir) / "legado"
+        folder_orig.mkdir()
+        img = folder_orig / "antiga.jpg"
+        img.write_bytes(b"LEGACY_IMAGE_" * 1024)
+        dummy_emb = b"\x33\x44" * 768
+
+        st = os.stat(img)
+        # Grava no estilo antigo (sem volume_id, file_id ou prefix_hash)
+        self.cache.save_image_batch([(str(img), st.st_size, st.st_mtime, dummy_emb)])
+
+        # Scan normal via crawl_directories antes do move -> L1 acerta e faz backfill do File ID
+        recs1 = crawl_directories([ScanPath(folder_orig)], [], ScanMode.IMAGES)
+        hit_l1 = self.cache.get_image_cache(recs1, expected_bytes=1536)
+        self.assertIn(str(img), hit_l1)
+
+        with self.cache._get_connection() as conn:
+            row = conn.execute("SELECT volume_id, file_id FROM cache_images WHERE path = ?;", (str(img),)).fetchone()
+            self.assertGreater(row[0], 0)
+            self.assertGreater(row[1], 0)
+
+        # Agora move a pasta inteira e garante que o L2 recupera pelo File ID backfilled
+        folder_moved = Path(self.temp_dir) / "legado_movido"
+        folder_orig.rename(folder_moved)
+        recs2 = crawl_directories([ScanPath(folder_moved)], [], ScanMode.IMAGES)
+        hit_l2 = self.cache.get_image_cache(recs2, expected_bytes=1536)
+        self.assertIn(str(folder_moved / "antiga.jpg"), hit_l2)
+        self.assertEqual(hit_l2[str(folder_moved / "antiga.jpg")], dummy_emb)
+
+    def test_hardlinks_l2_does_not_delete_existing_link(self):
+        """Garante que mover/renomear um hardlink NTFS não remove do cache outro hardlink válido existente no disco."""
+        orig = Path(self.temp_dir) / "hl_orig.jpg"
+        link2 = Path(self.temp_dir) / "hl_link2.jpg"
+        orig.write_bytes(b"HARDLINK_IMG_" * 1024)
+        try:
+            os.link(orig, link2)
+        except OSError:
+            self.skipTest("Hardlinks não suportados neste diretório")
+
+        st = os.stat(orig)
+        vol_id, file_id = st.st_dev, st.st_ino
+        dummy_emb = b"\x55\x66" * 768
+        self.cache.save_image_batch([
+            (str(orig), st.st_size, st.st_mtime, dummy_emb, vol_id, file_id, "hl_p"),
+            (str(link2), st.st_size, st.st_mtime, dummy_emb, vol_id, file_id, "hl_p"),
+        ])
+
+        # Renomeia apenas link2; orig continua existindo no disco
+        link2_renamed = Path(self.temp_dir) / "hl_link2_novo.jpg"
+        link2.rename(link2_renamed)
+
+        rec_renamed = FileRecord(path=link2_renamed, size=st.st_size, mtime=st.st_mtime)
+        hit = self.cache.get_image_cache([rec_renamed], expected_bytes=1536)
+        self.assertIn(str(link2_renamed), hit)
+
+        with self.cache._get_connection() as conn:
+            orig_exists_in_db = conn.execute("SELECT COUNT(*) FROM cache_images WHERE path = ?;", (str(orig),)).fetchone()[0]
+            link2_old_in_db = conn.execute("SELECT COUNT(*) FROM cache_images WHERE path = ?;", (str(link2),)).fetchone()[0]
+            self.assertEqual(orig_exists_in_db, 1)  # Preservado!
+            self.assertEqual(link2_old_in_db, 0)     # Limpo porque não existe mais no disco!
+
+    def test_dav_l3_requires_mtime_proximity(self):
+        """Arquivos .dav pré-alocados exigem proximidade de mtime no L3 para evitar colisão de container vazio."""
+        dav_a = Path(self.temp_dir) / "cam1.dav"
+        dav_b = Path(self.temp_dir) / "cam2.dav"
+        payload = b"\x00DAV_HEADER" + (b"\x00" * 16384)
+        dav_a.write_bytes(payload)
+        dav_b.write_bytes(payload)
+
+        st_a = os.stat(dav_a)
+        # Define mtime de dav_b para 100 segundos diferente
+        os.utime(dav_b, (st_a.st_atime, st_a.st_mtime + 100.0))
+        st_b = os.stat(dav_b)
+
+        p_hash = compute_prefix_hash(dav_a, st_a.st_size)
+        dummy_emb = b"\x77\x88" * 3840
+
+        self.cache.save_video_batch([
+            (str(dav_a), st_a.st_size, st_a.st_mtime, 30.0, dummy_emb, 0, 0, p_hash)
+        ])
+
+        # Simula volume sem suporte a File ID (exFAT) para forçar caminho L3
+        with patch("dupeclean.core.cache.get_volume_capabilities", return_value=("EXFAT", False)):
+            rec_b = FileRecord(path=dav_b, size=st_b.st_size, mtime=st_b.st_mtime, ext=".dav")
+            hit_diff_mtime = self.cache.get_video_cache([rec_b], expected_bytes=7680)
+            self.assertNotIn(str(dav_b), hit_diff_mtime)
+
+            # Ajusta mtime dentro da janela de tolerância (<= 2s) -> deve acertar L3
+            os.utime(dav_b, (st_a.st_atime, st_a.st_mtime + 1.0))
+            st_b_close = os.stat(dav_b)
+            rec_b_close = FileRecord(path=dav_b, size=st_b_close.st_size, mtime=st_b_close.st_mtime, ext=".dav")
+            hit_close_mtime = self.cache.get_video_cache([rec_b_close], expected_bytes=7680)
+            self.assertIn(str(dav_b), hit_close_mtime)
 
 
 if __name__ == "__main__":

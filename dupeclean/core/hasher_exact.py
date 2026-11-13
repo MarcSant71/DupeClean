@@ -16,6 +16,22 @@ from typing import List, Callable, Optional, Tuple, Dict, Any
 import xxhash
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
 from dupeclean.core.cache import CacheManager
+from dupeclean.core.scanner import get_volume_capabilities
+
+
+def _capture_fstat_ids(f, rec: FileRecord) -> None:
+    """Captura (volume_id, file_id) do handle já aberto via os.fstat em volumes NTFS/ReFS (zero CreateFile extra)."""
+    if rec.volume_id > 0 and rec.file_id > 0:
+        return
+    _, supports_fid = get_volume_capabilities(rec.path)
+    if not supports_fid:
+        return
+    try:
+        st = os.fstat(f.fileno())
+        rec.volume_id = getattr(st, "st_dev", 0) or 0
+        rec.file_id = getattr(st, "st_ino", 0) or 0
+    except OSError:
+        pass
 
 # Tamanho limite para arquivos pequenos (lidos integralmente no Estágio 2 via fast-path padrão)
 PREHASH_CHUNK = 4096  # 4 KB (Head 4 KB + Tail 4 KB; arquivos <= 8 KB lidos inteiros)
@@ -38,6 +54,7 @@ def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Op
         return None
     try:
         with open(rec.path, "rb") as f:
+            _capture_fstat_ids(f, rec)
             if rec.size <= FAST_PATH_SIZE:
                 data = f.read(FAST_PATH_SIZE)
                 if stop_check and stop_check():
@@ -81,6 +98,7 @@ def _compute_full_hash_worker(
         hasher = xxhash.xxh64()
         buf_len = len(mv)
         with open(rec.path, "rb", buffering=0) as f:
+            _capture_fstat_ids(f, rec)
             while True:
                 if stop_check and stop_check():
                     return None

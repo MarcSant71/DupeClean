@@ -14,7 +14,7 @@ import torch
 import numpy as np
 
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
-from dupeclean.core.cache import CacheManager, compute_prefix_hash
+from dupeclean.core.cache import CacheManager, compute_prefix_hash, populate_record_file_id
 
 # Parâmetros de extração de assinaturas visuais de alta discriminação
 IMG_SIZE = 64
@@ -197,6 +197,7 @@ def extract_image_embeddings(
             if stop_event.is_set() or (stop_check and stop_check()):
                 break
             try:
+                populate_record_file_id(rec)
                 if rec.prefix_hash is None:
                     rec.prefix_hash = compute_prefix_hash(rec.path, rec.size)
                 with Image.open(rec.path) as img:

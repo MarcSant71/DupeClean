@@ -22,6 +22,7 @@ av.logging.set_level(av.logging.PANIC)
 from dupeclean.core.models import FileRecord
 from dupeclean.core.hasher_image import _get_dct_matrix
 from dupeclean.core.cache import CacheManager, compute_prefix_hash
+from dupeclean.core.scanner import get_volume_capabilities
 
 # Dimensão dos quadros e frequência para assinatura temporal de vídeos
 VIDEO_IMG_SIZE = 64
@@ -78,31 +79,42 @@ def extract_video_frames_and_duration(
     res = _worker_decode_path(str(path))
     if res is None:
         return None
-    _, dur, arr = res
+    _, dur, arr, _, _, _ = res
     if arr is None or dur == -1.0:
         return None
     return dur, arr
 
 
-def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]]:
+def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray], int, int, Optional[str]]:
     """
-    Worker isolado por processo: abre o vídeo, extrai 5 quadros temporais RGB limpos e retorna dados brutos.
-    Opera fora do GIL do processo principal, eliminando travamentos de thread no Windows.
-    Retorna (path_str, -1.0, None) em caso de falha/arquivo corrompido para persistência de tombstone.
+    Worker isolado por processo: abre o vídeo, coleta metadados NTFS (vol_id, file_id) e prefix_hash,
+    extrai 5 quadros temporais RGB limpos e retorna dados brutos fora do GIL do processo principal.
+    Retorna (path_str, -1.0, None, vol_id, file_id, prefix_hash) em caso de falha para persistência de tombstone.
     """
     p = Path(path_str)
+    vol_id, f_id, p_hash = 0, 0, None
+    try:
+        st = os.stat(path_str, follow_symlinks=False)
+        _, supports_fid = get_volume_capabilities(p)
+        vol_id = getattr(st, "st_dev", 0) or 0
+        f_id = (getattr(st, "st_ino", 0) or 0) if supports_fid else 0
+        if st.st_size > 0:
+            p_hash = compute_prefix_hash(p, st.st_size)
+    except Exception:
+        pass
+
     is_dav = p.suffix.lower() == ".dav"
     options = {"probesize": "65536", "analyzeduration": "0"} if is_dav else None
 
     try:
         container = av.open(path_str, options=options)
     except Exception:
-        return path_str, -1.0, None
+        return path_str, -1.0, None, vol_id, f_id, p_hash
 
     try:
         if not container.streams.video:
             container.close()
-            return path_str, -1.0, None
+            return path_str, -1.0, None, vol_id, f_id, p_hash
 
         stream = container.streams.video[0]
         dur = float(container.duration) / 1000000.0 if container.duration else None
@@ -164,7 +176,7 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
         container.close()
 
         if not frames:
-            return path_str, -1.0, None
+            return path_str, -1.0, None, vol_id, f_id, p_hash
 
         while len(frames) < 5:
             frames.append(frames[-1])
@@ -172,16 +184,16 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
         expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
         arr = np.array(frames[:5], dtype=np.uint8)  # [5, 64, 64, 3]
         if arr.shape != expected_shape:
-            return path_str, -1.0, None
+            return path_str, -1.0, None, vol_id, f_id, p_hash
 
-        return path_str, dur, arr
+        return path_str, dur, arr, vol_id, f_id, p_hash
 
     except Exception:
         try:
             container.close()
         except Exception:
             pass
-        return path_str, -1.0, None
+        return path_str, -1.0, None, vol_id, f_id, p_hash
 
 
 class _AsyncVideoCacheWriter:
@@ -354,11 +366,15 @@ def extract_video_embeddings(
                         progress_callback(f"Processing videos ({current_total_done:,}/{total:,})...", current_total_done, total)
 
                     if res is not None:
-                        p_str, duration, frames_arr = res
+                        p_str, duration, frames_arr, vol_id, f_id, p_hash = res
                         rec = path_to_rec.get(p_str)
                         if rec is not None:
-                            if rec.prefix_hash is None:
-                                rec.prefix_hash = compute_prefix_hash(rec.path, rec.size)
+                            if vol_id and rec.volume_id == 0:
+                                rec.volume_id = vol_id
+                            if f_id and rec.file_id == 0:
+                                rec.file_id = f_id
+                            if p_hash and rec.prefix_hash is None:
+                                rec.prefix_hash = p_hash
                             expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
                             if frames_arr is None or duration == -1.0 or getattr(frames_arr, "shape", None) != expected_shape:
                                 # Grava tombstone no SQLite para nunca mais tentar reprocessar este arquivo corrompido
