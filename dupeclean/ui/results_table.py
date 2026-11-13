@@ -253,7 +253,7 @@ class ResultsWidget(QWidget):
             sim_pct = "100.0%" if group.similarity >= 0.9999 else f"{group.similarity * 100:.1f}%"
             group_header = (
                 f"Group #{group.group_id}  •  {len(group.files)} Files  •  "
-                f"Similarity: {sim_pct}  •  Reclaimable: {reclaim_str}"
+                f"Reclaimable: {reclaim_str}"
             )
 
             parent_item = SortableGroupItem(group, original_index=idx)

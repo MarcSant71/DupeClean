@@ -80,9 +80,27 @@ class TestPreviewIntegration(unittest.TestCase):
         panel.load_file(rec1)
         self.assertEqual(panel._current_file.path, self.img1_path)
 
+        # Valida estabilidade geométrica no swap entre fotos (zero encolhimento vertical por lbl_status)
+        panel.resize(360, 520)
+        panel.show()
+        app.processEvents()
+        size_before = panel.lbl_image.size()
+
+        rec2_uncached = FileRecord(path=self.img2_path, size=self.img2_path.stat().st_size, mtime=100.0)
+        panel._lru_cache.pop(str(self.img2_path), None)
+        panel.load_file(rec2_uncached)
+        app.processEvents()
+        self.assertEqual(panel.lbl_image.size(), size_before)
+        self.assertIs(panel.image_stack.currentWidget(), panel.lbl_image)
+
+        panel._worker.wait(1000)
+        app.processEvents()
+        self.assertEqual(panel.lbl_image.size(), size_before)
+
         # Limpeza
         panel.clear()
         self.assertIsNone(panel._current_file)
+        panel.close()
         panel._worker.stop()
 
     def test_results_widget_selection_signal(self):

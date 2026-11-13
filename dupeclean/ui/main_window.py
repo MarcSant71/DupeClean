@@ -476,13 +476,13 @@ class MainWindow(QMainWindow):
         if file_rec is not None and file_rec.path.exists():
             ext = file_rec.ext.lower()
             if ext in IMAGE_EXTENSIONS or ext in VIDEO_EXTENSIONS:
-                self.preview_panel.load_file(file_rec)
                 if not self.preview_panel.isVisible():
                     self.preview_panel.setVisible(True)
                     sizes = self.h_splitter.sizes()
                     if len(sizes) == 2 and sizes[1] < 120:
                         total_w = sum(sizes) if sum(sizes) > 0 else 1000
                         self.h_splitter.setSizes([int(total_w * 0.68), int(total_w * 0.32)])
+                self.preview_panel.load_file(file_rec)
                 return
 
         # Se clicou em cabeçalho ou arquivo não multimídia, recolhe o painel

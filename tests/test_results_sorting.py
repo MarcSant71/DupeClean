@@ -292,6 +292,16 @@ class TestResultsSorting(unittest.TestCase):
         self.assertIn("Restoring original scan order...", emitted_messages)
         self.assertEqual(emitted_messages[-1], "")
 
+    def test_group_header_omits_similarity_while_column_preserves_it(self):
+        # O cabeçalho do grupo não deve duplicar "Similarity:", mantendo a coluna 4 intacta
+        group_item = self.widget.tree.topLevelItem(2)  # g_medium (similarity=0.95)
+        header_text = group_item.text(1)
+        self.assertIn("Group #3", header_text)
+        self.assertIn("2 Files", header_text)
+        self.assertIn("Reclaimable:", header_text)
+        self.assertNotIn("Similarity:", header_text)
+        self.assertEqual(group_item.child(0).text(4), "95.0%")
+
 
 if __name__ == "__main__":
     unittest.main()

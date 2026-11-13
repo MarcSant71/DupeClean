@@ -14,7 +14,7 @@ from PIL import Image, ImageOps
 from PySide6.QtCore import Qt, Signal, Slot, QThread, QObject, QSize
 from PySide6.QtGui import QPixmap, QImage, QColor, QFont, QPainter, QIcon
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QStackedLayout, QLabel, QPushButton,
     QFrame, QSizePolicy, QApplication
 )
 
@@ -31,6 +31,7 @@ class AspectRatioPixmapLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(120, 120)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._pixmap: Optional[QPixmap] = None
 
@@ -257,21 +258,22 @@ class PreviewPanel(QFrame):
 
         main_layout.addLayout(header_layout)
 
-        # 2. Área Central de Exibição da Imagem (Aspect Ratio Preserved)
+        # 2. Área Central de Exibição da Imagem (QStackedLayout mantém altura constante sem piscar no swap)
         self.image_container = QFrame()
         self.image_container.setStyleSheet(
             "QFrame { background-color: #141416; border: 1px solid #26262a; border-radius: 4px; }"
         )
-        img_box_layout = QVBoxLayout(self.image_container)
-        img_box_layout.setContentsMargins(4, 4, 4, 4)
+        self.image_stack = QStackedLayout(self.image_container)
+        self.image_stack.setContentsMargins(4, 4, 4, 4)
 
         self.lbl_image = AspectRatioPixmapLabel()
-        img_box_layout.addWidget(self.lbl_image)
+        self.image_stack.addWidget(self.lbl_image)
 
         self.lbl_status = QLabel("Select an image or video to preview")
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setStyleSheet("color: #71717a; font-size: 11px;")
-        img_box_layout.addWidget(self.lbl_status)
+        self.image_stack.addWidget(self.lbl_status)
+        self.image_stack.setCurrentWidget(self.lbl_status)
 
         main_layout.addWidget(self.image_container, stretch=1)
 
@@ -339,7 +341,7 @@ class PreviewPanel(QFrame):
         self._current_token += 1
         token = self._current_token
 
-        # Feedback visual sutil enquanto decodifica
+        # Feedback visual sutil sem encolher/ocultar a imagem anterior enquanto a nova decodifica
         ext = file_rec.ext.lower()
         is_video = ext in VIDEO_EXTENSIONS
         icon = "🎬" if is_video else "🖼️"
@@ -347,8 +349,10 @@ class PreviewPanel(QFrame):
         self.lbl_filename.setText(file_rec.name)
         self.lbl_filesize.setText(format_size(file_rec.size))
         self.lbl_resolution.setText("Loading...")
-        self.lbl_status.setText("Decoding preview...")
-        self.lbl_status.setVisible(True)
+        self.meta_card.setVisible(True)
+        if not self.lbl_image._pixmap or self.lbl_image._pixmap.isNull():
+            self.lbl_status.setText("Decoding preview...")
+            self.image_stack.setCurrentWidget(self.lbl_status)
 
         self._worker.request_preview(token, file_rec)
 
@@ -378,8 +382,8 @@ class PreviewPanel(QFrame):
         self.lbl_filesize.setText(format_size(file_rec.size))
 
         if pixmap and not pixmap.isNull():
+            self.image_stack.setCurrentWidget(self.lbl_image)
             self.lbl_image.set_pixmap(pixmap)
-            self.lbl_status.setVisible(False)
 
             w = meta.get("width", 0)
             h = meta.get("height", 0)
@@ -402,7 +406,7 @@ class PreviewPanel(QFrame):
             err = meta.get("error", "No preview available")
             self.lbl_image.set_pixmap(None)
             self.lbl_status.setText(f"Preview unavailable ({err})")
-            self.lbl_status.setVisible(True)
+            self.image_stack.setCurrentWidget(self.lbl_status)
             self.lbl_resolution.setText("-")
             self.meta_card.setVisible(True)
 
@@ -412,7 +416,7 @@ class PreviewPanel(QFrame):
         self._current_token += 1
         self.lbl_image.set_pixmap(None)
         self.lbl_status.setText("Select an image or video to preview")
-        self.lbl_status.setVisible(True)
+        self.image_stack.setCurrentWidget(self.lbl_status)
         self.lbl_filename.setText("")
         self.lbl_resolution.setText("")
         self.lbl_filesize.setText("")
