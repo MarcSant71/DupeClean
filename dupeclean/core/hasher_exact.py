@@ -2,7 +2,7 @@
 Deduplicador Exato (Bit-a-bit) de Altíssimo Desempenho com xxHash64 e I/O Otimizado.
 Algoritmo de 3 estágios otimizado para alta vazão (NVMe, SSD, HDDs mecânicos e storages em rede/iSCSI):
 1. Agrupamento por tamanho (tamanhos únicos são descartados em memória sem tocar no disco).
-2. Assinatura composta Head 4KB + Tail 4KB com fast-path para arquivos pequenos (<= 8KB)
+2. Assinatura composta Head 4KB + Tail 4KB para arquivos > 256KB, com fast-path direto para arquivos pequenos/médios (<= 256KB)
    e ordenação por localidade de diretório para evitar head thrashing em HDDs mecânicos.
 3. Hash completo em streaming paralelo com buffers de 4 MB, concorrência balanceada e cancelamento atômico.
 """
@@ -33,9 +33,9 @@ def _capture_fstat_ids(f, rec: FileRecord) -> None:
     except OSError:
         pass
 
-# Tamanho limite para arquivos pequenos (lidos integralmente no Estágio 2 via fast-path padrão)
-PREHASH_CHUNK = 4096  # 4 KB (Head 4 KB + Tail 4 KB; arquivos <= 8 KB lidos inteiros)
-FAST_PATH_SIZE = PREHASH_CHUNK * 2  # 8 KB
+# Tamanho limite para arquivos pequenos/médios (lidos integralmente em 1 única passada no Estágio 2 via fast-path)
+PREHASH_CHUNK = 4096  # 4 KB (Head 4 KB + Tail 4 KB para arquivos > 256 KB)
+FAST_PATH_SIZE = 256 * 1024  # 256 KB (evita dupla abertura/leitura de fotos pequenas e documentos)
 
 # Buffer de leitura streaming otimizado para alta vazão contínua sem fragmentação de memória
 STREAM_BUFFER_SIZE = 512 * 1024  # 512 KB por bloco de leitura
@@ -43,10 +43,10 @@ STREAM_BUFFER_SIZE = 512 * 1024  # 512 KB por bloco de leitura
 
 def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str, bool]]:
     """
-    Calcula a assinatura rápida (pre-hash) do arquivo com suporte a cancelamento atômico:
-    - Arquivos <= 8 KB: lê o conteúdo integral e já calcula o hash definitivo (is_full=True).
-    - Arquivos > 8 KB: lê os primeiros 4 KB e os últimos 4 KB (Head + Tail) (is_full=False),
-      descartando 99.9% dos falsos positivos de cabeçalho sem streaming do arquivo inteiro.
+    Calcula o hash inicial do arquivo com suporte a cancelamento atômico:
+    - Arquivos <= 256 KB: lê o conteúdo integral de uma vez e já calcula o full hash (is_full=True).
+    - Arquivos > 256 KB: lê os primeiros 4 KB e os últimos 4 KB (Head + Tail) (is_full=False),
+      descartando 99.9% dos falsos positivos antes do streaming completo no Estágio 3.
     Retorna (rec, hash_value, is_full) ou None em caso de erro de I/O ou cancelamento.
     """
     rec, stop_check = args
@@ -221,11 +221,11 @@ def find_exact_duplicates(
             return []
 
         # -------------------------------------------------------------------------
-        # Estágio 2: Assinatura composta (Head 4 KB + Tail 4 KB) e fast-path (<= 8 KB)
+        # Estágio 2: Assinatura composta (Head 4 KB + Tail 4 KB) e fast-path (<= 256 KB)
         # -------------------------------------------------------------------------
         flat_candidates = [f for grp in candidates_by_size for f in grp]
         if progress_callback:
-            _emit_progress(progress_callback, f"Checking cache ({total_candidates:,} candidates)...", 0, 0, 2)
+            _emit_progress(progress_callback, f"Checking cache ({total_candidates:,} candidates)...", 0, total_candidates, 2)
 
         def _exact_cache_cb(msg: str, curr: int, tot: int):
             if progress_callback:
@@ -262,7 +262,7 @@ def find_exact_duplicates(
         cache_hits_prefix = total_candidates - len(to_header_check)
 
         if progress_callback and cache_hits_prefix > 0:
-            _emit_progress(progress_callback, f"Loading cached signatures ({cache_hits_prefix:,}/{total_candidates:,})...", cache_hits_prefix, total_candidates, 2)
+            _emit_progress(progress_callback, f"Loading cached partial hashes ({cache_hits_prefix:,}/{total_candidates:,})...", cache_hits_prefix, total_candidates, 2)
 
         if to_header_check and not (stop_check and stop_check()):
             # Otimização espacial (Directory Locality): agrupa leituras por pasta pai
@@ -357,7 +357,7 @@ def find_exact_duplicates(
                     if progress_callback and (now - last_progress_time >= 0.1 or header_processed % 256 == 0):
                         _emit_progress(
                             progress_callback,
-                            f"Calculating file signatures ({header_processed:,}/{total_candidates:,})...",
+                            f"Calculating partial hashes ({header_processed:,}/{total_candidates:,})...",
                             header_processed,
                             total_candidates,
                             2
@@ -481,7 +481,7 @@ def find_exact_duplicates(
                     if progress_callback and (now - last_progress_time >= 0.1 or deep_processed % 128 == 0):
                         _emit_progress(
                             progress_callback,
-                            f"Calculating hashes ({deep_processed:,}/{total_deep_check:,})...",
+                            f"Calculating full hashes ({deep_processed:,}/{total_deep_check:,})...",
                             deep_processed,
                             total_deep_check,
                             3

@@ -36,10 +36,10 @@ class TestStageStatusCoherence(unittest.TestCase):
         win = MainWindow(gpu_info={"name": "NVIDIA GeForce RTX 5090", "has_cuda": True})
         self.addCleanup(win.close)
 
-        win._on_stage_progress("Calculating hashes (500/1,000)...", 500, 1000, 3, 3)
+        win._on_stage_progress("Calculating full hashes (500/1,000)...", 500, 1000, 3, 3)
         self.assertEqual(
             win.lbl_status.text(),
-            "Stage 3/4: Calculating hashes (500/1,000)...",
+            "Stage 3/4: Calculating full hashes (500/1,000)...",
         )
 
         win._is_scan_mounting = True

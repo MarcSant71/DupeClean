@@ -276,7 +276,10 @@ def extract_video_embeddings(
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
 
     # 1. Consulta em lote ao cache persistente (valida 7.680 bytes estruturais)
-    cached_map = cache.get_video_cache(records, expected_bytes=dim_size * 2, stop_check=stop_check)
+    if progress_callback:
+        progress_callback(f"Checking video cache ({total:,} videos)...", 0, total)
+
+    cached_map = cache.get_video_cache(records, expected_bytes=dim_size * 2, progress_callback=progress_callback, stop_check=stop_check)
     if stop_check and stop_check():
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
     cached_count = len(cached_map)

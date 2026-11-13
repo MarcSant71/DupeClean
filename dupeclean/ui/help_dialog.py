@@ -484,26 +484,26 @@ class HelpDialog(QDialog):
         </div>
 
         <div class="card">
-            <h3>Stage 2/3: Calculating File Signatures (Fast Sieve)</h3>
+            <h3>Stage 2/3: Calculating Partial Hashes (Fast Sieve)</h3>
             <p>
-                <b>What happens:</b> Reads only the initial <b>8 KB (composite prefix/suffix)</b> of files sharing identical sizes, 
-                consulting the persistent local SQLite WAL cache.
+                <b>What happens:</b> Small/medium files (<b>&le; 256 KB</b>) are hashed in a single read pass without ever needing Stage 3. 
+                Larger files sharing identical sizes read only <b>8 KB (4 KB head + 4 KB tail)</b>, consulting the persistent local SQLite WAL cache.
             </p>
             <p>
-                <b>Optimization:</b> If two 10 GB files differ in their first 8 KB, they are disqualified in 1 millisecond. 
-                Over <b>90% of non-duplicate candidates are filtered out</b> without ever reading the full files from disk.
+                <b>Optimization:</b> Eliminates double file-open overhead on hundreds of thousands of small photos/documents while disqualifying 
+                mismatched multi-gigabyte files in 1 millisecond (filtering over <b>90% of non-duplicate candidates</b> before full reads).
             </p>
         </div>
 
         <div class="card">
-            <h3>Stage 3/3: Calculating Hashes (Deep Verification)</h3>
+            <h3>Stage 3/3: Calculating Full Hashes (Deep Verification)</h3>
             <p>
-                <b>What happens:</b> For remaining candidates passing the 8 KB sieve, DupeClean reads file data in 
-                <b>512 KB parallel streaming blocks</b> and computes cryptographic <code>xxHash64</code> digests.
+                <b>What happens:</b> For larger candidates (&gt; 256 KB) passing the 8 KB sieve, DupeClean reads file data in 
+                <b>512 KB parallel streaming blocks</b> and computes high-speed <code>xxHash64</code> digests.
             </p>
             <p>
-                <b>Hardware Saturation:</b> Saturates the physical sequential read speed of modern NVMe and solid-state storage (<b>up to 3.4+ GB/s</b>) 
-                using zero-copy unbuffered DMA buffers (<code>readinto</code>) across 32 concurrent worker threads, ensuring the physical reading phase finishes in the minimum possible time.
+                <b>Hardware Scaling:</b> Maximizes sequential storage read throughput (up to NVMe limits) using pre-allocated 
+                <code>512 KB</code> streaming buffers (<code>buffering=0</code> with <code>readinto</code>, avoiding Python buffer overhead and chunk allocations) across <b>4 to 32 concurrent worker threads</b> scaled dynamically to your CPU core count.
             </p>
         </div>
 
@@ -517,16 +517,22 @@ class HelpDialog(QDialog):
 
         <h2>💡 Hardware Telemetry FAQ</h2>
         <div class="callout">
+            <b>Why does Duplicate Files have two hashing stages (<i>Partial Hashes</i> vs. <i>Full Hashes</i>)?</b><br>
+            Guaranteeing two files are 100% bit-for-bit identical mathematically requires reading every byte—if a single byte differs in the middle of a 2 GB file, only a full-file hash can catch it.<br>
+            &bull; <b>Partial Hashes (Stage 2):</b> Files <b>&le; 256 KB</b> are hashed completely in a single read pass (avoiding double file-open overhead). Larger files (<b>&gt; 256 KB</b>) read only <b>8 KB (4 KB head + 4 KB tail)</b> to eliminate 90%+ of size-colliding non-duplicates without touching full file bodies.<br>
+            &bull; <b>Full Hashes (Stage 3):</b> Only larger files (&gt; 256 KB) whose 8 KB partial hashes match are streamed in full via <code>xxHash64</code> for absolute verification.
+        </div>
+        <div class="callout">
             <b>Why is my Disk read speed at 100% (~1–3+ GB/s) during Duplicate Files Stage 3?</b><br>
-            To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses zero-copy direct DMA streaming to saturate your drive's physical sequential read speed, ensuring this unavoidable reading phase finishes as fast as humanly possible.
+            To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses multi-threaded 512 KB streaming buffers (<code>buffering=0</code> + <code>readinto</code>) to keep your drive reading at full sequential speed so this phase finishes as fast as possible.
         </div>
         <div class="callout">
             <b>Why does my RTX GPU stay near 0% in Task Manager during Stage 2 & 3 of Image/Video scans?</b><br>
-            During Stage 2, CPU workers decode images and extract video keyframes from disk. Once a batch of 128 frames is ready, the RTX GPU processes it in <b>fractions of a millisecond</b> (&lt;0.5 ms) and immediately waits for the next disk/CPU batch. Because the GPU compute finishes so quickly, Windows Task Manager's 1-second average sampler shows near 0% until the all-to-all mass matrix multiplication in Stage 3 begins.
+            During Stage 2, CPU workers decode images and extract video keyframes from disk. Once a batch is ready (<b>256&ndash;1,024 images</b> depending on VRAM, or <b>128 videos</b>), the RTX GPU processes it in <b>fractions of a millisecond</b> (&lt;0.5 ms) and immediately waits for the next disk/CPU batch. Because the GPU compute finishes so quickly, Windows Task Manager's 1-second average sampler shows near 0% until the all-to-all mass matrix multiplication in Stage 3 begins.
         </div>
         <div class="callout">
-            <b>How does DupeClean adapt to different CPUs (e.g., Core i9 vs. Ryzen 5)?</b><br>
-            Worker thread allocation scales dynamically based on logical processor count (up to 32 concurrent workers on high-core CPUs). A dedicated percentage of CPU headroom is always preserved so Windows, background audio, and the UI remain completely fluid and responsive.
+            <b>How does DupeClean adapt to different CPUs (e.g., 4-core laptops vs. Core i9 / Ryzen 9)?</b><br>
+            Worker allocation scales dynamically from <code>os.cpu_count()</code>: Exact Hashing and Image Decoding allocate between <b>4 and 32 threads</b> matching your CPU threads, while Video Keyframe Extraction caps parallel sub-processes at <b>50% of logical cores (4 to 16 processes)</b> so Windows, background audio, and the UI remain completely responsive.
         </div>
         <div class="callout">
             <b>Does it automatically optimize for different RTX GPUs (RTX 3070 vs. 3090 vs. 5090)?</b><br>
@@ -546,7 +552,7 @@ class HelpDialog(QDialog):
             <h3 style="margin-top:0px; color:#38bdf8;">📁 Duplicate Files (Exact Matching)</h3>
             <ul>
                 <li><b>Target:</b> Documents, archives, binaries, installers, backups, and identical media files.</li>
-                <li><b>Algorithm:</b> Multi-stage sieve architecture combining 8 KB prefix checks with <code>xxHash64</code> streaming digests.</li>
+                <li><b>Algorithm:</b> Multi-stage architecture combining a 256 KB single-pass fast-path and 8 KB (head + tail) partial hashes with full <code>xxHash64</code> streaming digests.</li>
                 <li><b>Guarantee:</b> 100% bit-for-bit identical duplicate guarantee. Zero false positives.</li>
                 <li><b>Speed:</b> Millions of files evaluated in minutes with persistent SQLite caching.</li>
             </ul>

@@ -148,7 +148,7 @@ def extract_image_embeddings(
 
     # 1. Consulta em lote ao cache persistente com telemetria contínua
     if progress_callback:
-        progress_callback(f"Checking cache ({total:,} images)...", 0, 0)
+        progress_callback(f"Checking cache ({total:,} images)...", 0, total)
 
     cached_map = cache.get_image_cache(records, expected_bytes=dim_size * 2, progress_callback=progress_callback, stop_check=stop_check)
     if stop_check and stop_check():

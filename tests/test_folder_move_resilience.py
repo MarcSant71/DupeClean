@@ -372,7 +372,7 @@ class TestFolderMoveResilience(unittest.TestCase):
                 self.assertNotIn("SCAN ", plan, msg=f"Full table scan detectado: {plan}")
 
     def test_exact_cache_emits_stage2_progress_callback(self):
-        """Garante sinalização imediata de progresso do Estágio 2 durante consulta ao cache exato."""
+        """Garante sinalização determinística de progresso do Estágio 2 durante consulta ao cache exato."""
         dummy_records = [
             FileRecord(path=Path(self.temp_dir) / f"f_{i}.bin", size=128 + (i % 10), mtime=1000.0)
             for i in range(2500)
@@ -384,6 +384,30 @@ class TestFolderMoveResilience(unittest.TestCase):
         )
         self.assertGreater(len(events), 0)
         self.assertTrue(any("Checking cache" in m for m, _, _ in events))
+        self.assertTrue(all(tot == len(dummy_records) for _, _, tot in events))
+        self.assertEqual(events[-1][1], len(dummy_records))
+        currs = [curr for _, curr, _ in events]
+        self.assertEqual(currs, sorted(currs))
+
+    def test_image_cache_emits_deterministic_progress_callback(self):
+        """Garante que a consulta ao cache de imagens emita progresso determinístico (total > 0)."""
+        dummy_records = [
+            FileRecord(path=Path(self.temp_dir) / f"img_{i}.jpg", size=2048 + (i % 20), mtime=1000.0)
+            for i in range(3000)
+        ]
+        events = []
+        self.cache.get_image_cache(
+            dummy_records,
+            expected_bytes=512,
+            progress_callback=lambda msg, curr, tot: events.append((msg, curr, tot))
+        )
+        self.assertGreater(len(events), 1)
+        self.assertTrue(any("Checking cache" in m for m, _, _ in events))
+        self.assertTrue(all(tot == len(dummy_records) for _, _, tot in events))
+        self.assertGreater(events[0][1], 0)
+        self.assertEqual(events[-1][1], len(dummy_records))
+        currs = [curr for _, curr, _ in events]
+        self.assertEqual(currs, sorted(currs))
 
 
 if __name__ == "__main__":

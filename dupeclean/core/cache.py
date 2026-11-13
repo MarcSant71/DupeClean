@@ -430,7 +430,7 @@ class CacheManager:
 
                 if progress_callback and total_recs > 2000 and (i % 9000 == 0 or i + chunk_size >= total_recs):
                     done = min(i + chunk_size, total_recs)
-                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", 0, 0)
+                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", done, total_recs)
 
             if backfill_recs:
                 self._backfill_l1_file_ids(conn, "cache_exact", backfill_recs, stop_check=stop_check)
@@ -438,7 +438,7 @@ class CacheManager:
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos renomeados/movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
             if progress_callback and len(uncached) > 2000:
-                progress_callback(f"Checking cache ({len(uncached):,})...", 0, 0)
+                progress_callback(f"Checking cache ({len(uncached):,})...", total_recs, total_recs)
             l2_candidates = self._find_l2_candidates(conn, "cache_exact", uncached, stop_check=stop_check)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
@@ -560,7 +560,7 @@ class CacheManager:
 
                 if progress_callback and total_recs > 2000 and (i % 2700 == 0 or i + chunk_size >= total_recs):
                     done = min(i + chunk_size, total_recs)
-                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", 0, 0)
+                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", done, total_recs)
 
             if backfill_recs:
                 self._backfill_l1_file_ids(conn, "cache_images", backfill_recs, stop_check=stop_check)
@@ -568,7 +568,7 @@ class CacheManager:
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
             if progress_callback and len(uncached) > 2000:
-                progress_callback(f"Checking cache ({len(uncached):,})...", 0, 0)
+                progress_callback(f"Checking cache ({len(uncached):,})...", total_recs, total_recs)
             l2_candidates = self._find_l2_candidates(conn, "cache_images", uncached, stop_check=stop_check)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
@@ -621,7 +621,7 @@ class CacheManager:
                 if known_sizes:
                     sieve_candidates = [r for r in uncached_l3 if r.size in known_sizes]
                     if progress_callback and len(sieve_candidates) > 500:
-                        progress_callback(f"Checking cache signatures ({len(sieve_candidates):,})...", 0, 0)
+                        progress_callback(f"Checking cache signatures ({len(sieve_candidates):,})...", total_recs, total_recs)
                     self._populate_prefix_hashes_parallel(sieve_candidates, stop_check=stop_check)
                     hashed_candidates = [r for r in sieve_candidates if r.prefix_hash]
                     l3_upserts = []

@@ -58,8 +58,8 @@ Every scan operates in **3 distinct, deterministic stages**, tailored specifical
 | Stage | 📁 Duplicate Files (Exact) | 🖼️ Similar Images (Visual) | 🎬 Similar Videos (Temporal) |
 | :--- | :--- | :--- | :--- |
 | **Stage 1/3**<br>*(Discovery)* | **Scanning Folders**<br>Exact file-size bucket grouping | **Scanning Folders**<br>Image format indexing & spatial sort | **Scanning Folders**<br>Video container & DVR crawl |
-| **Stage 2/3**<br>*(Sieve & Signatures)* | **Calculating File Signatures**<br>8 KB Head+Tail composite sieve | **Extracting Visual Signatures**<br>2D DCT Frequency Hash (GPU FP16) | **Extracting Video Signatures**<br>5-Keyframe Micro-Seek (PyAV + GPU) |
-| **Stage 3/3**<br>*(Verification & Math)* | **Calculating Hashes**<br>Streaming DMA reads (up to 3.4+ GB/s) | **Comparing Visual Similarity**<br>All-to-all Cosine Matrix (VRAM) | **Comparing Video Similarity**<br>Temporal Tensor Core Matching |
+| **Stage 2/3**<br>*(Sieve & Signatures)* | **Calculating Partial Hashes**<br>Direct full hash &le; 256 KB; 8 KB Head+Tail sieve above | **Extracting Visual Signatures**<br>2D DCT Frequency Hash (GPU FP16) | **Extracting Video Signatures**<br>5-Keyframe Micro-Seek (PyAV + GPU) |
+| **Stage 3/3**<br>*(Verification & Math)* | **Calculating Full Hashes**<br>Parallel 512 KB streaming `xxHash64` | **Comparing Visual Similarity**<br>All-to-all Cosine Matrix (VRAM) | **Comparing Video Similarity**<br>Temporal Tensor Core Matching |
 | **Result Phase** | **$O(1)$ Hash Table Grouping**<br>Bit-for-bit identical clusters | **Mutual Similarity Grouping**<br>Perceptual clusters (70%–100% slider)| **Mutual Similarity Grouping**<br>Strict anti-chaining cluster isolation |
 
 ---
@@ -69,13 +69,14 @@ Every scan operates in **3 distinct, deterministic stages**, tailored specifical
 * **Stage 1/3: Scanning Folders (Discovery & File-Size Grouping):**
   * Crawls selected folders, applies exclusion rules, protects **Reference Folders** (`Ref`), and isolates files by exact byte size.
   * Files with unique file sizes are immediately eliminated without touching disk storage.
-* **Stage 2/3: Calculating File Signatures (8 KB Head + Tail Sieve & SQLite WAL Cache):**
+* **Stage 2/3: Calculating Partial Hashes (256 KB Fast-Path, 8 KB Head + Tail Sieve & SQLite WAL Cache):**
   * Consults the persistent local SQLite WAL database (`DupeClean.db`).
-  * For uncached candidates with identical sizes, reads the first 4 KB and the last 4 KB into unbuffered DMA memory to compute an instant composite `xxHash64` signature.
-  * **Efficiency:** Discards over **90% of non-duplicate candidates** in less than 1 millisecond per file, preventing unnecessary reading of multi-gigabyte files.
-* **Stage 3/3: Calculating Hashes (Zero-Copy Streaming & NVMe Saturation):**
-  * For remaining candidates passing the 8 KB sieve, reads complete file contents using pre-allocated 512 KB unbuffered DMA buffers (`buffering=0` with `readinto`).
-  * Distributes reads across 32 concurrent worker threads, saturating high-speed NVMe/SSD bandwidth (up to **3.4+ GB/s**) to compute cryptographic 64-bit digests in minimum time.
+  * Small and medium uncached files (`<= 256 KB`) are read once in full (`xxHash64`), resolving immediately in Stage 2 without reopening in Stage 3.
+  * For larger uncached candidates (`> 256 KB`) with identical sizes, reads the first 4 KB and last 4 KB to compute an instant composite `xxHash64` partial hash.
+  * **Efficiency:** Eliminates double-open overhead on tiny/medium files while discarding over **90% of non-duplicate large candidates** in less than 1 millisecond per file.
+* **Stage 3/3: Calculating Full Hashes (Parallel Streaming & I/O Scaling):**
+  * For remaining larger candidates (`> 256 KB`) passing the 8 KB sieve, reads complete file contents using pre-allocated 512 KB streaming buffers (`buffering=0` with `readinto`) to avoid per-chunk allocations and Python buffering overhead.
+  * Dynamically scales concurrent reader threads to your CPU (`4` to `32` threads based on `os.cpu_count()`), saturating available disk bandwidth to compute high-speed `xxHash64` digests in minimum time.
 * **Result Phase:** Instantaneous $O(1)$ in-memory hash table clustering. 100% bit-for-bit identical guarantee with zero GPU load.
 
 ---
@@ -86,7 +87,7 @@ Every scan operates in **3 distinct, deterministic stages**, tailored specifical
   * Gathers photos and graphics (`.jpg`, `.png`, `.webp`, `.tiff`, `.bmp`, `.raw`), filters corrupted files, and applies parent directory sorting for optimal NTFS seek efficiency.
 * **Stage 2/3: Extracting Visual Signatures (Parallel Decoding & GPU Tensor Hashing):**
   * Consults SQLite WAL cache for pre-computed 1,536-byte visual feature vectors.
-  * Multi-process CPU workers decode uncached images, convert them to normalized grayscale tensors, and transfer batches to GPU VRAM.
+  * Multi-threaded CPU workers (`4` to `32` threads) decode uncached images, convert them to normalized grayscale/RGB tensors, and transfer batches (`256`–`1,024` items depending on VRAM) to GPU VRAM.
   * NVIDIA RTX Tensor Cores compute **2D Discrete Cosine Transform (2D DCT)** frequency signatures in half-precision (FP16) in less than 0.5 ms per batch.
 * **Stage 3/3: Comparing Visual Similarity (Mass Tensor Core Matrix Multiplication):**
   * All image vectors reside in GPU VRAM as a contiguous matrix.
@@ -112,17 +113,21 @@ Every scan operates in **3 distinct, deterministic stages**, tailored specifical
 
 ### 💡 Frequently Asked Questions on Hardware Usage
 
-#### *"Why is my Disk read speed at 100% (~1–3+ GB/s) during Duplicate Files Stage 3?"*
-To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses zero-copy direct DMA streaming to saturate your drive's physical sequential read speed, ensuring this unavoidable reading phase finishes as fast as humanly possible.
+#### *"Why does Duplicate Files run two hashing stages (Partial Hashes vs. Full Hashes)?"*
+To mathematically guarantee two files are 100% bit-for-bit identical, every byte must be evaluated—a single differing byte in the middle of a multi-gigabyte file can only be detected by a full hash:
+* **Partial Hashes (Stage 2):** Small and medium files (`<= 256 KB`) are hashed in full on the first open pass (no double-open overhead). For larger files (`> 256 KB`), DupeClean reads only **8 KB (4 KB head + 4 KB tail)** to filter out 90%+ of non-duplicates in milliseconds.
+* **Full Hashes (Stage 3):** Only larger files (`> 256 KB`) that match on both size and 8 KB partial hash are read end-to-end with streaming `xxHash64` for 100% verification.
+
+#### *"Why can Disk read speed hit 100% during Duplicate Files Stage 3?"*
+To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses multi-threaded 512 KB streaming buffers (`buffering=0` + `readinto`) to keep sequential storage throughput saturated so this unavoidable reading phase finishes as fast as possible.
 
 #### *"Why does my RTX GPU stay near 0% in Task Manager during Stage 2 & 3 of Image/Video scans?"*
-During Stage 2, CPU workers decode images and extract video keyframes from disk. Once a batch of 128 frames is ready, the RTX GPU processes it in **fractions of a millisecond** (<0.5 ms) and immediately waits for the next disk/CPU batch. Because the GPU compute finishes so quickly, Windows Task Manager's 1-second average sampler shows near 0% until the all-to-all mass matrix multiplication in Stage 3 begins.
+During Stage 2, CPU workers decode images and extract video keyframes from disk. Once a batch is ready (`256`–`1,024` images depending on VRAM, or `128` videos), the RTX GPU processes it in **fractions of a millisecond** (<0.5 ms) and immediately waits for the next disk/CPU batch. Because the GPU compute finishes so quickly, Windows Task Manager's 1-second average sampler shows near 0% until the all-to-all mass matrix multiplication in Stage 3 begins.
 
-#### *"How does DupeClean adapt to different CPUs (e.g., Core i9 vs. Ryzen 5)?"*
-Worker allocation scales dynamically based on logical processor count:
-* **Intel Core i9 / Ryzen 9 (16–32 threads):** 16–32 workers (~50–60 videos/s on raw DVR files, 250+ videos/s on MP4).
-* **AMD Ryzen 5 / Core i5 (12 threads):** 6–12 workers (~15 videos/s on raw DVR files, 70+ videos/s on MP4).
-* A percentage of CPU headroom is always preserved so Windows, background audio, and the UI remain completely fluid and responsive.
+#### *"How does DupeClean adapt to different CPUs (e.g., 4-core laptops vs. Core i9 / Ryzen 9)?"*
+Worker allocation scales dynamically from `os.cpu_count()`:
+* **Exact Hashing & Image Decoding:** Scales from **4 to 32 concurrent threads** matching your CPU logical core count.
+* **Video Keyframe Extraction (`ProcessPoolExecutor`):** Allocates roughly **50% of logical cores (4 to 16 parallel processes)** so system responsiveness stays intact even on massive multi-process DVR decodes (e.g., 16 video processes on a 32-thread CPU, or 6 processes on a 12-thread CPU).
 
 #### *"Does it automatically optimize for different RTX GPUs (RTX 3070 vs. 3090 vs. 5090)?"*
 Yes. The `get_optimal_gpu_budgets()` engine inspects VRAM capacity and free headroom in real time via `torch.cuda.mem_get_info()`:
