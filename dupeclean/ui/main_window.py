@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         self.latest_current: int = 0
         self.latest_total: int = 0
         self._was_cancelled: bool = False
+        self._is_busy: bool = False
 
         # Temporizador independente da UI para contagem contínua e taxa de iteração
         self.ui_timer = QTimer(self)
@@ -88,6 +89,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 560)
         self._init_ui()
         self._restore_app_state()
+        self._sync_controls_state(busy=False)
 
     def _restore_app_state(self):
         """Restaura pastas salvas e preferências anteriores a partir do DupeClean.db."""
@@ -98,6 +100,8 @@ class MainWindow(QMainWindow):
                 self.folder_panel.import_state(saved_folders)
         except Exception as e:
             print(f"[WARN] Could not restore saved folders: {e}")
+        finally:
+            self._sync_controls_state(busy=False)
 
     def _init_ui(self):
         central_widget = QWidget()
@@ -387,6 +391,7 @@ class MainWindow(QMainWindow):
         # Painel de Pastas (Incluídas com Ref e Excluídas) - BASE
         self.folder_panel = FolderPanel()
         self.folder_panel.folders_cleared.connect(self._on_folders_cleared)
+        self.folder_panel.folders_changed.connect(lambda _cnt: self._sync_controls_state())
         self.v_splitter.addWidget(self.folder_panel)
 
         self.v_splitter.setSizes([520, 240])
@@ -527,36 +532,38 @@ class MainWindow(QMainWindow):
             return f"{h:02d}:{m:02d}:{s:02d}"
         return f"{m:02d}:{s:02d}"
 
+    def _sync_controls_state(self, busy: Optional[bool] = None):
+        """Sincroniza habilitação de todos os botões conforme estado de execução, pastas e resultados (KISS)."""
+        if busy is not None:
+            self._is_busy = busy
+        is_busy = bool(
+            getattr(self, "_is_busy", False)
+            or (self.worker and self.worker.isRunning())
+            or (getattr(self, "file_worker", None) and self.file_worker.isRunning())
+        )
+        has_folders = self.folder_panel.table_included.rowCount() > 0
+        has_results = bool(getattr(self.results_widget, "groups", None))
+        has_sel = self.results_widget.has_selected_files()
+
+        self.btn_scan.setEnabled(has_folders and not is_busy)
+        self.btn_stop.setEnabled(is_busy)
+        self.btn_clear_cache.setEnabled(not is_busy)
+        self.sidebar_modes.setEnabled(not is_busy)
+        self.slider_sim.setEnabled(not is_busy)
+        self.folder_panel.setEnabled(not is_busy)
+        self.btn_select_menu.setEnabled(has_results and not is_busy)
+        self.btn_save.setEnabled(has_results and not is_busy)
+        self.btn_move.setEnabled(has_sel and not is_busy)
+        self.btn_delete_trash.setEnabled(has_sel and not is_busy)
+        self.btn_delete_perm.setEnabled(has_sel and not is_busy)
+
     def _set_scanning_state(self, scanning: bool):
         """Enables/disables UI controls based on scan execution state (KISS)."""
-        self.btn_scan.setEnabled(not scanning)
-        self.btn_stop.setEnabled(scanning)
-        self.btn_clear_cache.setEnabled(not scanning)
-        self.sidebar_modes.setEnabled(not scanning)
-        self.slider_sim.setEnabled(not scanning)
-        self.folder_panel.setEnabled(not scanning)
-        self.btn_select_menu.setEnabled(not scanning)
-        self.btn_save.setEnabled(not scanning)
-
-        has_sel = self.results_widget.has_selected_files() and not scanning
-        self.btn_move.setEnabled(has_sel)
-        self.btn_delete_trash.setEnabled(has_sel)
-        self.btn_delete_perm.setEnabled(has_sel)
+        self._sync_controls_state(busy=scanning)
 
     def _set_action_busy_state(self, busy: bool):
         """Enables/disables UI controls while a background file action (trash/delete/move) is running."""
-        self.btn_scan.setEnabled(not busy)
-        self.btn_stop.setEnabled(busy)
-        self.btn_clear_cache.setEnabled(not busy)
-        self.sidebar_modes.setEnabled(not busy)
-        self.slider_sim.setEnabled(not busy)
-        self.folder_panel.setEnabled(not busy)
-        self.btn_select_menu.setEnabled(not busy)
-        self.btn_save.setEnabled(not busy)
-        has_sel = self.results_widget.has_selected_files() and not busy
-        self.btn_move.setEnabled(has_sel)
-        self.btn_delete_trash.setEnabled(has_sel)
-        self.btn_delete_perm.setEnabled(has_sel)
+        self._sync_controls_state(busy=busy)
 
     @Slot(str, int, int)
     def _on_operation_progress(self, title: str, current: int, total: int):
@@ -694,6 +701,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "preview_panel"):
             self.preview_panel.clear()
             self.preview_panel.setVisible(False)
+        self._sync_controls_state()
 
         self.lbl_status.setText("Ready to scan. Add folders below.")
 
@@ -1117,7 +1125,6 @@ class MainWindow(QMainWindow):
     @Slot(set, list)
     def _on_file_action_finished(self, deleted_set: set, errors: list):
         self._on_operation_progress("", 0, 0)
-        self._set_action_busy_state(False)
 
         action = getattr(self, "_action_type", "delete")
         dest_dir = getattr(self, "_action_dest_dir", None)
@@ -1128,6 +1135,7 @@ class MainWindow(QMainWindow):
             self.lbl_timer.setText(f"Done in {self._format_duration(elapsed)}")
 
         self.results_widget.remove_deleted_files(deleted_set)
+        self._set_action_busy_state(False)
 
         if action == "trash":
             if errors:

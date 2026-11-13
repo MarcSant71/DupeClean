@@ -667,9 +667,9 @@ class HelpDialog(QDialog):
                 Double-click any column header (<b>Size, Name, Similarity, Date, Full Path</b>) to cycle through 3 sorting states:
             </p>
             <ol>
-                <li><b>First Double-Click:</b> <b>Ascending</b> order (▲ native indicator).</li>
-                <li><b>Second Double-Click:</b> <b>Descending</b> order (▼ native indicator).</li>
-                <li><b>Third Double-Click:</b> <b>Normal / Unsorted</b> (restores original scan order and clears indicator).</li>
+                <li><b>First Double-Click:</b> <b>Ascending</b> order (displays ▲).</li>
+                <li><b>Second Double-Click:</b> <b>Descending</b> order (displays ▼).</li>
+                <li><b>Third Double-Click:</b> <b>Normal / Unsorted</b> (restores original scan order and clears the symbol).</li>
             </ol>
             <p>
                 <i>Note: Checked files and selection metrics are 100% preserved during all sorting operations.</i>

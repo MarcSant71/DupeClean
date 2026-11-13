@@ -1,5 +1,12 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.3.2
+- **Context-Aware Button & Control States (`main_window.py`, `folder_panel.py`, `test_ui_button_states.py`):**
+  - Disabled `Scan` when no scan folders are queued, disabled `Select` and `Save` when the results table is empty, and disabled `- Remove Selected`, `Clear All`, and `- Remove` (Excluded) whenever those actions have nothing to act on.
+  - Synchronized button states dynamically across folder additions/removals, scan completion, and post-delete/trash/move cleanup.
+- **Help Documentation Polish (`help_dialog.py`):**
+  - Simplified column-sorting instructions to describe double-click ascending/descending (`▲` / `▼`) and clear behavior cleanly.
+
 ### What's New in v1.3.1
 - **Unified Centered Hardware Badge (`main_window.py`):**
   - Unified GPU (`#4ade80`) and CPU fallback (`#a1a1aa`) hardware badges onto a single centered layout with a crisp vector-rendered `12×12` antialiased status dot (`_create_status_dot_pixmap`) and `padding: 0px` QSS isolation.

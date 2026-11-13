@@ -101,6 +101,7 @@ class DeletableListWidget(QListWidget):
 class FolderPanel(QWidget):
     """Painel inferior com pastas incluídas e excluídas."""
     folders_cleared = Signal()
+    folders_changed = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,7 +125,10 @@ class FolderPanel(QWidget):
         self.table_included.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table_included.setColumnWidth(0, 50)
         self.table_included.paths_dropped.connect(self._add_multiple_included_paths)
+        self.table_included.itemSelectionChanged.connect(self._update_buttons_state)
+        self.table_included.model().rowsInserted.connect(self._on_included_rows_inserted)
         self.table_included.model().rowsRemoved.connect(self._on_included_rows_removed)
+        self.table_included.model().modelReset.connect(self._on_included_rows_removed)
         inc_layout.addWidget(self.table_included)
 
         # Action buttons for included folders
@@ -151,6 +155,10 @@ class FolderPanel(QWidget):
 
         self.list_excluded = DeletableListWidget()
         self.list_excluded.paths_dropped.connect(self._add_multiple_excluded_paths)
+        self.list_excluded.itemSelectionChanged.connect(self._update_buttons_state)
+        self.list_excluded.model().rowsInserted.connect(self._update_buttons_state)
+        self.list_excluded.model().rowsRemoved.connect(self._update_buttons_state)
+        self.list_excluded.model().modelReset.connect(self._update_buttons_state)
         exc_layout.addWidget(self.list_excluded)
 
         btn_layout_exc = QHBoxLayout()
@@ -164,6 +172,7 @@ class FolderPanel(QWidget):
         exc_layout.addLayout(btn_layout_exc)
 
         main_layout.addWidget(exc_group, stretch=1)
+        self._update_buttons_state()
 
     def _browse_included_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder to Scan")
@@ -211,8 +220,23 @@ class FolderPanel(QWidget):
         path_item.setFlags(path_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.table_included.setItem(row, 1, path_item)
 
-    def _on_included_rows_removed(self, parent, first, last):
-        if self.table_included.rowCount() == 0:
+    def _update_buttons_state(self, *args):
+        has_inc = self.table_included.rowCount() > 0
+        has_inc_sel = bool(self.table_included.selectedIndexes())
+        has_exc_sel = len(self.list_excluded.selectedItems()) > 0
+        self.btn_remove_inc.setEnabled(has_inc_sel)
+        self.btn_clear_inc.setEnabled(has_inc)
+        self.btn_remove_exc.setEnabled(has_exc_sel)
+
+    def _on_included_rows_inserted(self, *args):
+        self._update_buttons_state()
+        self.folders_changed.emit(self.table_included.rowCount())
+
+    def _on_included_rows_removed(self, *args):
+        self._update_buttons_state()
+        count = self.table_included.rowCount()
+        self.folders_changed.emit(count)
+        if count == 0:
             self.folders_cleared.emit()
 
     def _remove_selected_included(self):
