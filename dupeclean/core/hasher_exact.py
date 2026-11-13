@@ -224,7 +224,18 @@ def find_exact_duplicates(
         # Estágio 2: Assinatura composta (Head 4 KB + Tail 4 KB) e fast-path (<= 8 KB)
         # -------------------------------------------------------------------------
         flat_candidates = [f for grp in candidates_by_size for f in grp]
-        cached_exact = cache.get_exact_cache(flat_candidates, stop_check=stop_check)
+        if progress_callback:
+            _emit_progress(progress_callback, f"Checking cache ({total_candidates:,} candidates)...", 0, 0, 2)
+
+        def _exact_cache_cb(msg: str, curr: int, tot: int):
+            if progress_callback:
+                _emit_progress(progress_callback, msg, curr, tot, 2)
+
+        cached_exact = cache.get_exact_cache(
+            flat_candidates,
+            progress_callback=_exact_cache_cb if progress_callback else None,
+            stop_check=stop_check
+        )
         if stop_check and stop_check():
             return []
 

@@ -22,12 +22,9 @@ from dupeclean.core.models import FileRecord, ScanMode, ScanPath
 from dupeclean.core.scanner import get_volume_capabilities
 
 
-def populate_record_file_id(rec: FileRecord) -> None:
-    """Coleta volume_id e file_id reais via os.stat() apenas em volumes NTFS/ReFS."""
+def _stat_record_file_id(rec: FileRecord) -> None:
+    """Coleta volume_id e file_id reais via os.stat() assumindo volume já validado."""
     if rec.volume_id > 0 and rec.file_id > 0:
-        return
-    _, supports_fid = get_volume_capabilities(rec.path)
-    if not supports_fid:
         return
     try:
         st = os.stat(rec.path, follow_symlinks=False)
@@ -35,6 +32,16 @@ def populate_record_file_id(rec: FileRecord) -> None:
         rec.file_id = getattr(st, "st_ino", 0) or 0
     except OSError:
         pass
+
+
+def populate_record_file_id(rec: FileRecord) -> None:
+    """Coleta volume_id e file_id reais via os.stat() apenas em volumes NTFS/ReFS."""
+    if rec.volume_id > 0 and rec.file_id > 0:
+        return
+    _, supports_fid = get_volume_capabilities(rec.path)
+    if not supports_fid:
+        return
+    _stat_record_file_id(rec)
 
 
 def compute_prefix_hash(path: Path, size: int) -> Optional[str]:
@@ -320,25 +327,38 @@ class CacheManager:
     def _populate_file_ids_parallel(
         self,
         records: List[FileRecord],
-        stop_check: Optional[Callable[[], bool]] = None
+        stop_check: Optional[Callable[[], bool]] = None,
+        assume_supported: bool = False
     ) -> None:
-        """Preenche (volume_id, file_id) via os.stat() em paralelo apenas onde necessário."""
-        to_stat = [r for r in records if (r.volume_id == 0 or r.file_id == 0) and get_volume_capabilities(r.path)[1]]
+        """Preenche (volume_id, file_id) via os.stat() em lotes paralelos apenas onde necessário."""
+        if assume_supported:
+            to_stat = [r for r in records if r.volume_id == 0 or r.file_id == 0]
+        else:
+            to_stat = [
+                r for r in records
+                if (r.volume_id == 0 or r.file_id == 0) and get_volume_capabilities(r.path)[1]
+            ]
         if not to_stat or (stop_check and stop_check()):
             return
-        if len(to_stat) <= 32:
+        if len(to_stat) <= 256:
             for r in to_stat:
                 if stop_check and stop_check():
                     return
-                populate_record_file_id(r)
+                _stat_record_file_id(r)
             return
+
+        chunk_size = 2000
+        chunks = [to_stat[i:i + chunk_size] for i in range(0, len(to_stat), chunk_size)]
+
+        def _stat_chunk(batch: List[FileRecord]) -> None:
+            for rec in batch:
+                if stop_check and stop_check():
+                    return
+                _stat_record_file_id(rec)
 
         workers = min(16, max(4, os.cpu_count() or 4))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            for r in to_stat:
-                if stop_check and stop_check():
-                    break
-                pool.submit(populate_record_file_id, r)
+            list(pool.map(_stat_chunk, chunks))
 
     def _populate_prefix_hashes_parallel(
         self,
@@ -429,7 +449,7 @@ class CacheManager:
         if not known_sizes:
             return []
         candidates = [r for r in eligible if r.size in known_sizes]
-        self._populate_file_ids_parallel(candidates, stop_check=stop_check)
+        self._populate_file_ids_parallel(candidates, stop_check=stop_check, assume_supported=True)
         return [r for r in candidates if r.volume_id > 0 and r.file_id > 0]
 
     def _cleanup_dead_paths(
@@ -454,6 +474,7 @@ class CacheManager:
     def get_exact_cache(
         self,
         records: List[FileRecord],
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
         stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
         """
@@ -468,11 +489,12 @@ class CacheManager:
             return results
 
         chunk_size = 900
+        total_recs = len(records)
         backfill_recs: List[FileRecord] = []
 
         with self._get_connection() as conn:
             # 1. Tier 1 (L1 - In-place Path): Consulta rápida por caminho direto
-            for i in range(0, len(records), chunk_size):
+            for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
                     return results
                 chunk = records[i:i + chunk_size]
@@ -491,11 +513,17 @@ class CacheManager:
                         if c_vol_id == 0 or c_f_id == 0:
                             backfill_recs.append(rec)
 
+                if progress_callback and total_recs > 2000 and (i % 9000 == 0 or i + chunk_size >= total_recs):
+                    done = min(i + chunk_size, total_recs)
+                    progress_callback(f"Checking cache ({done:,}/{total_recs:,})...", 0, 0)
+
             if backfill_recs:
                 self._backfill_l1_file_ids(conn, "cache_exact", backfill_recs, stop_check=stop_check)
 
             # 2. Tier 2 (L2 - NTFS File ID Lazy): Resiliência a pastas e arquivos renomeados/movidos no mesmo volume
             uncached = [r for r in records if str(r.path) not in results]
+            if progress_callback and len(uncached) > 2000:
+                progress_callback(f"Checking moved files ({len(uncached):,})...", 0, 0)
             l2_candidates = self._find_l2_candidates(conn, "cache_exact", uncached, stop_check=stop_check)
             if l2_candidates and not (stop_check and stop_check()):
                 upserts = []
@@ -513,7 +541,7 @@ class CacheManager:
                         l2_map[(r.file_id, r.volume_id)].append(r)
 
                     cursor = conn.execute(
-                        f"SELECT path, size, mtime, prefix_hash, full_hash, volume_id, file_id FROM cache_exact WHERE file_id IN ({placeholders})",
+                        f"SELECT path, size, mtime, prefix_hash, full_hash, volume_id, file_id FROM cache_exact WHERE file_id IN ({placeholders}) AND file_id != 0",
                         unique_fids
                     )
                     for row in cursor.fetchall():
@@ -640,7 +668,7 @@ class CacheManager:
                         l2_map[(r.file_id, r.volume_id)].append(r)
 
                     cursor = conn.execute(
-                        f"SELECT path, size, mtime, embedding, volume_id, file_id, prefix_hash FROM cache_images WHERE file_id IN ({placeholders})",
+                        f"SELECT path, size, mtime, embedding, volume_id, file_id, prefix_hash FROM cache_images WHERE file_id IN ({placeholders}) AND file_id != 0",
                         unique_fids
                     )
                     for row in cursor.fetchall():
@@ -686,7 +714,7 @@ class CacheManager:
                             continue
                         placeholders = ",".join("?" for _ in unique_hashes)
                         cursor = conn.execute(
-                            f"SELECT size, prefix_hash, embedding FROM cache_images WHERE prefix_hash IN ({placeholders})",
+                            f"SELECT size, prefix_hash, embedding FROM cache_images WHERE prefix_hash IN ({placeholders}) AND prefix_hash IS NOT NULL",
                             unique_hashes
                         )
                         match_map: Dict[Tuple[int, str], bytes] = {}
@@ -818,7 +846,7 @@ class CacheManager:
                         l2_map[(r.file_id, r.volume_id)].append(r)
 
                     cursor = conn.execute(
-                        f"SELECT path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash FROM cache_videos WHERE file_id IN ({placeholders})",
+                        f"SELECT path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash FROM cache_videos WHERE file_id IN ({placeholders}) AND file_id != 0",
                         unique_fids
                     )
                     for row in cursor.fetchall():
@@ -865,7 +893,7 @@ class CacheManager:
                             continue
                         placeholders = ",".join("?" for _ in unique_hashes)
                         cursor = conn.execute(
-                            f"SELECT size, prefix_hash, mtime, duration, embedding FROM cache_videos WHERE prefix_hash IN ({placeholders})",
+                            f"SELECT size, prefix_hash, mtime, duration, embedding FROM cache_videos WHERE prefix_hash IN ({placeholders}) AND prefix_hash IS NOT NULL",
                             unique_hashes
                         )
                         match_map: Dict[Tuple[int, str], List[Tuple[float, float, bytes]]] = defaultdict(list)

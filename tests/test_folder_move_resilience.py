@@ -355,6 +355,36 @@ class TestFolderMoveResilience(unittest.TestCase):
             hit_close_mtime = self.cache.get_video_cache([rec_b_close], expected_bytes=7680)
             self.assertIn(str(dav_b), hit_close_mtime)
 
+    def test_partial_indexes_used_for_l2_and_l3_queries(self):
+        """Garante que os SELECTs de L2 e L3 incluam o predicado do índice parcial e nunca façam SCAN."""
+        queries = [
+            ("idx_exact_fileid", "EXPLAIN QUERY PLAN SELECT path, size, mtime, prefix_hash, full_hash, volume_id, file_id FROM cache_exact WHERE file_id IN (1, 2) AND file_id != 0"),
+            ("idx_images_fileid", "EXPLAIN QUERY PLAN SELECT path, size, mtime, embedding, volume_id, file_id, prefix_hash FROM cache_images WHERE file_id IN (1, 2) AND file_id != 0"),
+            ("idx_videos_fileid", "EXPLAIN QUERY PLAN SELECT path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash FROM cache_videos WHERE file_id IN (1, 2) AND file_id != 0"),
+            ("idx_images_prefix_h", "EXPLAIN QUERY PLAN SELECT size, prefix_hash, embedding FROM cache_images WHERE prefix_hash IN ('a', 'b') AND prefix_hash IS NOT NULL"),
+            ("idx_videos_prefix_h", "EXPLAIN QUERY PLAN SELECT size, prefix_hash, mtime, duration, embedding FROM cache_videos WHERE prefix_hash IN ('a', 'b') AND prefix_hash IS NOT NULL"),
+        ]
+        with self.cache._get_connection() as conn:
+            for idx_name, sql in queries:
+                plan = " ".join(str(r[-1]) for r in conn.execute(sql).fetchall())
+                self.assertIn(idx_name, plan, msg=f"Esperado {idx_name} em: {plan}")
+                self.assertIn("INDEX ", plan, msg=f"Esperado uso de índice em: {plan}")
+                self.assertNotIn("SCAN ", plan, msg=f"Full table scan detectado: {plan}")
+
+    def test_exact_cache_emits_stage2_progress_callback(self):
+        """Garante sinalização imediata de progresso do Estágio 2 durante consulta ao cache exato."""
+        dummy_records = [
+            FileRecord(path=Path(self.temp_dir) / f"f_{i}.bin", size=128 + (i % 10), mtime=1000.0)
+            for i in range(2500)
+        ]
+        events = []
+        self.cache.get_exact_cache(
+            dummy_records,
+            progress_callback=lambda msg, curr, tot: events.append((msg, curr, tot))
+        )
+        self.assertGreater(len(events), 0)
+        self.assertTrue(any("Checking cache" in m for m, _, _ in events))
+
 
 if __name__ == "__main__":
     unittest.main()

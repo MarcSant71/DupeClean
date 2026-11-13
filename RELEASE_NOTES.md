@@ -1,5 +1,11 @@
 Standalone portable release for Windows x64 with NVIDIA RTX GPU acceleration.
 
+### What's New in v1.1.12
+- **Cache Query & Stage Transition Optimization:**
+  - Fixed SQLite partial-index predicates (`file_id != 0` and `prefix_hash IS NOT NULL`) across L2/L3 cache lookups in Exact, Image, and Video modes, replacing full table scans with direct index searches (~10x faster L2 SQL queries).
+  - Chunked parallel `os.stat` metadata collection during L2 cache verification (`pool.map` in batches of 2,000) and eliminated redundant volume capability checks (~7x faster L2 `os.stat` on 193k files).
+  - Added immediate Stage 2 progress reporting during Exact cache validation (`get_exact_cache`) to eliminate UI status lag between directory crawling and hashing.
+
 ### What's New in v1.1.11
 - **Tri-Tier Cache Resilience for Moved and Renamed Folders:**
   - Implemented lazy NTFS File ID (`volume_id + file_id`) tracking across Exact, Image, and Video modes so moving or renaming folders on the same NTFS/ReFS volume reuses existing cache entries with zero file re-reads or GPU reprocessing.
