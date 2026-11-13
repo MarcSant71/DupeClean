@@ -19,6 +19,7 @@ import torch
 import xxhash
 
 from dupeclean.core.models import FileRecord, ScanMode, ScanPath
+from dupeclean.core.db_schema import SchemaInitResult, ensure_database_schema
 from dupeclean.core.scanner import get_volume_capabilities
 
 
@@ -111,7 +112,7 @@ class CacheManager:
 
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or get_default_cache_db_path()
-        self._init_db()
+        self.schema_result: SchemaInitResult = self._init_db()
 
     @contextmanager
     def _get_connection(self):
@@ -134,109 +135,9 @@ class CacheManager:
         finally:
             conn.close()
 
-    def _init_db(self):
-        """Cria e configura o banco com parâmetros industriais de alta performance e resiliência."""
-        conn = sqlite3.connect(str(self.db_path), timeout=60.0)
-        try:
-            # Pragmas estruturais que devem ser configurados na inicialização do arquivo
-            conn.execute("PRAGMA page_size = 8192;")  # Páginas de 8 KB para alta eficiência em DBs gigantes
-            conn.execute("PRAGMA journal_mode = WAL;")  # Write-Ahead Logging
-            conn.execute("PRAGMA journal_size_limit = 67108864;")  # Limita arquivo WAL a 64 MB (evita inchaço)
-            conn.execute("PRAGMA wal_autocheckpoint = 2000;")  # Checkpoint regular a cada 2000 páginas
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS cache_exact (
-                    path TEXT PRIMARY KEY,
-                    size INTEGER NOT NULL,
-                    mtime REAL NOT NULL,
-                    prefix_hash TEXT,
-                    full_hash TEXT,
-                    volume_id INTEGER DEFAULT 0,
-                    file_id INTEGER DEFAULT 0
-                );
-
-                CREATE TABLE IF NOT EXISTS cache_images (
-                    path TEXT PRIMARY KEY,
-                    size INTEGER NOT NULL,
-                    mtime REAL NOT NULL,
-                    embedding BLOB NOT NULL,
-                    volume_id INTEGER DEFAULT 0,
-                    file_id INTEGER DEFAULT 0,
-                    prefix_hash TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS cache_videos (
-                    path TEXT PRIMARY KEY,
-                    size INTEGER NOT NULL,
-                    mtime REAL NOT NULL,
-                    duration REAL NOT NULL,
-                    embedding BLOB NOT NULL,
-                    volume_id INTEGER DEFAULT 0,
-                    file_id INTEGER DEFAULT 0,
-                    prefix_hash TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS app_settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-            """)
-
-            # Migração transparente de colunas para bancos pré-existentes
-            def _add_col(table: str, col: str, col_type: str):
-                cur = conn.execute(f"PRAGMA table_info({table});")
-                cols = {row[1] for row in cur.fetchall()}
-                if col not in cols:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type};")
-
-            _add_col("cache_exact", "volume_id", "INTEGER DEFAULT 0")
-            _add_col("cache_exact", "file_id", "INTEGER DEFAULT 0")
-
-            _add_col("cache_images", "volume_id", "INTEGER DEFAULT 0")
-            _add_col("cache_images", "file_id", "INTEGER DEFAULT 0")
-            _add_col("cache_images", "prefix_hash", "TEXT")
-
-            _add_col("cache_videos", "volume_id", "INTEGER DEFAULT 0")
-            _add_col("cache_videos", "file_id", "INTEGER DEFAULT 0")
-            _add_col("cache_videos", "prefix_hash", "TEXT")
-
-            # Índices parciais de altíssima performance para L2 (File ID), L3 (Prefix Hash) e pré-filtro por tamanho
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exact_size ON cache_exact(size);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exact_fileid ON cache_exact(file_id, volume_id) WHERE file_id != 0;")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exact_prefix_h ON cache_exact(prefix_hash, size) WHERE prefix_hash IS NOT NULL;")
-
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_images_size ON cache_images(size);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_images_fileid ON cache_images(file_id, volume_id) WHERE file_id != 0;")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_images_prefix_h ON cache_images(prefix_hash, size) WHERE prefix_hash IS NOT NULL;")
-
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_size ON cache_videos(size);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_fileid ON cache_videos(file_id, volume_id) WHERE file_id != 0;")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_prefix_h ON cache_videos(prefix_hash, size) WHERE prefix_hash IS NOT NULL;")
-
-            # Remove índices secundários obsoletos
-            conn.execute("DROP INDEX IF EXISTS idx_exact_lookup;")
-            conn.execute("DROP INDEX IF EXISTS idx_images_lookup;")
-            conn.execute("DROP INDEX IF EXISTS idx_videos_lookup;")
-            conn.execute("DROP INDEX IF EXISTS idx_exact_prefix;")
-            conn.execute("DROP INDEX IF EXISTS idx_images_prefix;")
-            conn.execute("DROP INDEX IF EXISTS idx_videos_prefix;")
-            # Purga embeddings de versões obsoletas (preserva tombstones com duration == -1.0)
-            conn.execute("DELETE FROM cache_images WHERE length(embedding) != 1536 AND length(embedding) != 0;")
-            conn.execute("DELETE FROM cache_videos WHERE length(embedding) != 7680 AND duration != -1.0;")
-
-            # Migração de versão da assinatura exata (v1 4KB head -> v2 Head 4KB + Tail 4KB):
-            # Invalida prefix_hash uma única vez para recalcular assinaturas compostas sem perder nenhum full_hash
-            cur = conn.execute("SELECT value FROM app_settings WHERE key = 'signature_version';")
-            row = cur.fetchone()
-            if not row or row[0] != "v2_head_tail":
-                conn.execute("UPDATE cache_exact SET prefix_hash = NULL;")
-                conn.execute("""
-                    INSERT INTO app_settings (key, value) VALUES ('signature_version', 'v2_head_tail')
-                    ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-                """)
-
-            conn.commit()
-        finally:
-            conn.close()
+    def _init_db(self) -> SchemaInitResult:
+        """Valida e adapta o schema de DupeClean.db para a versão atual via módulo db_schema."""
+        return ensure_database_schema(self.db_path)
 
     # -------------------------------------------------------------------------
     # 0. Gerenciamento de Configurações e Estado da Aplicação (app_settings)
