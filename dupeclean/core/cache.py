@@ -21,7 +21,11 @@ import torch
 import xxhash
 
 from dupeclean.core.models import FileRecord, ScanMode, ScanPath
-from dupeclean.core.db_schema import SchemaInitResult, ensure_database_schema
+from dupeclean.core.db_schema import (
+    SchemaInitResult,
+    ensure_database_schema,
+    reset_database_preserving_settings,
+)
 from dupeclean.core.scanner import get_volume_capabilities
 
 
@@ -1118,17 +1122,28 @@ class CacheManager:
 
     def clear(self, mode: Optional[ScanMode] = None):
         """Clear cached data for a specific mode or for all modes."""
+        if mode is None:
+            # Recreate the database preserving app_settings (instantaneous file unlink vs. slow row-by-row DELETE + VACUUM)
+            self.schema_result = reset_database_preserving_settings(
+                self.db_path, reason="user_clear"
+            )
+            return
+
+        table_map = {
+            ScanMode.EXACT: "cache_exact",
+            ScanMode.IMAGES: "cache_images",
+            ScanMode.VIDEOS: "cache_videos",
+        }
+        target_table = table_map.get(mode)
+        if not target_table:
+            return
+
+        from dupeclean.core.db_schema import _create_all_tables, _ensure_indexes
+
         with self._get_connection() as conn:
-            if mode == ScanMode.EXACT:
-                conn.execute("DELETE FROM cache_exact;")
-            elif mode == ScanMode.IMAGES:
-                conn.execute("DELETE FROM cache_images;")
-            elif mode == ScanMode.VIDEOS:
-                conn.execute("DELETE FROM cache_videos;")
-            else:
-                conn.execute("DELETE FROM cache_exact;")
-                conn.execute("DELETE FROM cache_images;")
-                conn.execute("DELETE FROM cache_videos;")
+            conn.execute(f"DROP TABLE IF EXISTS {target_table};")
+            _create_all_tables(conn)
+            _ensure_indexes(conn)
 
         # VACUUM must run outside a transaction on a clean connection
         conn = sqlite3.connect(str(self.db_path), timeout=60.0)

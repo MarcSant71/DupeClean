@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QListWidget,
     QListWidgetItem, QPushButton, QLabel, QSlider, QProgressBar,
     QMessageBox, QFileDialog, QSplitter, QFrame, QSizePolicy, QMenu,
-    QApplication, QStyledItemDelegate, QStyle, QStyleOptionViewItem
+    QApplication, QStyledItemDelegate, QStyle, QStyleOptionViewItem,
+    QStackedWidget
 )
 
 from dupeclean import __version__
@@ -30,7 +31,7 @@ from dupeclean.ui.results_table import ResultsWidget, format_size
 from dupeclean.ui.preview_panel import PreviewPanel
 from dupeclean.ui.progress_bar import SmoothProgressBar
 from dupeclean.ui.help_dialog import HelpDialog
-from dupeclean.worker import ScanWorker, FileActionWorker
+from dupeclean.worker import ScanWorker, FileActionWorker, CacheClearWorker
 
 
 class ModeItemDelegate(QStyledItemDelegate):
@@ -258,16 +259,64 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addStretch()
 
-        # Cache Management Button
+        # Cache Management (Inline Swap Card - zero modal popups)
+        self.cache_stack = QStackedWidget()
+        self.cache_stack.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
         self.btn_clear_cache = QPushButton("🧹 Clear Cache")
         self.btn_clear_cache.setStyleSheet(
-            "QPushButton { background-color: #202024; border: 1px solid #2e2e33; color: #a1a1aa; font-size: 11px; padding: 6px; border-radius: 4px; }"
+            "QPushButton { background-color: #202024; border: 1px solid #2e2e33; color: #a1a1aa; font-size: 13px; padding: 7px; border-radius: 4px; }"
             "QPushButton:hover { background-color: #27272a; color: #f43f5e; border-color: #f43f5e; }"
             "QPushButton:disabled { background-color: #18181b; border: 1px solid #27272a; color: #52525b; }"
         )
-        self.btn_clear_cache.setToolTip("Displays stats and clears the persistent hash and embedding cache.")
+        self.btn_clear_cache.setToolTip("Clears the persistent hash and embedding cache.")
         self.btn_clear_cache.clicked.connect(self._clear_cache_prompt)
-        sidebar_layout.addWidget(self.btn_clear_cache)
+
+        cache_confirm_card = QFrame()
+        cache_confirm_card.setObjectName("cacheConfirmCard")
+        cache_confirm_card.setStyleSheet(
+            "#cacheConfirmCard { background-color: #202024; border: 1px solid #3f3f46; border-radius: 4px; }"
+        )
+        confirm_layout = QVBoxLayout(cache_confirm_card)
+        confirm_layout.setContentsMargins(8, 7, 8, 7)
+        confirm_layout.setSpacing(6)
+
+        lbl_confirm = QLabel(
+            "<span style='font-size:13px; font-weight:600; color:#e4e4e7;'>Clear Cache</span>"
+            "<br><span style='font-size:11px; color:#a1a1aa;'>Confirm?</span>"
+        )
+        lbl_confirm.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_confirm.setStyleSheet("background: transparent; border: none;")
+        confirm_layout.addWidget(lbl_confirm)
+
+        confirm_btns = QHBoxLayout()
+        confirm_btns.setContentsMargins(0, 0, 0, 0)
+        confirm_btns.setSpacing(6)
+
+        self.btn_cache_yes = QPushButton("Yes")
+        self.btn_cache_yes.setStyleSheet(
+            "QPushButton { background-color: #27272a; border: 1px solid #3f3f46; color: #a1a1aa; font-size: 11px; padding: 4px 8px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #f43f5e; border-color: #f43f5e; color: #ffffff; }"
+            "QPushButton:focus { border-color: #f43f5e; color: #f43f5e; }"
+            "QPushButton:disabled { background-color: #18181b; border-color: #27272a; color: #52525b; }"
+        )
+        self.btn_cache_yes.clicked.connect(self._execute_inline_cache_clear)
+
+        self.btn_cache_no = QPushButton("No")
+        self.btn_cache_no.setStyleSheet(
+            "QPushButton { background-color: #27272a; border: 1px solid #38bdf8; color: #ffffff; font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #3f3f46; border-color: #38bdf8; color: #ffffff; }"
+            "QPushButton:disabled { background-color: #18181b; border-color: #27272a; color: #52525b; }"
+        )
+        self.btn_cache_no.clicked.connect(lambda: self.cache_stack.setCurrentIndex(0))
+
+        confirm_btns.addWidget(self.btn_cache_yes)
+        confirm_btns.addWidget(self.btn_cache_no)
+        confirm_layout.addLayout(confirm_btns)
+
+        self.cache_stack.addWidget(self.btn_clear_cache)
+        self.cache_stack.addWidget(cache_confirm_card)
+        sidebar_layout.addWidget(self.cache_stack)
 
         main_h_layout.addWidget(sidebar_widget)
 
@@ -540,6 +589,7 @@ class MainWindow(QMainWindow):
             getattr(self, "_is_busy", False)
             or (self.worker and self.worker.isRunning())
             or (getattr(self, "file_worker", None) and self.file_worker.isRunning())
+            or (getattr(self, "cache_worker", None) and self.cache_worker.isRunning())
         )
         has_folders = self.folder_panel.table_included.rowCount() > 0
         has_results = bool(getattr(self.results_widget, "groups", None))
@@ -548,6 +598,8 @@ class MainWindow(QMainWindow):
         self.btn_scan.setEnabled(has_folders and not is_busy)
         self.btn_stop.setEnabled(is_busy)
         self.btn_clear_cache.setEnabled(not is_busy)
+        if is_busy and hasattr(self, "cache_stack"):
+            self.cache_stack.setCurrentIndex(0)
         self.sidebar_modes.setEnabled(not is_busy)
         self.slider_sim.setEnabled(not is_busy)
         self.folder_panel.setEnabled(not is_busy)
@@ -713,36 +765,39 @@ class MainWindow(QMainWindow):
             pass
 
     def _clear_cache_prompt(self):
-        if self.worker and self.worker.isRunning():
+        if (
+            (self.worker and self.worker.isRunning())
+            or (getattr(self, "file_worker", None) and self.file_worker.isRunning())
+            or (getattr(self, "cache_worker", None) and self.cache_worker.isRunning())
+        ):
             return
 
-        cache = CacheManager()
-        stats = cache.get_stats()
-        total_items = stats["exact_count"] + stats["images_count"] + stats["videos_count"]
-        
-        msg = (
-            f"The persistent cache speeds up repeated scans.\n\n"
-            f"Current cache statistics:\n"
-            f"• Exact hashes saved: {stats['exact_count']}\n"
-            f"• Images cached: {stats['images_count']}\n"
-            f"• Videos cached: {stats['videos_count']}\n"
-            f"• Disk usage: {stats['db_size_mb']} MB\n\n"
-            f"Do you want to clear the persistent cache to force a full recomputation?"
-        )
-        confirm = QMessageBox.question(
-            self,
-            "Clear Persistent Cache",
-            msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if confirm == QMessageBox.StandardButton.Yes:
-            try:
-                cache.clear()
-                self.lbl_status.setText("Persistent cache cleared successfully.")
-                QMessageBox.information(self, "Cache Cleared", "All cached signatures have been removed.")
-            except Exception as e:
-                QMessageBox.critical(self, "Error Clearing Cache", f"Could not clear cache:\n{e}")
+        self.btn_cache_yes.setEnabled(True)
+        self.btn_cache_no.setEnabled(True)
+        self.cache_stack.setCurrentIndex(1)
+        self.btn_cache_no.setFocus()
+
+    def _execute_inline_cache_clear(self):
+        if getattr(self, "cache_worker", None) and self.cache_worker.isRunning():
+            return
+        self.btn_cache_yes.setEnabled(False)
+        self.btn_cache_no.setEnabled(False)
+
+        self.cache_worker = CacheClearWorker(parent=self)
+
+        def _on_finished(success: bool, error_msg: str):
+            self.cache_worker = None
+            self.btn_cache_yes.setEnabled(True)
+            self.btn_cache_no.setEnabled(True)
+            self.cache_stack.setCurrentIndex(0)
+            if success:
+                self.btn_clear_cache.setText("✓ Cache Cleared")
+                QTimer.singleShot(1500, lambda: self.btn_clear_cache.setText("🧹 Clear Cache"))
+            else:
+                QMessageBox.critical(self, "Error Clearing Cache", f"Could not clear cache:\n{error_msg}")
+
+        self.cache_worker.finished_clear.connect(_on_finished)
+        self.cache_worker.start()
 
     def _start_scan(self):
         scan_paths = self.folder_panel.get_scan_paths()
@@ -811,6 +866,9 @@ class MainWindow(QMainWindow):
         self.ui_timer.stop()
         if hasattr(self, "preview_panel"):
             self.preview_panel._worker.stop()
+
+        if getattr(self, "cache_worker", None) and self.cache_worker.isRunning():
+            self.cache_worker.wait(1000)
 
         # Persist included and excluded folders in DupeClean.db before closing
         try:

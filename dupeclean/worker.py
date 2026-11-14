@@ -228,3 +228,17 @@ class FileActionWorker(QThread):
                 self.progress.emit(f"{verb} ({idx:,}/{total:,}) - {path.name}", idx, total)
 
         self.finished_action.emit(deleted_set, errors)
+
+
+class CacheClearWorker(QThread):
+    """Clears the persistent SQLite cache in the background without freezing the UI."""
+
+    finished_clear = Signal(bool, str)  # (success, error_message)
+
+    def run(self):
+        try:
+            cache = CacheManager()
+            cache.clear()
+            self.finished_clear.emit(True, "")
+        except Exception as e:
+            self.finished_clear.emit(False, str(e))
