@@ -722,6 +722,18 @@ class HelpDialog(QDialog):
                 Drag folders directly from <b>Windows File Explorer</b> into the <b>Folders to Scan</b> or <b>Excluded Folders</b> tables.
             </p>
         </div>
+
+        <div class="card">
+            <h3 style="margin-top:0px; color:#38bdf8;">Persistent Cache (<code>Clear Cache</code>)</h3>
+            <p>
+                DupeClean saves computed file hashes and image/video embeddings in a local SQLite database (<code>DupeClean.db</code>)
+                so repeated scans run almost instantaneously.
+            </p>
+            <p>
+                Use <b>Clear Cache</b> in the bottom-left sidebar whenever you want to free cache disk space or force a full
+                recomputation from scratch. Your saved folder lists and preferences are always preserved.
+            </p>
+        </div>
         """
         return self._create_browser(html)
 

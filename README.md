@@ -168,6 +168,9 @@ For 99% of users, **no installation, no Python, and no command line setup is req
 2. Extract the archive using [7-Zip](https://www.7-zip.org/) or WinRAR.
 3. Launch **`DupeClean.exe`** directly. Everything (Python runtime, CUDA 12 libraries, and GPU models) is pre-bundled and runs out of the box.
 
+> [!NOTE]
+> **Persistent Cache (`Clear Cache`):** DupeClean stores computed file hashes and visual embeddings in `data/DupeClean.db` so repeated scans are nearly instantaneous. Use **Clear Cache** in the bottom-left sidebar to free cache disk space or force a full recomputation — your saved folder lists and preferences are always preserved.
+
 ---
 
 ## 💻 System Requirements
