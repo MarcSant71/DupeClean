@@ -9,7 +9,7 @@ import time
 import ctypes
 from pathlib import Path
 from typing import List, Set, Callable, Optional, Dict, Tuple
-from dupeclean.core.models import ScanPath, FileRecord, ScanMode
+from dupeclean.core.models import ScanPath, FileRecord, ScanMode, format_size
 
 # Cache de capacidades de volume por letra de unidade (ex: 'C:\\' -> ('NTFS', True))
 _VOLUME_CAPS_CACHE: Dict[str, Tuple[str, bool]] = {}
@@ -80,11 +80,12 @@ def crawl_directories(
     # Normalize exclusions
     resolved_exclusions = [p.resolve() for p in excluded_paths if p.exists()]
     total_scanned = 0
+    total_bytes = 0
     last_reported_count = 0
     last_report_time = 0.0
 
     def _crawl_folder(folder_path: Path, is_ref: bool):
-        nonlocal total_scanned, last_reported_count, last_report_time
+        nonlocal total_scanned, total_bytes, last_reported_count, last_report_time
         if stop_check and stop_check():
             return
 
@@ -92,7 +93,7 @@ def crawl_directories(
         if progress_callback and (now - last_report_time >= 0.08 or total_scanned - last_reported_count >= 100):
             last_reported_count = total_scanned
             last_report_time = now
-            progress_callback(f"Scanning folders... ({total_scanned:,} files found)", total_scanned, 0)
+            progress_callback(f"Scanning folders... ({total_scanned:,} files, {format_size(total_bytes)} found)", total_scanned, 0)
 
         try:
             _, supports_file_id = get_volume_capabilities(folder_path)
@@ -152,12 +153,13 @@ def crawl_directories(
                             ))
                             seen_paths.add(path_str)
                             total_scanned += 1
+                            total_bytes += size
 
                             now = time.time()
                             if progress_callback and (now - last_report_time >= 0.08 or total_scanned - last_reported_count >= 100):
                                 last_reported_count = total_scanned
                                 last_report_time = now
-                                progress_callback(f"Scanning folders... ({total_scanned:,} files found)", total_scanned, 0)
+                                progress_callback(f"Scanning folders... ({total_scanned:,} files, {format_size(total_bytes)} found)", total_scanned, 0)
 
                     except (OSError, PermissionError):
                         continue
@@ -184,6 +186,6 @@ def crawl_directories(
         return records
 
     if progress_callback:
-        progress_callback(f"Scanning folders... ({total_scanned:,} files found)", total_scanned, 0)
+        progress_callback(f"Scanning folders... ({total_scanned:,} files, {format_size(total_bytes)} found)", total_scanned, 0)
 
     return records

@@ -1,5 +1,10 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.3.4
+- **Processed vs. Total File & Byte Progress Telemetry (`scanner.py`, `hasher_exact.py`, `hasher_image.py`, `hasher_video.py`, `worker.py`, `models.py`):**
+  - Replaced elapsed timer and `it/s` / `files/s` rate counters with clear processed-vs-total file count and byte volume progress across all scan stages (e.g., `Calculating full hashes of 1,900/6,720 files (76.72 GB / 1.61 TB)...`).
+  - Removed `lbl_timer`, `ui_timer`, and `_update_telemetry_tick` from `MainWindow` and removed the `Throughput (it/s)` section from `HelpDialog`.
+
 ### What's New in v1.3.3
 - **Instant Background Cache Reset & Inline Sidebar Confirmation (`cache.py`, `worker.py`, `main_window.py`):**
   - Replaced slow row-by-row `DELETE FROM` + `VACUUM` on full cache clears with `reset_database_preserving_settings` (instant file unlink/recreation preserving `app_settings`) and `DROP TABLE` + recreate for single-mode clears.

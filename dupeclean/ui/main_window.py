@@ -7,7 +7,6 @@ similarity slider, and folder panel with Reference protection and Drag & Drop.
 import os
 import shutil
 import time
-from collections import deque
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import send2trash
@@ -73,16 +72,8 @@ class MainWindow(QMainWindow):
         self.worker: ScanWorker = None
         self.file_worker: Optional[FileActionWorker] = None
         self.current_mode = ScanMode.EXACT
-        self.start_time: Optional[float] = None
-        self.latest_current: int = 0
-        self.latest_total: int = 0
         self._was_cancelled: bool = False
         self._is_busy: bool = False
-
-        # UI-independent timer for continuous elapsed time and iteration rate
-        self.ui_timer = QTimer(self)
-        self.ui_timer.setInterval(250)
-        self.ui_timer.timeout.connect(self._update_telemetry_tick)
 
         self.setWindowIcon(self._create_app_icon())
         self.setWindowTitle(f"DupeClean v{__version__} - GPU-Accelerated Duplicate File Finder")
@@ -507,31 +498,14 @@ class MainWindow(QMainWindow):
         self.stage_widget.setSizePolicy(sp_stage)
         self.stage_widget.setVisible(False)
 
-        # Row 3: Status info and telemetry/timer
-        status_info_layout = QHBoxLayout()
-        status_info_layout.setSpacing(12)
-
+        # Row 3: Status info
         self.lbl_status = QLabel("Ready to scan. Add folders below.")
         self.lbl_status.setStyleSheet("color: #a1a1aa;")
         self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.lbl_status.setMinimumWidth(0)
 
-        # Telemetry Label (Elapsed Time / Iteration Rate) - frameless for consistency with lbl_status
-        self.lbl_timer = QLabel("00:00")
-        self.lbl_timer.setStyleSheet(
-            "font-weight: bold; font-family: 'Consolas', monospace; color: #38bdf8;"
-        )
-        self.lbl_timer.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        sp_timer = self.lbl_timer.sizePolicy()
-        sp_timer.setRetainSizeWhenHidden(True)
-        self.lbl_timer.setSizePolicy(sp_timer)
-        self.lbl_timer.setVisible(False)
-
-        status_info_layout.addWidget(self.lbl_status, stretch=1)
-        status_info_layout.addWidget(self.lbl_timer, stretch=0)
-
         status_container.addWidget(self.stage_widget)
-        status_container.addLayout(status_info_layout)
+        status_container.addWidget(self.lbl_status)
 
         right_layout.addLayout(status_container)
 
@@ -571,15 +545,6 @@ class MainWindow(QMainWindow):
         # If a header or non-multimedia file was clicked, collapse the panel
         self.preview_panel.clear()
         self.preview_panel.setVisible(False)
-
-    @staticmethod
-    def _format_duration(seconds: float) -> str:
-        s = int(seconds)
-        m, s = divmod(s, 60)
-        h, m = divmod(m, 60)
-        if h > 0:
-            return f"{h:02d}:{m:02d}:{s:02d}"
-        return f"{m:02d}:{s:02d}"
 
     def _sync_controls_state(self, busy: Optional[bool] = None):
         """Synchronize all button enabled states with execution, folders, and results state (KISS)."""
@@ -651,15 +616,6 @@ class MainWindow(QMainWindow):
                     self.progress_all.setRange(0, 100)
                 self.progress_all.setValue(overall_pct)
                 self.lbl_pct_all.setText(f"{overall_pct}%")
-
-                # Update continuous telemetry with assembly rate and total elapsed time in progress
-                if getattr(self, "start_time", None):
-                    now = time.time()
-                    elapsed = now - self.start_time
-                    elapsed_str = self._format_duration(elapsed)
-                    mount_elapsed = max(0.001, now - getattr(self, "_mounting_start_time", now))
-                    rate = current / mount_elapsed
-                    self.lbl_timer.setText(f"{rate:,.0f} it/s • {elapsed_str}")
             else:
                 self.lbl_stage_all.setVisible(False)
                 self.progress_all.setVisible(False)
@@ -819,7 +775,6 @@ class MainWindow(QMainWindow):
         self._was_cancelled = False
         self._is_scan_mounting = False
         self.current_stage_num = 1
-        self.stage_start_time = time.time()
         self.total_stages = 3 if self.current_mode == ScanMode.EXACT else 4
         display_total_stages = self.total_stages + 1
         self.stage_widget.setVisible(True)
@@ -829,14 +784,6 @@ class MainWindow(QMainWindow):
         self.progress_all.setValue(0)
         self.lbl_pct_all.setText("0%")
         self.lbl_status.setText(f"Stage 1/{display_total_stages}: Scanning folders...")
-
-        # Inicializa o temporizador
-        self.start_time = time.time()
-        self.latest_current = 0
-        self.latest_total = 0
-        self.lbl_timer.setText("00:00")
-        self.lbl_timer.setVisible(True)
-        self.ui_timer.start(250)
 
         self.worker = ScanWorker(
             scan_paths=scan_paths,
@@ -863,7 +810,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Ensures immediate termination of all background processes and threads upon closing the window."""
-        self.ui_timer.stop()
         if hasattr(self, "preview_panel"):
             self.preview_panel._worker.stop()
 
@@ -894,66 +840,10 @@ class MainWindow(QMainWindow):
         if app:
             app.quit()
 
-    @Slot()
-    def _update_telemetry_tick(self):
-        """Autonomous telemetry update every 250ms with sliding-window instantaneous rate."""
-        if getattr(self, "_is_scan_mounting", False):
-            return
-        if not self.start_time:
-            return
-        now = time.time()
-        elapsed = now - self.start_time
-        elapsed_str = self._format_duration(elapsed)
-
-        # During Stage 1 (file discovery), display only elapsed time.
-        # Iteration rate (it/s) is computed and displayed starting from Stage 2 when real progress occurs.
-        stage_num = getattr(self, "current_stage_num", 1)
-        if stage_num > 1 and self.latest_total > 0 and self.latest_current > 1 and elapsed > 0.5:
-            if not hasattr(self, "_telemetry_window"):
-                self._telemetry_window = deque()
-
-            self._telemetry_window.append((now, self.latest_current))
-            # Keep only samples from the last 3 seconds for true instantaneous speed
-            while len(self._telemetry_window) > 2 and (now - self._telemetry_window[0][0]) > 3.0:
-                self._telemetry_window.popleft()
-
-            t_old, c_old = self._telemetry_window[0]
-            dt = now - t_old
-            dc = self.latest_current - c_old
-            stale_sec = now - getattr(self, "_last_progress_change_time", now)
-
-            if stale_sec >= 1.0 and dc <= 0:
-                # No recent real progress: avoid computing artificially decaying it/s over a frozen total
-                self.lbl_timer.setText(f"{elapsed_str}")
-            elif dt >= 0.8 and dc > 0:
-                rate = dc / dt
-                self.lbl_timer.setText(f"{rate:,.0f} it/s • {elapsed_str}")
-            elif dt < 0.8 and dc > 0:
-                stage_elapsed = max(0.001, now - getattr(self, "stage_start_time", self.start_time))
-                rate = self.latest_current / stage_elapsed
-                self.lbl_timer.setText(f"{rate:,.0f} it/s • {elapsed_str}")
-            else:
-                self.lbl_timer.setText(f"{elapsed_str}")
-        else:
-            self.lbl_timer.setText(f"{elapsed_str}")
-
     @Slot(str, "qint64", "qint64", int, int)
     def _on_stage_progress(self, msg: str, current: int, total: int, stage_num: int, total_stages: int):
-        now = time.time()
-        # If stage changed, reset the phase internal timer and sliding window
-        if getattr(self, "current_stage_num", 1) != stage_num:
-            self.current_stage_num = stage_num
-            self.stage_start_time = now
-            self._last_progress_change_time = now
-            if hasattr(self, "_telemetry_window"):
-                self._telemetry_window.clear()
-        elif current != getattr(self, "latest_current", 0):
-            self._last_progress_change_time = now
-
         self.current_stage_num = stage_num
         self.total_stages = total_stages
-        self.latest_current = current
-        self.latest_total = total
 
         # Include the final results assembly stage for full consistency with the All Stages bar
         display_total_stages = total_stages + 1 if total_stages > 0 else total_stages
@@ -981,8 +871,6 @@ class MainWindow(QMainWindow):
             self.progress_all.setValue(overall_pct)
             self.lbl_pct_all.setText(f"{overall_pct}%")
 
-        self._update_telemetry_tick()
-
     @Slot(list)
     def _on_scan_finished(self, groups: List[DuplicateGroup]):
         self._was_cancelled = False
@@ -997,21 +885,13 @@ class MainWindow(QMainWindow):
                 app.processEvents()
 
         self._is_scan_mounting = bool(groups)
-        self._mounting_start_time = time.time()
         try:
             self.results_widget.set_results(groups)
         finally:
             self._is_scan_mounting = False
 
-        # Finish timer and scan state only after data is fully assembled
-        self.ui_timer.stop()
+        # Finish scan state only after data is fully assembled
         self._set_scanning_state(False)
-
-        total_time_str = ""
-        if self.start_time:
-            total_elapsed = time.time() - self.start_time
-            total_time_str = self._format_duration(total_elapsed)
-            self.lbl_timer.setText(f"Total Time: {total_time_str}")
 
         # Ensure 100% on both bars upon scan completion for clean visual closure
         self.progress_current.setRange(0, 100)
@@ -1026,16 +906,15 @@ class MainWindow(QMainWindow):
         total_reclaim = sum(g.reclaimable_bytes for g in groups)
         reclaim_mb = round(total_reclaim / (1024 * 1024), 2)
 
-        time_suffix = f" in {total_time_str}" if total_time_str else ""
         if groups:
             group_word = "group" if len(groups) == 1 else "groups"
             file_word = "file" if total_files == 1 else "files"
             self.lbl_status.setText(
-                f"Scan completed{time_suffix}! Found {len(groups)} duplicate {group_word} "
+                f"Scan completed! Found {len(groups)} duplicate {group_word} "
                 f"({total_files} {file_word}). Estimated space to free: {reclaim_mb} MB."
             )
         else:
-            self.lbl_status.setText(f"Scan completed{time_suffix}. No duplicates found with current filters.")
+            self.lbl_status.setText("Scan completed. No duplicates found with current filters.")
 
     @Slot(str)
     def _on_scan_error(self, err_msg: str):
@@ -1057,14 +936,10 @@ class MainWindow(QMainWindow):
     def _finalize_scan_ui(self):
         if getattr(self, "_is_scan_mounting", False):
             return
-        self.ui_timer.stop()
         self._set_scanning_state(False)
         if getattr(self, "_was_cancelled", False):
             self.stage_widget.setVisible(False)
             self.lbl_status.setText("Scan cancelled by user.")
-            if self.start_time:
-                elapsed = time.time() - self.start_time
-                self.lbl_timer.setText(f"Cancelled in {self._format_duration(elapsed)}")
             self._was_cancelled = False
 
     def _delete_selected_to_trash(self):
@@ -1150,7 +1025,6 @@ class MainWindow(QMainWindow):
 
     def _start_file_action(self, paths: List[Path], action: str, dest_dir: Optional[Path] = None):
         """Start executing the file action in the background with non-blocking visual feedback."""
-        self._action_start_time = time.time()
         self._action_type = action
         self._action_dest_dir = dest_dir
         self._action_total = len(paths)
@@ -1174,11 +1048,6 @@ class MainWindow(QMainWindow):
         stage_label = getattr(self, "_action_stage_label", "Processing... ")
         self._on_operation_progress(stage_label, current, total)
         self.lbl_status.setText(msg)
-        if hasattr(self, "_action_start_time") and self._action_start_time:
-            elapsed = time.time() - self._action_start_time
-            rate = current / max(0.001, elapsed)
-            elapsed_str = self._format_duration(elapsed)
-            self.lbl_timer.setText(f"{rate:.0f} files/s • {elapsed_str}")
 
     @Slot(set, list)
     def _on_file_action_finished(self, deleted_set: set, errors: list):
@@ -1187,10 +1056,6 @@ class MainWindow(QMainWindow):
         action = getattr(self, "_action_type", "delete")
         dest_dir = getattr(self, "_action_dest_dir", None)
         self.file_worker = None
-
-        if hasattr(self, "_action_start_time") and self._action_start_time:
-            elapsed = time.time() - self._action_start_time
-            self.lbl_timer.setText(f"Done in {self._format_duration(elapsed)}")
 
         self.results_widget.remove_deleted_files(deleted_set)
         self._set_action_busy_state(False)

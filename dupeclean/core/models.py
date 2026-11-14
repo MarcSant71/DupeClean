@@ -8,6 +8,16 @@ from typing import List, Optional, Any
 from enum import Enum
 
 
+def format_size(size_bytes: int) -> str:
+    """Format byte counts into human-readable units."""
+    val = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if val < 1024.0:
+            return f"{val:.2f} {unit}"
+        val /= 1024.0
+    return f"{val:.2f} PB"
+
+
 class ScanMode(Enum):
     EXACT = "exact"      # 100% identical (xxhash)
     IMAGES = "images"    # Similar images (GPU Tensor Hash / Embedding)

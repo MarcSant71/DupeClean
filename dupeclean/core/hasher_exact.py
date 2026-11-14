@@ -14,7 +14,7 @@ import time
 from collections import defaultdict
 from typing import List, Callable, Optional, Tuple, Dict, Any
 import xxhash
-from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
+from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode, format_size
 from dupeclean.core.cache import CacheManager
 from dupeclean.core.scanner import get_volume_capabilities
 
@@ -224,8 +224,15 @@ def find_exact_duplicates(
         # Stage 2: Composite signature (Head 4 KB + Tail 4 KB) and fast-path (<= 256 KB)
         # -------------------------------------------------------------------------
         flat_candidates = [f for grp in candidates_by_size for f in grp]
+        total_candidates_bytes = sum(r.size for r in flat_candidates)
         if progress_callback:
-            _emit_progress(progress_callback, f"Checking cache ({total_candidates:,} candidates)...", 0, total_candidates * 2, 2)
+            _emit_progress(
+                progress_callback,
+                f"Checking cache ({total_candidates:,} files, {format_size(total_candidates_bytes)})...",
+                0,
+                total_candidates * 2,
+                2,
+            )
 
         def _exact_cache_cb(msg: str, curr: int, tot: int):
             if progress_callback:
@@ -263,12 +270,14 @@ def find_exact_duplicates(
         cache_hits_prefix = total_candidates - len(to_header_check)
         remaining_headers = len(to_header_check)
         stage2_total = total_candidates + remaining_headers
+        remaining_header_bytes = sum(r.size for r in to_header_check)
+        cached_header_bytes = total_candidates_bytes - remaining_header_bytes
 
         if progress_callback:
             if remaining_headers == 0:
                 _emit_progress(
                     progress_callback,
-                    f"Loading cached partial hashes ({total_candidates:,}/{total_candidates:,})...",
+                    f"Loading cached partial hashes of {total_candidates:,}/{total_candidates:,} files ({format_size(total_candidates_bytes)} / {format_size(total_candidates_bytes)})...",
                     total_candidates,
                     total_candidates,
                     2,
@@ -276,7 +285,7 @@ def find_exact_duplicates(
             elif cache_hits_prefix > 0:
                 _emit_progress(
                     progress_callback,
-                    f"Loading cached partial hashes ({cache_hits_prefix:,}/{total_candidates:,})...",
+                    f"Loading cached partial hashes of {cache_hits_prefix:,}/{total_candidates:,} files ({format_size(cached_header_bytes)} / {format_size(total_candidates_bytes)})...",
                     total_candidates,
                     stage2_total,
                     2,
@@ -290,6 +299,7 @@ def find_exact_duplicates(
             header_workers = min(32, max(4, os.cpu_count() or 4))
             header_workers = min(header_workers, len(to_header_check))
             header_processed = cache_hits_prefix
+            header_processed_bytes = cached_header_bytes
             last_progress_time = time.perf_counter()
 
             task_queue: queue.Queue = queue.Queue(maxsize=4096)
@@ -315,7 +325,7 @@ def find_exact_duplicates(
                         if stop_check and stop_check():
                             break
                         try:
-                            result_queue.put(res, timeout=0.05)
+                            result_queue.put((rec.size, res), timeout=0.05)
                             break
                         except queue.Full:
                             continue
@@ -354,13 +364,14 @@ def find_exact_duplicates(
                         stop_workers.set()
                         break
                     try:
-                        res = result_queue.get(timeout=0.05)
+                        rec_size, res = result_queue.get(timeout=0.05)
                     except queue.Empty:
                         if not any(t.is_alive() for t in worker_threads) and task_queue.empty() and result_queue.empty():
                             break
                         continue
 
                     header_processed += 1
+                    header_processed_bytes += rec_size
                     if res is not None:
                         rec, h, is_full = res
                         if is_full:
@@ -380,7 +391,7 @@ def find_exact_duplicates(
                         stage2_done = total_candidates + (header_processed - cache_hits_prefix)
                         _emit_progress(
                             progress_callback,
-                            f"Calculating partial hashes ({header_processed:,}/{total_candidates:,})...",
+                            f"Calculating partial hashes of {header_processed:,}/{total_candidates:,} files ({format_size(header_processed_bytes)} / {format_size(total_candidates_bytes)})...",
                             stage2_done,
                             stage2_total,
                             2
@@ -402,17 +413,21 @@ def find_exact_duplicates(
 
         to_deep_check: List[FileRecord] = []
         deep_cached_count = 0
+        total_deep_bytes = 0
+        deep_cached_bytes = 0
 
         if total_deep_check > 0 and not (stop_check and stop_check()):
             flat_deep_candidates = [f for grp in candidates_by_header for f in grp]
 
             for rec in flat_deep_candidates:
+                total_deep_bytes += rec.size
                 p_key = str(rec.path)
                 cached_data = cached_exact.get(p_key)
                 if cached_data and cached_data[1]:
                     rec.hash_value = cached_data[1]
                     by_full_hash[(rec.size, rec.hash_value)].append(rec)
                     deep_cached_count += 1
+                    deep_cached_bytes += rec.size
                 else:
                     to_deep_check.append(rec)
 
@@ -423,7 +438,16 @@ def find_exact_duplicates(
             deep_workers = min(32, max(4, os.cpu_count() or 4))
             deep_workers = min(deep_workers, len(to_deep_check))
             deep_processed = deep_cached_count
+            deep_processed_bytes = deep_cached_bytes
             last_progress_time = time.perf_counter()
+            if progress_callback:
+                _emit_progress(
+                    progress_callback,
+                    f"Calculating full hashes of {deep_processed:,}/{total_deep_check:,} files ({format_size(deep_processed_bytes)} / {format_size(total_deep_bytes)})...",
+                    deep_processed,
+                    total_deep_check,
+                    3,
+                )
 
             task_queue: queue.Queue = queue.Queue(maxsize=4096)
             result_queue: queue.Queue = queue.Queue(maxsize=4096)
@@ -449,7 +473,7 @@ def find_exact_duplicates(
                         if stop_check and stop_check():
                             break
                         try:
-                            result_queue.put(res, timeout=0.05)
+                            result_queue.put((rec.size, res), timeout=0.05)
                             break
                         except queue.Full:
                             continue
@@ -488,23 +512,28 @@ def find_exact_duplicates(
                         stop_workers.set()
                         break
                     try:
-                        res = result_queue.get(timeout=0.05)
+                        rec_size, res = result_queue.get(timeout=0.05)
                     except queue.Empty:
                         if not any(t.is_alive() for t in worker_threads) and task_queue.empty() and result_queue.empty():
                             break
                         continue
 
                     deep_processed += 1
+                    deep_processed_bytes += rec_size
                     if res is not None:
                         rec, h = res
                         by_full_hash[(rec.size, h)].append(rec)
                         cache_writer.add((str(rec.path), rec.size, rec.mtime, None, h, rec.volume_id, rec.file_id))
 
                     now = time.perf_counter()
-                    if progress_callback and (now - last_progress_time >= 0.1 or deep_processed % 128 == 0):
+                    if progress_callback and (
+                        now - last_progress_time >= 0.1
+                        or deep_processed % 128 == 0
+                        or deep_processed == total_deep_check
+                    ):
                         _emit_progress(
                             progress_callback,
-                            f"Calculating full hashes ({deep_processed:,}/{total_deep_check:,})...",
+                            f"Calculating full hashes of {deep_processed:,}/{total_deep_check:,} files ({format_size(deep_processed_bytes)} / {format_size(total_deep_bytes)})...",
                             deep_processed,
                             total_deep_check,
                             3

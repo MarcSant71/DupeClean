@@ -574,9 +574,6 @@ class HelpDialog(QDialog):
                 <b>Hardware Scaling:</b> Maximizes sequential storage read throughput (up to NVMe limits) using pre-allocated 
                 <code>512 KB</code> streaming buffers (<code>buffering=0</code> with <code>readinto</code>, avoiding Python buffer overhead and chunk allocations) across <b>4 to 32 concurrent worker threads</b> scaled dynamically to your CPU core count.
             </p>
-            <p>
-                <b>Throughput (<code>it/s</code>):</b> The displayed items-per-second rate naturally varies with file size and type — small photos or documents can process at thousands of <code>it/s</code>, whereas large videos or archives show fewer <code>it/s</code> while still utilizing your drive's full read speed (HDD, SSD, or NVMe).
-            </p>
         </div>
 
         <div class="card">

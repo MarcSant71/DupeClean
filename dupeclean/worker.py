@@ -9,7 +9,7 @@ import send2trash
 import torch
 from PySide6.QtCore import QThread, Signal
 
-from dupeclean.core.models import ScanPath, ScanMode, DuplicateGroup
+from dupeclean.core.models import ScanPath, ScanMode, DuplicateGroup, format_size
 from dupeclean.core.scanner import crawl_directories
 from dupeclean.core.hasher_exact import find_exact_duplicates
 from dupeclean.core.hasher_image import extract_image_embeddings
@@ -68,7 +68,14 @@ class ScanWorker(QThread):
                 return
 
             cache.save_folder_counts(self.scan_paths, len(records))
-            self.progress_stage.emit(f"{len(records):,} files found.", len(records), len(records), 1, total_stages)
+            total_bytes = sum(r.size for r in records)
+            self.progress_stage.emit(
+                f"{len(records):,} files ({format_size(total_bytes)}) found.",
+                len(records),
+                len(records),
+                1,
+                total_stages,
+            )
 
             # 2. Execution according to Selected Mode with Persistent Cache and Stages
             groups: List[DuplicateGroup] = []

@@ -19,7 +19,7 @@ from PIL import Image
 import av
 av.logging.set_level(av.logging.PANIC)
 
-from dupeclean.core.models import FileRecord
+from dupeclean.core.models import FileRecord, format_size
 from dupeclean.core.hardware import get_compute_device
 from dupeclean.core.hasher_image import _get_dct_matrix
 from dupeclean.core.cache import CacheManager, compute_prefix_hash
@@ -271,6 +271,7 @@ def extract_video_embeddings(
     cache = cache_manager or CacheManager()
 
     total = len(records)
+    total_bytes = sum(r.size for r in records)
     dim_size = VIDEO_DIM_SIZE
     if total == 0:
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
@@ -281,7 +282,7 @@ def extract_video_embeddings(
             progress_callback(msg, curr, tot * 2)
 
     if progress_callback:
-        progress_callback(f"Checking video cache ({total:,} videos)...", 0, total * 2)
+        progress_callback(f"Checking video cache ({total:,} videos, {format_size(total_bytes)})...", 0, total * 2)
 
     cached_map = cache.get_video_cache(
         records,
@@ -323,10 +324,11 @@ def extract_video_embeddings(
             embeddings_list.append(torch.from_numpy(cached_mat).to(device=device, dtype=dtype))
         del cached_mat
 
+    cached_bytes = sum(r.size for r in cached_recs)
     stage_total = total + len(to_process)
     if progress_callback and cached_count > 0:
         progress_callback(
-            f"Loading cached videos ({cached_count:,}/{total:,})...",
+            f"Loading cached videos of {cached_count:,}/{total:,} files ({format_size(cached_bytes)} / {format_size(total_bytes)})...",
             total,
             stage_total if to_process else total,
         )
@@ -361,6 +363,7 @@ def extract_video_embeddings(
     num_workers = min(16, max(4, (os.cpu_count() or 4) // 2))
 
     processed_count = 0
+    processed_bytes = cached_bytes
     last_progress_time = 0.0
     batch_records: List[FileRecord] = []
     batch_frames: List[np.ndarray] = []
@@ -377,19 +380,11 @@ def extract_video_embeddings(
                     processed_count += 1
                     current_total_done = cached_count + processed_count
 
-                    now = time.time()
-                    if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
-                        last_progress_time = now
-                        progress_callback(
-                            f"Processing videos ({current_total_done:,}/{total:,})...",
-                            total + processed_count,
-                            stage_total,
-                        )
-
                     if res is not None:
                         p_str, duration, frames_arr, vol_id, f_id, p_hash = res
                         rec = path_to_rec.get(p_str)
                         if rec is not None:
+                            processed_bytes += rec.size
                             if vol_id and rec.volume_id == 0:
                                 rec.volume_id = vol_id
                             if f_id and rec.file_id == 0:
@@ -414,6 +409,15 @@ def extract_video_embeddings(
                                 batch_records.append(rec)
                                 batch_frames.append(frames_arr)
                                 batch_durations.append(duration)
+
+                    now = time.time()
+                    if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
+                        last_progress_time = now
+                        progress_callback(
+                            f"Processing videos of {current_total_done:,}/{total:,} files ({format_size(processed_bytes)} / {format_size(total_bytes)})...",
+                            total + processed_count,
+                            stage_total,
+                        )
 
                     # Processa em lotes matriciais na RTX 5090 (128 itens por lote)
                     target_batch = 128

@@ -14,7 +14,7 @@ from PIL import Image, ImageOps
 import torch
 import numpy as np
 
-from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode
+from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode, format_size
 from dupeclean.core.hardware import get_compute_device
 from dupeclean.core.scanner import get_volume_capabilities
 from dupeclean.core.cache import (
@@ -142,6 +142,7 @@ def extract_image_embeddings(
     cache = cache_manager or CacheManager()
 
     total = len(records)
+    total_bytes = sum(r.size for r in records)
     dim_size = DIM_SIZE
     if total == 0:
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)
@@ -152,7 +153,7 @@ def extract_image_embeddings(
             progress_callback(msg, curr, tot * 2)
 
     if progress_callback:
-        progress_callback(f"Checking cache ({total:,} images)...", 0, total * 2)
+        progress_callback(f"Checking cache ({total:,} images, {format_size(total_bytes)})...", 0, total * 2)
 
     cached_map = cache.get_image_cache(
         records,
@@ -191,10 +192,11 @@ def extract_image_embeddings(
             all_embeddings_list.append(torch.from_numpy(cached_mat).to(device=device, dtype=dtype))
         del cached_mat
 
+    cached_bytes = sum(r.size for r in cached_recs)
     stage_total = total + len(to_process)
     if progress_callback and cached_count > 0:
         progress_callback(
-            f"Loading cached images ({cached_count:,}/{total:,})...",
+            f"Loading cached images of {cached_count:,}/{total:,} files ({format_size(cached_bytes)} / {format_size(total_bytes)})...",
             total,
             stage_total if to_process else total,
         )
@@ -283,6 +285,7 @@ def extract_image_embeddings(
     batch_images: List[np.ndarray] = []
     tombstone_entries: List[Tuple] = []
     processed_count = 0
+    processed_bytes = cached_bytes
     last_progress_time = 0.0
 
     try:
@@ -295,6 +298,7 @@ def extract_image_embeddings(
                 try:
                     rec, arr, is_tombstone = img_queue.get(timeout=0.05)
                     processed_count += 1
+                    processed_bytes += rec.size
                     if arr is not None:
                         batch_records.append(rec)
                         batch_images.append(arr)
@@ -341,7 +345,7 @@ def extract_image_embeddings(
                         last_progress_time = now
                         done_count = cached_count + processed_count
                         progress_callback(
-                            f"Processing images ({done_count:,}/{total:,})...",
+                            f"Processing images of {done_count:,}/{total:,} files ({format_size(processed_bytes)} / {format_size(total_bytes)})...",
                             total + processed_count,
                             stage_total
                         )

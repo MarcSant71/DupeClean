@@ -27,17 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from dupeclean.core.matcher import apply_reference_rules
-from dupeclean.core.models import DuplicateGroup, FileRecord
-
-
-def format_size(size_bytes: int) -> str:
-    """Format byte counts into human-readable units."""
-    val = float(size_bytes)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if val < 1024.0:
-            return f"{val:.2f} {unit}"
-        val /= 1024.0
-    return f"{val:.2f} PB"
+from dupeclean.core.models import DuplicateGroup, FileRecord, format_size
 
 
 _format_size = format_size
