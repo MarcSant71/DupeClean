@@ -574,6 +574,9 @@ class HelpDialog(QDialog):
                 <b>Hardware Scaling:</b> Maximizes sequential storage read throughput (up to NVMe limits) using pre-allocated 
                 <code>512 KB</code> streaming buffers (<code>buffering=0</code> with <code>readinto</code>, avoiding Python buffer overhead and chunk allocations) across <b>4 to 32 concurrent worker threads</b> scaled dynamically to your CPU core count.
             </p>
+            <p>
+                <b>Throughput (<code>it/s</code>):</b> The displayed items-per-second rate naturally varies with file size and type — small photos or documents can process at thousands of <code>it/s</code>, whereas large videos or archives show fewer <code>it/s</code> while still utilizing your drive's full read speed (HDD, SSD, or NVMe).
+            </p>
         </div>
 
         <div class="card">
@@ -727,11 +730,16 @@ class HelpDialog(QDialog):
             <h3 style="margin-top:0px; color:#38bdf8;">Persistent Cache (<code>Clear Cache</code>)</h3>
             <p>
                 DupeClean saves computed file hashes and image/video embeddings in a local SQLite database (<code>DupeClean.db</code>)
-                so repeated scans run almost instantaneously.
+                so repeated scans run much faster.
             </p>
             <p>
-                Use <b>Clear Cache</b> in the bottom-left sidebar whenever you want to free cache disk space or force a full
-                recomputation from scratch. Your saved folder lists and preferences are always preserved.
+                Use <b>Clear Cache</b> in the bottom-left sidebar when you want to free cache disk space (for example, after
+                scanning large temporary folders that were later deleted) or force a full recomputation from scratch.
+                Your saved folder lists and preferences are always preserved.
+            </p>
+            <p>
+                <i>Note: Clearing the cache removes all saved signatures, so the next scan on existing files will be slower
+                until the cache is rebuilt.</i>
             </p>
         </div>
         """

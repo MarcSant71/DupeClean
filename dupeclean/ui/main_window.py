@@ -283,7 +283,7 @@ class MainWindow(QMainWindow):
 
         lbl_confirm = QLabel(
             "<span style='font-size:13px; font-weight:600; color:#e4e4e7;'>Clear Cache</span>"
-            "<br><span style='font-size:11px; color:#a1a1aa;'>Confirm?</span>"
+            "<br><span style='font-size:11px; color:#a1a1aa;'>Are You Sure?</span>"
         )
         lbl_confirm.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_confirm.setStyleSheet("background: transparent; border: none;")

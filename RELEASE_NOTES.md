@@ -1,5 +1,14 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.3.3
+- **Instant Background Cache Reset & Inline Sidebar Confirmation (`cache.py`, `worker.py`, `main_window.py`):**
+  - Replaced slow row-by-row `DELETE FROM` + `VACUUM` on full cache clears with `reset_database_preserving_settings` (instant file unlink/recreation preserving `app_settings`) and `DROP TABLE` + recreate for single-mode clears.
+  - Added `CacheClearWorker` (`QThread`) so clearing massive caches never blocks the UI thread or triggers Windows "Not Responding".
+  - Replaced modal `QMessageBox` dialogs with a sleek inline **`Clear Cache / Are You Sure? [Yes] [No]`** confirmation card in the sidebar (`No` focused and highlighted as the default button), eliminating modal focus/shadow flicker.
+- **Documentation & Help Clarity (`help_dialog.py`, `README.md`):**
+  - Documented the purpose of **Clear Cache** (freeing disk space or forcing full recomputation, noting that subsequent scans will be slower until rebuilt).
+  - Clarified Stage 3 `it/s` throughput behavior across different file sizes and types (HDD, SSD, or NVMe).
+
 ### What's New in v1.3.2
 - **Context-Aware Button & Control States (`main_window.py`, `folder_panel.py`, `test_ui_button_states.py`):**
   - Disabled `Scan` when no scan folders are queued, disabled `Select` and `Save` when the results table is empty, and disabled `- Remove Selected`, `Clear All`, and `- Remove` (Excluded) whenever those actions have nothing to act on.
