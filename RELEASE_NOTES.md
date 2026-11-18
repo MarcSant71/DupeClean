@@ -1,5 +1,10 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.3.5
+- **Context Menu "Open Containing Folder" Fix (`results_table.py`):**
+  - Fixed Windows Explorer `/select,` argument quoting so paths containing spaces or special characters properly open and highlight the target file instead of falling back to the default Documents folder.
+  - Switched to non-blocking `subprocess.Popen` and added a fallback to open the parent directory if the file was moved or deleted.
+
 ### What's New in v1.3.4
 - **Processed vs. Total File & Byte Progress Telemetry (`scanner.py`, `hasher_exact.py`, `hasher_image.py`, `hasher_video.py`, `worker.py`, `models.py`):**
   - Replaced elapsed timer and `it/s` / `files/s` rate counters with clear processed-vs-total file count and byte volume progress across all scan stages (e.g., `Calculating full hashes of 1,900/6,720 files (76.72 GB / 1.61 TB)...`).
