@@ -1170,5 +1170,9 @@ class ResultsWidget(QWidget):
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _open_in_explorer(self, path: Path):
+        norm_path = os.path.normpath(str(path))
         if path.exists():
-            subprocess.run(["explorer", f"/select,{path}"])
+            # Keep quotes after /select, so Windows Explorer parses the switch properly on paths with spaces
+            subprocess.Popen(f'explorer /select,"{norm_path}"')
+        elif path.parent.exists():
+            os.startfile(str(path.parent))
