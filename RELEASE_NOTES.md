@@ -1,5 +1,11 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.4.1
+- **UI Branding & Layout Polish (`splash.py`, `main_window.py`, `help_dialog.py`, `README.md`):**
+  - Updated branding across the splash screen, window title, About dialog, Help window, and documentation from `GPU-Accelerated` to `GPU-Powered`.
+  - Centered the `⚡ DupeClean` logo in the left sidebar, removed the redundant sidebar subtitle, and moved the version indicator cleanly to the window title (`DupeClean - GPU-Powered Duplicate File Finder - v1.4.1`).
+  - Corrected the initial status prompt from `"Add folders below."` to `"Add folders above."` to match the folder panel position.
+
 ### What's New in v1.4.0
 - **Collapsible Left Sidebar (`main_window.py`):**
   - Added a clean, floating `‹` / `›` toggle arrow centered vertically on the sidebar divider line (zero extra layout columns, preserving top action bar alignment).
