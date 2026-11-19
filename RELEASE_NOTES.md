@@ -1,5 +1,11 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.3.7
+- **Eliminated 5-Second Cache Flush Stalls & UI Progress Stuttering (`hasher_exact.py`, `hasher_image.py`, `hasher_video.py`):**
+  - Fixed `_AsyncExactCacheWriter`, `_AsyncImageCacheWriter`, and `_AsyncVideoCacheWriter` so `close()` drains queued items in full batches instead of issuing one SQLite connection/commit per item (which previously hit the 5-second `join()` timeout on large queues).
+  - Enforced strict 0.1s (10 Hz) UI progress throttling during `Calculating partial hashes` and `Calculating full hashes` to eliminate Qt repaint flooding.
+  - Tuned exact I/O worker concurrency (`16` header / `8` deep) and replaced `Path.parent` allocations in directory-locality sorting with direct string sorting.
+
 ### What's New in v1.3.6
 - **Faster Cache Lookups & Moved/Renamed Folder Resilience (`cache.py`):**
   - Switched `_prefilter_known_sizes` to 100% covering-index scans (`idx_*_size`), avoiding full-table BLOB page reads on SQLite.
