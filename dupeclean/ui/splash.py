@@ -67,7 +67,7 @@ class SplashScreen(QWidget):
         layout.addWidget(lbl_title)
 
         # 2. Centered Concise Subtitle (Scaled 50%: 18px font, 28px height)
-        lbl_sub = QLabel("GPU-Accelerated Duplicate File Finder")
+        lbl_sub = QLabel("GPU-Powered Duplicate File Finder")
         lbl_sub.setStyleSheet("font-size: 18px; color: #a1a1aa; font-weight: 500; background: transparent;")
         lbl_sub.setFixedHeight(28)
         lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)

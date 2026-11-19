@@ -350,7 +350,7 @@ class HelpDialog(QDialog):
         lbl_title = QLabel("DupeClean")
         lbl_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;")
 
-        lbl_desc = QLabel("GPU-Accelerated Duplicate File, Image & Video Finder")
+        lbl_desc = QLabel("GPU-Powered Duplicate File, Image & Video Finder")
         lbl_desc.setStyleSheet("font-size: 12px; color: #a1a1aa;")
 
         title_vbox.addWidget(lbl_title)

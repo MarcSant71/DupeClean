@@ -1,6 +1,6 @@
 # DupeClean ⚡
 
-**GPU-Accelerated Duplicate File Finder**
+**GPU-Powered Duplicate File Finder**
 
 [![GitHub Release](https://img.shields.io/github/v/release/MarcSant71/DupeClean?color=007acc&logo=github&v=1.4.0)](https://github.com/MarcSant71/DupeClean/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-blue?logo=windows)](https://github.com/MarcSant71/DupeClean/releases/latest)
@@ -141,7 +141,7 @@ Users often ask: **"Traditional tools like Czkawka are only ~15 MB - why is Dupe
 
 Traditional deduplicators are lightweight single-binary executables because they run basic CPU-only pixel arithmetic using standard OS routines.
 
-**DupeClean is a full-stack, GPU-accelerated AI vision workstation.** To deliver maximum throughput with **zero setup hassle**, the standalone package embeds everything out of the box:
+**DupeClean is a full-stack, GPU-powered AI vision workstation.** To deliver maximum throughput with **zero setup hassle**, the standalone package embeds everything out of the box:
 
 1. **Complete NVIDIA CUDA 12 Runtimes (~3.5 GB uncompressed):**  
    Bundles compiled C++ hardware libraries (`torch_cuda.dll`, `cublas`, `cudnn`, `cusolver`, `cufft`) with pre-compiled kernel microcode engineered for NVIDIA RTX Ampere, Ada Lovelace, and Blackwell Tensor Cores.

@@ -77,7 +77,7 @@ class MainWindow(QMainWindow):
         self._sidebar_collapsed: bool = False
 
         self.setWindowIcon(self._create_app_icon())
-        self.setWindowTitle(f"DupeClean v{__version__} - GPU-Accelerated Duplicate File Finder")
+        self.setWindowTitle(f"DupeClean - GPU-Powered Duplicate File Finder - v{__version__}")
         self.resize(1280, 820)
         self.setMinimumSize(900, 560)
         self._init_ui()
@@ -127,15 +127,12 @@ class MainWindow(QMainWindow):
         lbl_title = QLabel("DupeClean")
         lbl_title.setStyleSheet("font-size: 20px; font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;")
 
+        title_layout.addStretch()
         title_layout.addWidget(lbl_icon)
         title_layout.addWidget(lbl_title)
         title_layout.addStretch()
 
         sidebar_layout.addLayout(title_layout)
-
-        lbl_subtitle = QLabel("GPU-Accelerated Duplicate File Finder")
-        lbl_subtitle.setStyleSheet("font-size: 11px; color: #71717a;")
-        sidebar_layout.addWidget(lbl_subtitle)
 
         # GPU Badge (KISS: Minimalist, single outer frame, unified centered layout)
         gpu_box = QFrame()
@@ -504,7 +501,7 @@ class MainWindow(QMainWindow):
         self.stage_widget.setVisible(False)
 
         # Row 3: Status info
-        self.lbl_status = QLabel("Ready to scan. Add folders below.")
+        self.lbl_status = QLabel("Ready to scan. Add folders above.")
         self.lbl_status.setStyleSheet("color: #a1a1aa;")
         self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.lbl_status.setMinimumWidth(0)
@@ -779,7 +776,7 @@ class MainWindow(QMainWindow):
             self.preview_panel.setVisible(False)
         self._sync_controls_state()
 
-        self.lbl_status.setText("Ready to scan. Add folders below.")
+        self.lbl_status.setText("Ready to scan. Add folders above.")
 
         # Persiste o estado limpo das pastas no banco local
         try:
@@ -1243,7 +1240,7 @@ class MainWindow(QMainWindow):
             hw_line = "<b>Compute Engine:</b> CPU Mode (FP32 Fallback &bull; RTX GPU recommended for superior speed)<br>"
         text = (
             f"<h3 style='color: #38bdf8; margin-top: 0px;'>⚡ DupeClean v{__version__}</h3>"
-            f"<p><b>GPU-Accelerated Duplicate File, Image & Video Finder</b></p>"
+            f"<p><b>GPU-Powered Duplicate File, Image & Video Finder</b></p>"
             f"<p>Compares continuous 2D DCT perceptual embeddings (768-D images / 3840-D videos) via "
             f"dense all-against-all (N &times; N) matrix multiplication on NVIDIA RTX GPUs (CUDA FP16) "
             f"or universal CPU fallback. An NVIDIA RTX GPU is recommended for superior performance.</p>"
