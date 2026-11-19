@@ -152,15 +152,27 @@ class _AsyncExactCacheWriter:
     def _run(self):
         batch = []
         last_flush = time.perf_counter()
-        while not self._stop_event.is_set() or not self._queue.empty():
-            try:
-                entry = self._queue.get(timeout=0.05)
-                batch.append(entry)
-            except queue.Empty:
-                pass
+        while True:
+            if not batch:
+                if self._stop_event.is_set() and self._queue.empty():
+                    break
+                try:
+                    batch.append(self._queue.get(timeout=0.05))
+                except queue.Empty:
+                    continue
+
+            while len(batch) < self.batch_size:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
 
             now = time.perf_counter()
-            if batch and (len(batch) >= self.batch_size or now - last_flush >= self.flush_interval or self._stop_event.is_set()):
+            if (
+                len(batch) >= self.batch_size
+                or (now - last_flush) >= self.flush_interval
+                or (self._stop_event.is_set() and self._queue.empty())
+            ):
                 try:
                     self.cache_manager.save_exact_batch(batch)
                 except Exception:
@@ -292,11 +304,20 @@ def find_exact_duplicates(
                 )
 
         if to_header_check and not (stop_check and stop_check()):
-            # Spatial optimization (Directory Locality): group reads by parent folder
-            # for sequential MFT and directory block reads, eliminating head thrashing on HDDs and NAS storage
-            to_header_check.sort(key=lambda r: str(r.path.parent))
+            if progress_callback and cache_hits_prefix == 0:
+                _emit_progress(
+                    progress_callback,
+                    f"Calculating partial hashes of 0/{total_candidates:,} files (0.00 B / {format_size(total_candidates_bytes)})...",
+                    total_candidates,
+                    stage2_total,
+                    2,
+                )
 
-            header_workers = min(32, max(4, os.cpu_count() or 4))
+            # Spatial optimization (Directory Locality): sorting by full path string groups files
+            # by directory without allocating temporary Path.parent objects
+            to_header_check.sort(key=lambda r: str(r.path))
+
+            header_workers = min(16, max(4, os.cpu_count() or 4))
             header_workers = min(header_workers, len(to_header_check))
             header_processed = cache_hits_prefix
             header_processed_bytes = cached_header_bytes
@@ -385,7 +406,6 @@ def find_exact_duplicates(
                     now = time.perf_counter()
                     if progress_callback and (
                         now - last_progress_time >= 0.1
-                        or header_processed % 256 == 0
                         or header_processed == total_candidates
                     ):
                         stage2_done = total_candidates + (header_processed - cache_hits_prefix)
@@ -433,9 +453,9 @@ def find_exact_duplicates(
 
         if to_deep_check and not (stop_check and stop_check()):
             # Spatial optimization for sequential reading of large contiguous blocks
-            to_deep_check.sort(key=lambda r: str(r.path.parent))
+            to_deep_check.sort(key=lambda r: str(r.path))
 
-            deep_workers = min(32, max(4, os.cpu_count() or 4))
+            deep_workers = min(8, max(4, (os.cpu_count() or 4) // 2))
             deep_workers = min(deep_workers, len(to_deep_check))
             deep_processed = deep_cached_count
             deep_processed_bytes = deep_cached_bytes
@@ -528,7 +548,6 @@ def find_exact_duplicates(
                     now = time.perf_counter()
                     if progress_callback and (
                         now - last_progress_time >= 0.1
-                        or deep_processed % 128 == 0
                         or deep_processed == total_deep_check
                     ):
                         _emit_progress(

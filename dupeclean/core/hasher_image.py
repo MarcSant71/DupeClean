@@ -97,15 +97,27 @@ class _AsyncImageCacheWriter:
     def _run(self):
         batch = []
         last_flush = time.perf_counter()
-        while not self._stop_event.is_set() or not self._queue.empty():
-            try:
-                entry = self._queue.get(timeout=0.05)
-                batch.append(entry)
-            except queue.Empty:
-                pass
+        while True:
+            if not batch:
+                if self._stop_event.is_set() and self._queue.empty():
+                    break
+                try:
+                    batch.append(self._queue.get(timeout=0.05))
+                except queue.Empty:
+                    continue
+
+            while len(batch) < self.batch_size:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
 
             now = time.perf_counter()
-            if batch and (len(batch) >= self.batch_size or now - last_flush >= self.flush_interval or self._stop_event.is_set()):
+            if (
+                len(batch) >= self.batch_size
+                or (now - last_flush) >= self.flush_interval
+                or (self._stop_event.is_set() and self._queue.empty())
+            ):
                 try:
                     self.cache_manager.save_image_batch(batch)
                 except Exception:
