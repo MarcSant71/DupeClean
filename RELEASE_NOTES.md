@@ -1,5 +1,14 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.3.6
+- **Faster Cache Lookups & Moved/Renamed Folder Resilience (`cache.py`):**
+  - Switched `_prefilter_known_sizes` to 100% covering-index scans (`idx_*_size`), avoiding full-table BLOB page reads on SQLite.
+  - Updated Tier L2 (`cache_exact`, `cache_images`, `cache_videos`) to perform in-place `UPDATE OR REPLACE` path renames without rewriting embedding BLOBs, and added parent-directory existence caching in `_cleanup_dead_paths` (reducing renamed folder checks to a single syscall per folder).
+  - Parallelized Tier L3 `file_id` collection and removed unused heavy imports (`torch`, `numpy`) from `cache.py`.
+- **Responsive Video & Image Stage Transitions (`_video_worker.py`, `hasher_video.py`, `hasher_image.py`):**
+  - Isolated `_worker_decode_path` into a PyTorch-free worker module (`_video_worker.py`) so spawned Windows decoding processes no longer stall for 10+ seconds loading CUDA/PyTorch DLLs.
+  - Added dynamic worker/chunk sizing with an in-process fast path for small batches and immediate Stage 3 progress emission before decoding begins.
+
 ### What's New in v1.3.5
 - **Context Menu "Open Containing Folder" Fix (`results_table.py`):**
   - Fixed Windows Explorer `/select,` argument quoting so paths containing spaces or special characters properly open and highlight the target file instead of falling back to the default Documents folder.
