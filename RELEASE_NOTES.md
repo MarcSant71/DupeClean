@@ -1,5 +1,11 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.4.0
+- **Collapsible Left Sidebar (`main_window.py`):**
+  - Added a clean, floating `‹` / `›` toggle arrow centered vertically on the sidebar divider line (zero extra layout columns, preserving top action bar alignment).
+  - Collapsing the sidebar hides the 220 px panel completely and lowers the minimum window width to 680 px for comfortable side-by-side split-screen comparison with Windows Explorer.
+  - Persisted the collapsed/expanded preference (`sidebar_collapsed`) in `DupeClean.db` (`app_settings`).
+
 ### What's New in v1.3.7
 - **Eliminated 5-Second Cache Flush Stalls & UI Progress Stuttering (`hasher_exact.py`, `hasher_image.py`, `hasher_video.py`):**
   - Fixed `_AsyncExactCacheWriter`, `_AsyncImageCacheWriter`, and `_AsyncVideoCacheWriter` so `close()` drains queued items in full batches instead of issuing one SQLite connection/commit per item (which previously hit the 5-second `join()` timeout on large queues).
