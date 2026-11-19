@@ -74,6 +74,7 @@ class MainWindow(QMainWindow):
         self.current_mode = ScanMode.EXACT
         self._was_cancelled: bool = False
         self._is_busy: bool = False
+        self._sidebar_collapsed: bool = False
 
         self.setWindowIcon(self._create_app_icon())
         self.setWindowTitle(f"DupeClean v{__version__} - GPU-Accelerated Duplicate File Finder")
@@ -90,6 +91,8 @@ class MainWindow(QMainWindow):
             saved_folders = cache.get_setting("saved_folders")
             if saved_folders:
                 self.folder_panel.import_state(saved_folders)
+            collapsed = bool(cache.get_setting("sidebar_collapsed", False))
+            self._set_sidebar_collapsed(collapsed, persist=False)
         except Exception as e:
             print(f"[WARN] Could not restore saved folders: {e}")
         finally:
@@ -97,6 +100,7 @@ class MainWindow(QMainWindow):
 
     def _init_ui(self):
         central_widget = QWidget()
+        self._central_widget = central_widget
         self.setCentralWidget(central_widget)
         main_h_layout = QHBoxLayout(central_widget)
         main_h_layout.setContentsMargins(0, 0, 0, 0)
@@ -309,7 +313,8 @@ class MainWindow(QMainWindow):
         self.cache_stack.addWidget(cache_confirm_card)
         sidebar_layout.addWidget(self.cache_stack)
 
-        main_h_layout.addWidget(sidebar_widget)
+        self.sidebar_widget = sidebar_widget
+        main_h_layout.addWidget(self.sidebar_widget)
 
         # -------------------------------------------------------------
         # 2. Main Panel (Controls, Results Table and Folders)
@@ -510,6 +515,69 @@ class MainWindow(QMainWindow):
         right_layout.addLayout(status_container)
 
         main_h_layout.addWidget(right_panel)
+
+        # Floating arrow toggle embedded directly on the vertical divider line (no pill box)
+        self.btn_toggle_sidebar = QPushButton("‹", central_widget)
+        self.btn_toggle_sidebar.setObjectName("btnToggleSidebar")
+        self.btn_toggle_sidebar.setFixedSize(18, 40)
+        self.btn_toggle_sidebar.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_sidebar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_toggle_sidebar.setToolTip("Collapse sidebar")
+        self.btn_toggle_sidebar.setStyleSheet(
+            "QPushButton#btnToggleSidebar { background-color: transparent; border: none; "
+            "color: #71717a; font-size: 22px; font-weight: bold; padding: 0px 0px 3px 0px; text-align: center; }"
+            "QPushButton#btnToggleSidebar:hover { background-color: transparent; border: none; color: #38bdf8; }"
+            "QPushButton#btnToggleSidebar:pressed { background-color: transparent; border: none; color: #0284c7; }"
+        )
+        self.btn_toggle_sidebar.clicked.connect(self._toggle_sidebar)
+        self.btn_toggle_sidebar.raise_()
+        self._position_sidebar_toggle()
+
+    def _position_sidebar_toggle(self):
+        """Keep the sidebar toggle pill vertically centered on the panel divider (or left edge when collapsed)."""
+        if not hasattr(self, "btn_toggle_sidebar") or not hasattr(self, "_central_widget"):
+            return
+        w = self.btn_toggle_sidebar.width()
+        h = self.btn_toggle_sidebar.height()
+        ch = self._central_widget.height()
+        y = max(0, (ch - h) // 2)
+        if self._sidebar_collapsed:
+            x = 0
+        else:
+            x = max(0, self.sidebar_widget.width() - (w // 2))
+        self.btn_toggle_sidebar.move(x, y)
+        self.btn_toggle_sidebar.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_sidebar_toggle()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._position_sidebar_toggle()
+
+    def _toggle_sidebar(self):
+        """Toggle visibility of the left sidebar and persist preference."""
+        self._set_sidebar_collapsed(not self._sidebar_collapsed, persist=True)
+
+    def _set_sidebar_collapsed(self, collapsed: bool, persist: bool = True):
+        """Collapse or expand the left sidebar, updating handle icon and minimum window width."""
+        self._sidebar_collapsed = bool(collapsed)
+        self.sidebar_widget.setVisible(not self._sidebar_collapsed)
+        if self._sidebar_collapsed:
+            self.btn_toggle_sidebar.setText("›")
+            self.btn_toggle_sidebar.setToolTip("Expand sidebar")
+            self.setMinimumSize(680, 560)
+        else:
+            self.btn_toggle_sidebar.setText("‹")
+            self.btn_toggle_sidebar.setToolTip("Collapse sidebar")
+            self.setMinimumSize(900, 560)
+        self._position_sidebar_toggle()
+        if persist:
+            try:
+                CacheManager().save_setting("sidebar_collapsed", self._sidebar_collapsed)
+            except Exception:
+                pass
 
     @Slot(int)
     def _on_mode_changed(self, row: int):
