@@ -24,13 +24,14 @@ from dupeclean.core.hardware import get_compute_device
 from dupeclean.core.hasher_image import _get_dct_matrix
 from dupeclean.core.cache import CacheManager, compute_prefix_hash
 from dupeclean.core.scanner import get_volume_capabilities
-
-# Frame dimensions and frequency count for temporal video signatures
-VIDEO_IMG_SIZE = 64
-VIDEO_LOW_FREQ_SIZE = 16
-VIDEO_CHANNELS = 3
-VIDEO_NUM_SAMPLES = 5
-VIDEO_DIM_SIZE = VIDEO_LOW_FREQ_SIZE * VIDEO_LOW_FREQ_SIZE * VIDEO_CHANNELS * VIDEO_NUM_SAMPLES  # 3840 floats = 7680 bytes (FP16)
+from dupeclean.core._video_worker import (
+    VIDEO_CHANNELS,
+    VIDEO_DIM_SIZE,
+    VIDEO_IMG_SIZE,
+    VIDEO_LOW_FREQ_SIZE,
+    VIDEO_NUM_SAMPLES,
+    _worker_decode_path,
+)
 
 
 def get_video_duration(path: Path) -> Optional[float]:
@@ -84,117 +85,6 @@ def extract_video_frames_and_duration(
     if arr is None or dur == -1.0:
         return None
     return dur, arr
-
-
-def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray], int, int, Optional[str]]:
-    """
-    Process-isolated worker: opens the video, collects NTFS metadata (vol_id, file_id) and prefix_hash,
-    extrai 5 quadros temporais RGB limpos e retorna dados brutos fora do GIL do processo principal.
-    Returns (path_str, -1.0, None, vol_id, file_id, prefix_hash) on failure for tombstone persistence.
-    """
-    p = Path(path_str)
-    vol_id, f_id, p_hash = 0, 0, None
-    try:
-        st = os.stat(path_str, follow_symlinks=False)
-        _, supports_fid = get_volume_capabilities(p)
-        vol_id = getattr(st, "st_dev", 0) or 0
-        f_id = (getattr(st, "st_ino", 0) or 0) if supports_fid else 0
-        if st.st_size > 0:
-            p_hash = compute_prefix_hash(p, st.st_size)
-    except Exception:
-        pass
-
-    is_dav = p.suffix.lower() == ".dav"
-    options = {"probesize": "65536", "analyzeduration": "0"} if is_dav else None
-
-    try:
-        container = av.open(path_str, options=options)
-    except Exception:
-        return path_str, -1.0, None, vol_id, f_id, p_hash
-
-    try:
-        if not container.streams.video:
-            container.close()
-            return path_str, -1.0, None, vol_id, f_id, p_hash
-
-        stream = container.streams.video[0]
-        dur = float(container.duration) / 1000000.0 if container.duration else None
-        if dur is None and stream.duration and stream.time_base:
-            dur = float(stream.duration * stream.time_base)
-        dur = dur or 10.0
-
-        frames = []
-
-        # 1. Strategy A: Fast Keyframe Seek (for indexed formats: MP4, MKV, AVI, MOV, WEBM, etc.)
-        if not is_dav:
-            percentages = [0.10, 0.30, 0.50, 0.70, 0.90]
-            try:
-                for pct in percentages:
-                    target_sec = dur * pct
-                    target_pts = int(target_sec / stream.time_base) if stream.time_base else int(target_sec * 1000000)
-                    container.seek(target_pts, any_frame=False, backward=True, stream=stream)
-                    for pkt in container.demux():
-                        if pkt.stream == stream and pkt.is_keyframe and pkt.size > 0:
-                            decoded_list = pkt.decode()
-                            if decoded_list:
-                                f = decoded_list[0]
-                                img = f.to_image().convert("RGB").resize((VIDEO_IMG_SIZE, VIDEO_IMG_SIZE), Image.Resampling.BILINEAR)
-                                frames.append(np.asarray(img, dtype=np.uint8))
-                                break
-            except Exception:
-                frames.clear()
-
-            if len(frames) < 5:
-                try:
-                    container.seek(0)
-                    for f in container.decode(video=0):
-                        img = f.to_image().convert("RGB").resize((VIDEO_IMG_SIZE, VIDEO_IMG_SIZE), Image.Resampling.BILINEAR)
-                        frames.append(np.asarray(img, dtype=np.uint8))
-                        if len(frames) >= 5:
-                            break
-                except Exception:
-                    pass
-
-        # 2. Strategy B: Temporal Extraction of 5 Distinct Keyframes (for .dav and continuous streams)
-        else:
-            kf_packets = []
-            for pkt in container.demux():
-                if pkt.stream == stream and pkt.is_keyframe and pkt.size > 0:
-                    kf_packets.append(pkt)
-
-            num_kf = len(kf_packets)
-            if num_kf > 0:
-                step = max(1.0, num_kf / 5.0)
-                chosen_indices = [min(int(i * step), num_kf - 1) for i in range(5)]
-                for idx in chosen_indices:
-                    pkt = kf_packets[idx]
-                    decoded_list = pkt.decode()
-                    if decoded_list:
-                        f = decoded_list[0]
-                        img = f.to_image().convert("RGB").resize((VIDEO_IMG_SIZE, VIDEO_IMG_SIZE), Image.Resampling.BILINEAR)
-                        frames.append(np.asarray(img, dtype=np.uint8))
-
-        container.close()
-
-        if not frames:
-            return path_str, -1.0, None, vol_id, f_id, p_hash
-
-        while len(frames) < 5:
-            frames.append(frames[-1])
-
-        expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
-        arr = np.array(frames[:5], dtype=np.uint8)  # [5, 64, 64, 3]
-        if arr.shape != expected_shape:
-            return path_str, -1.0, None, vol_id, f_id, p_hash
-
-        return path_str, dur, arr, vol_id, f_id, p_hash
-
-    except Exception:
-        try:
-            container.close()
-        except Exception:
-            pass
-        return path_str, -1.0, None, vol_id, f_id, p_hash
 
 
 class _AsyncVideoCacheWriter:
@@ -359,8 +249,9 @@ def extract_video_embeddings(
     path_to_rec = {str(r.path): r for r in to_process}
     path_list = list(path_to_rec.keys())
 
-    # Optimal worker process count (saturates I/O and eliminates GIL)
-    num_workers = min(16, max(4, (os.cpu_count() or 4) // 2))
+    # Optimal worker process count (saturates I/O without overspawning on small batches)
+    num_workers = min(16, max(4, (os.cpu_count() or 4) // 2), uncached_total)
+    chunksize = max(1, min(8, uncached_total // (num_workers * 4) or 1))
 
     processed_count = 0
     processed_bytes = cached_bytes
@@ -369,96 +260,109 @@ def extract_video_embeddings(
     batch_frames: List[np.ndarray] = []
     batch_durations: List[float] = []
 
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        try:
-            with torch.inference_mode():
-                # Batch processing with chunksize=16 for maximum inter-process throughput
-                for res in executor.map(_worker_decode_path, path_list, chunksize=16):
-                    if stop_check and stop_check():
-                        break
+    if progress_callback:
+        progress_callback(
+            f"Processing videos of {cached_count:,}/{total:,} files ({format_size(cached_bytes)} / {format_size(total_bytes)})...",
+            total,
+            stage_total,
+        )
 
-                    processed_count += 1
-                    current_total_done = cached_count + processed_count
+    executor: Optional[ProcessPoolExecutor] = None
+    try:
+        if uncached_total <= 4:
+            result_iter = (_worker_decode_path(p_str) for p_str in path_list)
+        else:
+            executor = ProcessPoolExecutor(max_workers=num_workers)
+            result_iter = executor.map(_worker_decode_path, path_list, chunksize=chunksize)
 
-                    if res is not None:
-                        p_str, duration, frames_arr, vol_id, f_id, p_hash = res
-                        rec = path_to_rec.get(p_str)
-                        if rec is not None:
-                            processed_bytes += rec.size
-                            if vol_id and rec.volume_id == 0:
-                                rec.volume_id = vol_id
-                            if f_id and rec.file_id == 0:
-                                rec.file_id = f_id
-                            if p_hash and rec.prefix_hash is None:
-                                rec.prefix_hash = p_hash
-                            expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
-                            if frames_arr is None or duration == -1.0 or getattr(frames_arr, "shape", None) != expected_shape:
-                                # Grava tombstone no SQLite para nunca mais tentar reprocessar este arquivo corrompido
-                                cache_writer.add((
-                                    str(rec.path),
-                                    rec.size,
-                                    rec.mtime,
-                                    -1.0,
-                                    b"",
-                                    rec.volume_id,
-                                    rec.file_id,
-                                    rec.prefix_hash
-                                ))
-                            else:
-                                rec.duration = duration
-                                batch_records.append(rec)
-                                batch_frames.append(frames_arr)
-                                batch_durations.append(duration)
+        with torch.inference_mode():
+            for res in result_iter:
+                if stop_check and stop_check():
+                    break
 
-                    now = time.time()
-                    if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
-                        last_progress_time = now
-                        progress_callback(
-                            f"Processing videos of {current_total_done:,}/{total:,} files ({format_size(processed_bytes)} / {format_size(total_bytes)})...",
-                            total + processed_count,
-                            stage_total,
-                        )
+                processed_count += 1
+                current_total_done = cached_count + processed_count
 
-                    # Processa em lotes matriciais na RTX 5090 (128 itens por lote)
-                    target_batch = 128
-                    if len(batch_records) >= target_batch or processed_count == uncached_total:
-                        if batch_frames:
-                            stacked = np.stack(batch_frames)  # [B, 5, 64, 64, 3]
-                            t_batch = torch.from_numpy(stacked).permute(0, 1, 4, 2, 3).to(device=device, dtype=dtype) / 255.0  # [B, 5, 3, 64, 64]
-                            B = t_batch.shape[0]
-                            t_flat = t_batch.reshape(B * VIDEO_NUM_SAMPLES * VIDEO_CHANNELS, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE)
-                            dct_batch = torch.matmul(dct_mat, torch.matmul(t_flat, dct_mat_t))
-                            low_freq = dct_batch[:, :VIDEO_LOW_FREQ_SIZE, :VIDEO_LOW_FREQ_SIZE].clone()
-                            low_freq = low_freq * spectral_weight.unsqueeze(0)
+                if res is not None:
+                    p_str, duration, frames_arr, vol_id, f_id, p_hash = res
+                    rec = path_to_rec.get(p_str)
+                    if rec is not None:
+                        processed_bytes += rec.size
+                        if vol_id and rec.volume_id == 0:
+                            rec.volume_id = vol_id
+                        if f_id and rec.file_id == 0:
+                            rec.file_id = f_id
+                        if p_hash and rec.prefix_hash is None:
+                            rec.prefix_hash = p_hash
+                        expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
+                        if frames_arr is None or duration == -1.0 or getattr(frames_arr, "shape", None) != expected_shape:
+                            # Persist tombstone in SQLite so corrupted files are never reprocessed
+                            cache_writer.add((
+                                str(rec.path),
+                                rec.size,
+                                rec.mtime,
+                                -1.0,
+                                b"",
+                                rec.volume_id,
+                                rec.file_id,
+                                rec.prefix_hash
+                            ))
+                        else:
+                            rec.duration = duration
+                            batch_records.append(rec)
+                            batch_frames.append(frames_arr)
+                            batch_durations.append(duration)
 
-                            flat = low_freq.reshape(B, -1)  # [B, 3840]
-                            norms = torch.norm(flat, p=2, dim=1, keepdim=True).clamp(min=1e-6)
-                            normalized = flat / norms  # [B, 3840]
+                now = time.time()
+                if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
+                    last_progress_time = now
+                    progress_callback(
+                        f"Processing videos of {current_total_done:,}/{total:,} files ({format_size(processed_bytes)} / {format_size(total_bytes)})...",
+                        total + processed_count,
+                        stage_total,
+                    )
 
-                            embeddings_list.append(normalized)
-                            valid_records.extend(batch_records)
+                # Process in GPU batches (128 items per batch)
+                target_batch = 128
+                if len(batch_records) >= target_batch or processed_count == uncached_total:
+                    if batch_frames:
+                        stacked = np.stack(batch_frames)  # [B, 5, 64, 64, 3]
+                        t_batch = torch.from_numpy(stacked).permute(0, 1, 4, 2, 3).to(device=device, dtype=dtype) / 255.0  # [B, 5, 3, 64, 64]
+                        B = t_batch.shape[0]
+                        t_flat = t_batch.reshape(B * VIDEO_NUM_SAMPLES * VIDEO_CHANNELS, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE)
+                        dct_batch = torch.matmul(dct_mat, torch.matmul(t_flat, dct_mat_t))
+                        low_freq = dct_batch[:, :VIDEO_LOW_FREQ_SIZE, :VIDEO_LOW_FREQ_SIZE].clone()
+                        low_freq = low_freq * spectral_weight.unsqueeze(0)
 
-                            norm_cpu_np = normalized.to(dtype=torch.float16).cpu().numpy()
-                            for b_i, b_rec in enumerate(batch_records):
-                                b_dur = batch_durations[b_i]
-                                cache_writer.add((
-                                    str(b_rec.path),
-                                    b_rec.size,
-                                    b_rec.mtime,
-                                    b_dur,
-                                    norm_cpu_np[b_i:b_i + 1].tobytes(),
-                                    b_rec.volume_id,
-                                    b_rec.file_id,
-                                    b_rec.prefix_hash
-                                ))
+                        flat = low_freq.reshape(B, -1)  # [B, 3840]
+                        norms = torch.norm(flat, p=2, dim=1, keepdim=True).clamp(min=1e-6)
+                        normalized = flat / norms  # [B, 3840]
 
-                            batch_records.clear()
-                            batch_frames.clear()
-                            batch_durations.clear()
+                        embeddings_list.append(normalized)
+                        valid_records.extend(batch_records)
 
-        finally:
+                        norm_cpu_np = normalized.to(dtype=torch.float16).cpu().numpy()
+                        for b_i, b_rec in enumerate(batch_records):
+                            b_dur = batch_durations[b_i]
+                            cache_writer.add((
+                                str(b_rec.path),
+                                b_rec.size,
+                                b_rec.mtime,
+                                b_dur,
+                                norm_cpu_np[b_i:b_i + 1].tobytes(),
+                                b_rec.volume_id,
+                                b_rec.file_id,
+                                b_rec.prefix_hash
+                            ))
+
+                        batch_records.clear()
+                        batch_frames.clear()
+                        batch_durations.clear()
+
+    finally:
+        if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
-            cache_writer.close()
+        cache_writer.close()
 
     if not embeddings_list:
         return [], torch.empty((0, dim_size), device=device, dtype=dtype)

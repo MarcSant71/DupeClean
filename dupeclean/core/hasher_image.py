@@ -213,6 +213,13 @@ def extract_image_embeddings(
     # 3. Ultra-High-Throughput Processing: Concurrent Producer-Consumer Streaming
     # Threads de CPU decodificam continuamente para uma fila delimitada em RAM,
     # enquanto a GPU (Tensor Cores) e o SQLite operam sem tempo ocioso em paralelo.
+    if progress_callback:
+        progress_callback(
+            f"Processing images of {cached_count:,}/{total:,} files ({format_size(cached_bytes)} / {format_size(total_bytes)})...",
+            total,
+            stage_total,
+        )
+
     to_process.sort(key=lambda r: str(r.path.parent))
 
     dct_mat = _get_dct_matrix(IMG_SIZE, device=device, dtype=torch.float32)

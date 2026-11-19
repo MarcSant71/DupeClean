@@ -16,8 +16,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Callable, Set
-import numpy as np
-import torch
 import xxhash
 
 from dupeclean.core.models import FileRecord, ScanMode, ScanPath
@@ -426,7 +424,7 @@ class CacheManager:
             chunk_s = candidate_sizes[i:i + chunk_size]
             placeholders = ",".join("?" for _ in chunk_s)
             cur = conn.execute(
-                f"SELECT DISTINCT size FROM {table} WHERE size IN ({placeholders}) AND {condition};",
+                f"SELECT DISTINCT size FROM {table} WHERE size IN ({placeholders});",
                 chunk_s
             )
             known_sizes.update(row[0] for row in cur.fetchall())
@@ -506,20 +504,52 @@ class CacheManager:
         )
         return [r for r in candidates if r.volume_id > 0 and r.file_id > 0]
 
+    @staticmethod
+    def _path_exists_cached(path_str: str, dir_cache: Dict[str, bool]) -> bool:
+        """Check path existence while caching parent directory lookups (turns renamed folders into 1 syscall)."""
+        parent = os.path.dirname(path_str)
+        if parent:
+            parent_ok = dir_cache.get(parent)
+            if parent_ok is None:
+                parent_ok = os.path.isdir(parent)
+                dir_cache[parent] = parent_ok
+            if not parent_ok:
+                return False
+        return os.path.exists(path_str)
+
     def _cleanup_dead_paths(
         self,
         conn: sqlite3.Connection,
         table: str,
         stale_candidates: Set[str],
-        active_paths: Set[str]
+        active_paths: Set[str],
+        dir_cache: Optional[Dict[str, bool]] = None,
     ) -> None:
         """Remove old paths from SQLite only if they no longer exist on disk (protects hardlinks)."""
+        d_cache = dir_cache if dir_cache is not None else {}
         to_delete = [
             (p,) for p in stale_candidates
-            if p not in active_paths and not os.path.exists(p)
+            if p not in active_paths and not self._path_exists_cached(p, d_cache)
         ]
         if to_delete:
             conn.executemany(f"DELETE FROM {table} WHERE path = ?;", to_delete)
+
+    @staticmethod
+    def _apply_l2_in_place_renames(
+        conn: sqlite3.Connection,
+        table: str,
+        renames: List[Tuple[str, int, float, int, int, str]],
+    ) -> None:
+        """Update moved/renamed paths in-place without rewriting embedding BLOBs or issuing separate DELETEs."""
+        if renames:
+            conn.executemany(
+                f"""
+                UPDATE OR REPLACE {table}
+                SET path = ?, size = ?, mtime = ?, volume_id = ?, file_id = ?
+                WHERE path = ?;
+                """,
+                renames,
+            )
 
     # -------------------------------------------------------------------------
     # 1. Cache para Modo EXATO (xxHash64)
@@ -583,8 +613,7 @@ class CacheManager:
             uncached = [r for r in records if str(r.path) not in results]
             l2_candidates = self._find_l2_candidates(conn, "cache_exact", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
-                upserts = []
-                stale_candidates: Set[str] = set()
+                l2_matches: List[Tuple[str, FileRecord, Optional[str], Optional[str]]] = []
                 active_new_paths: Set[str] = set()
                 total_l2 = len(l2_candidates)
 
@@ -609,9 +638,7 @@ class CacheManager:
                                 new_path_str = str(rec.path)
                                 results[new_path_str] = (p_hash, f_hash)
                                 active_new_paths.add(new_path_str)
-                                upserts.append((new_path_str, rec.size, rec.mtime, p_hash, f_hash, rec.volume_id, rec.file_id))
-                                if c_path != new_path_str:
-                                    stale_candidates.add(c_path)
+                                l2_matches.append((c_path, rec, p_hash, f_hash))
 
                     done_l2 = min(i + chunk_size, total_l2)
                     tracker.emit_range(
@@ -620,6 +647,27 @@ class CacheManager:
                         force=(done_l2 == total_l2),
                     )
 
+                dir_cache: Dict[str, bool] = {}
+                renames: List[Tuple[str, int, float, int, int, str]] = []
+                renamed_sources: Set[str] = set()
+                upserts = []
+                stale_candidates: Set[str] = set()
+                for c_path, rec, p_hash, f_hash in l2_matches:
+                    new_path_str = str(rec.path)
+                    if (
+                        c_path != new_path_str
+                        and c_path not in active_new_paths
+                        and c_path not in renamed_sources
+                        and not self._path_exists_cached(c_path, dir_cache)
+                    ):
+                        renamed_sources.add(c_path)
+                        renames.append((new_path_str, rec.size, rec.mtime, rec.volume_id, rec.file_id, c_path))
+                    else:
+                        upserts.append((new_path_str, rec.size, rec.mtime, p_hash, f_hash, rec.volume_id, rec.file_id))
+                        if c_path != new_path_str:
+                            stale_candidates.add(c_path)
+
+                self._apply_l2_in_place_renames(conn, "cache_exact", renames)
                 if upserts:
                     conn.executemany("""
                         INSERT INTO cache_exact (path, size, mtime, prefix_hash, full_hash, volume_id, file_id)
@@ -630,7 +678,8 @@ class CacheManager:
                             full_hash=COALESCE(excluded.full_hash, cache_exact.full_hash),
                             volume_id=excluded.volume_id, file_id=excluded.file_id;
                     """, upserts)
-                self._cleanup_dead_paths(conn, "cache_exact", stale_candidates, active_new_paths)
+                if stale_candidates:
+                    self._cleanup_dead_paths(conn, "cache_exact", stale_candidates, active_new_paths, dir_cache=dir_cache)
         tracker.finish()
         return results
 
@@ -725,8 +774,7 @@ class CacheManager:
             uncached = [r for r in records if str(r.path) not in results]
             l2_candidates = self._find_l2_candidates(conn, "cache_images", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
-                upserts = []
-                stale_candidates: Set[str] = set()
+                l2_matches: List[Tuple[str, FileRecord, bytes, Optional[str]]] = []
                 active_new_paths: Set[str] = set()
                 total_l2 = len(l2_candidates)
 
@@ -754,9 +802,7 @@ class CacheManager:
                                 new_path_str = str(rec.path)
                                 results[new_path_str] = emb_blob
                                 active_new_paths.add(new_path_str)
-                                upserts.append((new_path_str, rec.size, rec.mtime, emb_blob, rec.volume_id, rec.file_id, c_prefix))
-                                if c_path != new_path_str:
-                                    stale_candidates.add(c_path)
+                                l2_matches.append((c_path, rec, emb_blob, c_prefix))
 
                     done_l2 = min(i + chunk_size, total_l2)
                     tracker.emit_range(
@@ -765,6 +811,27 @@ class CacheManager:
                         force=(done_l2 == total_l2),
                     )
 
+                dir_cache: Dict[str, bool] = {}
+                renames: List[Tuple[str, int, float, int, int, str]] = []
+                renamed_sources: Set[str] = set()
+                upserts = []
+                stale_candidates: Set[str] = set()
+                for c_path, rec, emb_blob, c_prefix in l2_matches:
+                    new_path_str = str(rec.path)
+                    if (
+                        c_path != new_path_str
+                        and c_path not in active_new_paths
+                        and c_path not in renamed_sources
+                        and not self._path_exists_cached(c_path, dir_cache)
+                    ):
+                        renamed_sources.add(c_path)
+                        renames.append((new_path_str, rec.size, rec.mtime, rec.volume_id, rec.file_id, c_path))
+                    else:
+                        upserts.append((new_path_str, rec.size, rec.mtime, emb_blob, rec.volume_id, rec.file_id, c_prefix))
+                        if c_path != new_path_str:
+                            stale_candidates.add(c_path)
+
+                self._apply_l2_in_place_renames(conn, "cache_images", renames)
                 if upserts:
                     conn.executemany("""
                         INSERT INTO cache_images (path, size, mtime, embedding, volume_id, file_id, prefix_hash)
@@ -774,7 +841,8 @@ class CacheManager:
                             volume_id=excluded.volume_id, file_id=excluded.file_id,
                             prefix_hash=COALESCE(excluded.prefix_hash, cache_images.prefix_hash);
                     """, upserts)
-                self._cleanup_dead_paths(conn, "cache_images", stale_candidates, active_new_paths)
+                if stale_candidates:
+                    self._cleanup_dead_paths(conn, "cache_images", stale_candidates, active_new_paths, dir_cache=dir_cache)
 
             # 3. Tier 3 (L3 - Parallel Batch Content Sieve): For exFAT, FAT32, or cross-volume copies
             uncached_l3 = [r for r in records if str(r.path) not in results]
@@ -796,7 +864,7 @@ class CacheManager:
                         progress_label="Checking cache signatures",
                     )
                     hashed_candidates = [r for r in sieve_candidates if r.prefix_hash]
-                    l3_upserts = []
+                    l3_matched: List[Tuple[FileRecord, bytes]] = []
                     total_l3 = len(hashed_candidates)
 
                     for i in range(0, total_l3, chunk_size):
@@ -820,10 +888,8 @@ class CacheManager:
                         for rec in chunk:
                             emb_blob = match_map.get((rec.size, rec.prefix_hash))  # type: ignore[arg-type]
                             if emb_blob is not None:
-                                populate_record_file_id(rec)
-                                new_path_str = str(rec.path)
-                                results[new_path_str] = emb_blob
-                                l3_upserts.append((new_path_str, rec.size, rec.mtime, emb_blob, rec.volume_id, rec.file_id, rec.prefix_hash))
+                                results[str(rec.path)] = emb_blob
+                                l3_matched.append((rec, emb_blob))
 
                         done_l3 = min(i + chunk_size, total_l3)
                         tracker.emit_range(
@@ -832,7 +898,12 @@ class CacheManager:
                             force=(done_l3 == total_l3),
                         )
 
-                    if l3_upserts:
+                    if l3_matched:
+                        self._populate_file_ids_parallel([r for r, _ in l3_matched], stop_check=stop_check)
+                        l3_upserts = [
+                            (str(rec.path), rec.size, rec.mtime, emb_blob, rec.volume_id, rec.file_id, rec.prefix_hash)
+                            for rec, emb_blob in l3_matched
+                        ]
                         conn.executemany("""
                             INSERT INTO cache_images (path, size, mtime, embedding, volume_id, file_id, prefix_hash)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -939,8 +1010,7 @@ class CacheManager:
             uncached = [r for r in records if str(r.path) not in results]
             l2_candidates = self._find_l2_candidates(conn, "cache_videos", uncached, stop_check=stop_check, tracker=tracker)
             if l2_candidates and not (stop_check and stop_check()):
-                upserts = []
-                stale_candidates: Set[str] = set()
+                l2_matches: List[Tuple[str, FileRecord, float, bytes, Optional[str]]] = []
                 active_new_paths: Set[str] = set()
                 total_l2 = len(l2_candidates)
 
@@ -968,9 +1038,7 @@ class CacheManager:
                                 new_path_str = str(rec.path)
                                 results[new_path_str] = (dur, emb_blob)
                                 active_new_paths.add(new_path_str)
-                                upserts.append((new_path_str, rec.size, rec.mtime, dur, emb_blob, rec.volume_id, rec.file_id, c_prefix))
-                                if c_path != new_path_str:
-                                    stale_candidates.add(c_path)
+                                l2_matches.append((c_path, rec, dur, emb_blob, c_prefix))
 
                     done_l2 = min(i + chunk_size, total_l2)
                     tracker.emit_range(
@@ -979,6 +1047,27 @@ class CacheManager:
                         force=(done_l2 == total_l2),
                     )
 
+                dir_cache: Dict[str, bool] = {}
+                renames: List[Tuple[str, int, float, int, int, str]] = []
+                renamed_sources: Set[str] = set()
+                upserts = []
+                stale_candidates: Set[str] = set()
+                for c_path, rec, dur, emb_blob, c_prefix in l2_matches:
+                    new_path_str = str(rec.path)
+                    if (
+                        c_path != new_path_str
+                        and c_path not in active_new_paths
+                        and c_path not in renamed_sources
+                        and not self._path_exists_cached(c_path, dir_cache)
+                    ):
+                        renamed_sources.add(c_path)
+                        renames.append((new_path_str, rec.size, rec.mtime, rec.volume_id, rec.file_id, c_path))
+                    else:
+                        upserts.append((new_path_str, rec.size, rec.mtime, dur, emb_blob, rec.volume_id, rec.file_id, c_prefix))
+                        if c_path != new_path_str:
+                            stale_candidates.add(c_path)
+
+                self._apply_l2_in_place_renames(conn, "cache_videos", renames)
                 if upserts:
                     conn.executemany("""
                         INSERT INTO cache_videos (path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash)
@@ -988,7 +1077,8 @@ class CacheManager:
                             embedding=excluded.embedding, volume_id=excluded.volume_id, file_id=excluded.file_id,
                             prefix_hash=COALESCE(excluded.prefix_hash, cache_videos.prefix_hash);
                     """, upserts)
-                self._cleanup_dead_paths(conn, "cache_videos", stale_candidates, active_new_paths)
+                if stale_candidates:
+                    self._cleanup_dead_paths(conn, "cache_videos", stale_candidates, active_new_paths, dir_cache=dir_cache)
 
             # 3. Tier 3 (L3 - Parallel Batch Content Sieve): For exFAT, FAT32, or cross-volume copies
             uncached_l3 = [r for r in records if str(r.path) not in results]
@@ -1010,7 +1100,7 @@ class CacheManager:
                         progress_label="Checking video cache signatures",
                     )
                     hashed_candidates = [r for r in sieve_candidates if r.prefix_hash]
-                    l3_upserts = []
+                    l3_matched: List[Tuple[FileRecord, float, bytes]] = []
                     total_l3 = len(hashed_candidates)
 
                     for i in range(0, total_l3, chunk_size):
@@ -1046,10 +1136,8 @@ class CacheManager:
 
                             if matched_entry is not None:
                                 dur, emb_blob = matched_entry
-                                populate_record_file_id(rec)
-                                new_path_str = str(rec.path)
-                                results[new_path_str] = (dur, emb_blob)
-                                l3_upserts.append((new_path_str, rec.size, rec.mtime, dur, emb_blob, rec.volume_id, rec.file_id, rec.prefix_hash))
+                                results[str(rec.path)] = (dur, emb_blob)
+                                l3_matched.append((rec, dur, emb_blob))
 
                         done_l3 = min(i + chunk_size, total_l3)
                         tracker.emit_range(
@@ -1058,7 +1146,12 @@ class CacheManager:
                             force=(done_l3 == total_l3),
                         )
 
-                    if l3_upserts:
+                    if l3_matched:
+                        self._populate_file_ids_parallel([r for r, _, _ in l3_matched], stop_check=stop_check)
+                        l3_upserts = [
+                            (str(rec.path), rec.size, rec.mtime, dur, emb_blob, rec.volume_id, rec.file_id, rec.prefix_hash)
+                            for rec, dur, emb_blob in l3_matched
+                        ]
                         conn.executemany("""
                             INSERT INTO cache_videos (path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
