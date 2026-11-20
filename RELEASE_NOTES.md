@@ -1,5 +1,11 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.4.2
+- **Automatic Cache Orphan Pruning & Conditional VACUUM (`cache.py`, `worker.py`):**
+  - Automatically removes deleted file paths (`remove_paths`) and relocates moved file paths in-place (`relocate_paths`) across all 3 cache tables (`cache_exact`, `cache_images`, `cache_videos`) right inside `FileActionWorker` after successful Trash, Delete, or Move operations.
+  - Added safe Tier L3 dead-source cleanup with mounted-volume protection (`_is_volume_mounted`) so disconnected external drives never lose valid cached embeddings.
+  - Added non-blocking post-scan root pruning (`prune_scanned_roots`) for the active scan mode, respecting excluded folders and `LIKE` wildcards, with automatic `VACUUM` whenever freed SQLite pages reach `>= 25%` to reclaim disk space physically.
+
 ### What's New in v1.4.1
 - **UI Branding & Layout Polish (`splash.py`, `main_window.py`, `help_dialog.py`, `README.md`):**
   - Updated branding across the splash screen, window title, About dialog, Help window, and documentation from `GPU-Accelerated` to `GPU-Powered`.
