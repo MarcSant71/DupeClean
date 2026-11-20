@@ -3,7 +3,7 @@ Multithreaded worker (QThread) for asynchronous scanning without freezing the GU
 """
 
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 import shutil
 import send2trash
 import torch
@@ -65,6 +65,13 @@ class ScanWorker(QThread):
 
             if not records:
                 self.scan_finished.emit([])
+                if not self.isInterruptionRequested():
+                    try:
+                        cache.prune_scanned_roots(
+                            self.scan_paths, self.excluded_paths, [], self.mode
+                        )
+                    except Exception:
+                        pass
                 return
 
             cache.save_folder_counts(self.scan_paths, len(records))
@@ -155,6 +162,12 @@ class ScanWorker(QThread):
             if not self.isInterruptionRequested():
                 groups = filter_reference_groups(groups)
                 self.scan_finished.emit(groups)
+                try:
+                    cache.prune_scanned_roots(
+                        self.scan_paths, self.excluded_paths, records, self.mode
+                    )
+                except Exception:
+                    pass
 
         except Exception as e:
             try:
@@ -186,15 +199,19 @@ class FileActionWorker(QThread):
         paths: List[Path],
         action: str,  # 'trash', 'delete', 'move'
         dest_dir: Optional[Path] = None,
-        parent=None
+        parent=None,
+        cache_manager: Optional[CacheManager] = None,
     ):
         super().__init__(parent)
         self.paths = paths
         self.action = action
         self.dest_dir = dest_dir
+        self.cache_manager = cache_manager
 
     def run(self):
         deleted_set: Set[Path] = set()
+        removed_paths: List[Path] = []
+        moved_pairs: List[Tuple[Path, Path]] = []
         errors: List[str] = []
         total = len(self.paths)
 
@@ -213,9 +230,11 @@ class FileActionWorker(QThread):
                 if self.action == "trash":
                     send2trash.send2trash(str(path))
                     deleted_set.add(path)
+                    removed_paths.append(path)
                 elif self.action == "delete":
                     path.unlink(missing_ok=True)
                     deleted_set.add(path)
+                    removed_paths.append(path)
                 elif self.action == "move" and self.dest_dir:
                     target = self.dest_dir / path.name
                     if target.exists():
@@ -227,12 +246,23 @@ class FileActionWorker(QThread):
                             c += 1
                     shutil.move(str(path), str(target))
                     deleted_set.add(path)
+                    moved_pairs.append((path, target))
             except Exception as e:
                 errors.append(f"{path.name}: {str(e)}")
 
             # Emit periodic telemetry (every 20 files or at endpoints) to keep the event loop light at 60fps
             if idx % 20 == 0 or idx == total or idx == 1:
                 self.progress.emit(f"{verb} ({idx:,}/{total:,}) - {path.name}", idx, total)
+
+        if removed_paths or moved_pairs:
+            try:
+                cache = self.cache_manager or CacheManager()
+                if removed_paths:
+                    cache.remove_paths(removed_paths)
+                if moved_pairs:
+                    cache.relocate_paths(moved_pairs)
+            except Exception:
+                pass
 
         self.finished_action.emit(deleted_set, errors)
 

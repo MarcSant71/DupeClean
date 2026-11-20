@@ -15,7 +15,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any, Callable, Set
+from typing import Dict, Iterable, List, Sequence, Tuple, Optional, Any, Callable, Set, Union
 import xxhash
 
 from dupeclean.core.models import FileRecord, ScanMode, ScanPath
@@ -504,6 +504,21 @@ class CacheManager:
         )
         return [r for r in candidates if r.volume_id > 0 and r.file_id > 0]
 
+    _ALL_CACHE_TABLES = ("cache_exact", "cache_images", "cache_videos")
+
+    @staticmethod
+    def _is_volume_mounted(path_str: str, dir_cache: Dict[str, bool]) -> bool:
+        """Return False if a drive letter is currently unplugged/unmounted, protecting offline external cache."""
+        drive = os.path.splitdrive(path_str)[0]
+        if not drive:
+            return True
+        root = drive + "\\"
+        mounted = dir_cache.get(root)
+        if mounted is None:
+            mounted = os.path.isdir(root)
+            dir_cache[root] = mounted
+        return mounted
+
     @staticmethod
     def _path_exists_cached(path_str: str, dir_cache: Dict[str, bool]) -> bool:
         """Check path existence while caching parent directory lookups (turns renamed folders into 1 syscall)."""
@@ -525,11 +540,13 @@ class CacheManager:
         active_paths: Set[str],
         dir_cache: Optional[Dict[str, bool]] = None,
     ) -> None:
-        """Remove old paths from SQLite only if they no longer exist on disk (protects hardlinks)."""
+        """Remove old paths from SQLite only if their volume is mounted and they no longer exist on disk."""
+        if not stale_candidates:
+            return
         d_cache = dir_cache if dir_cache is not None else {}
         to_delete = [
             (p,) for p in stale_candidates
-            if p not in active_paths and not self._path_exists_cached(p, d_cache)
+            if p not in active_paths and self._is_volume_mounted(p, d_cache) and not self._path_exists_cached(p, d_cache)
         ]
         if to_delete:
             conn.executemany(f"DELETE FROM {table} WHERE path = ?;", to_delete)
@@ -865,6 +882,8 @@ class CacheManager:
                     )
                     hashed_candidates = [r for r in sieve_candidates if r.prefix_hash]
                     l3_matched: List[Tuple[FileRecord, bytes]] = []
+                    stale_l3_candidates: Set[str] = set()
+                    active_l3_paths: Set[str] = set()
                     total_l3 = len(hashed_candidates)
 
                     for i in range(0, total_l3, chunk_size):
@@ -876,19 +895,24 @@ class CacheManager:
                             continue
                         placeholders = ",".join("?" for _ in unique_hashes)
                         cursor = conn.execute(
-                            f"SELECT size, prefix_hash, embedding FROM cache_images WHERE prefix_hash IN ({placeholders}) AND prefix_hash IS NOT NULL",
+                            f"SELECT path, size, prefix_hash, embedding FROM cache_images WHERE prefix_hash IN ({placeholders}) AND prefix_hash IS NOT NULL",
                             unique_hashes
                         )
-                        match_map: Dict[Tuple[int, str], bytes] = {}
-                        for r_size, r_phash, emb_blob in cursor.fetchall():
+                        match_map: Dict[Tuple[int, str], Tuple[str, bytes]] = {}
+                        for r_path, r_size, r_phash, emb_blob in cursor.fetchall():
                             is_tombstone = len(emb_blob) == 0
                             if is_tombstone or expected_bytes is None or len(emb_blob) == expected_bytes:
-                                match_map.setdefault((r_size, r_phash), emb_blob)
+                                match_map.setdefault((r_size, r_phash), (r_path, emb_blob))
 
                         for rec in chunk:
-                            emb_blob = match_map.get((rec.size, rec.prefix_hash))  # type: ignore[arg-type]
-                            if emb_blob is not None:
-                                results[str(rec.path)] = emb_blob
+                            matched = match_map.get((rec.size, rec.prefix_hash))  # type: ignore[arg-type]
+                            if matched is not None:
+                                src_path, emb_blob = matched
+                                new_path_str = str(rec.path)
+                                results[new_path_str] = emb_blob
+                                active_l3_paths.add(new_path_str)
+                                if src_path != new_path_str:
+                                    stale_l3_candidates.add(src_path)
                                 l3_matched.append((rec, emb_blob))
 
                         done_l3 = min(i + chunk_size, total_l3)
@@ -913,6 +937,7 @@ class CacheManager:
                                 file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_images.file_id END,
                                 prefix_hash=excluded.prefix_hash;
                         """, l3_upserts)
+                        self._cleanup_dead_paths(conn, "cache_images", stale_l3_candidates, active_l3_paths)
         tracker.finish()
         return results
 
@@ -1101,6 +1126,8 @@ class CacheManager:
                     )
                     hashed_candidates = [r for r in sieve_candidates if r.prefix_hash]
                     l3_matched: List[Tuple[FileRecord, float, bytes]] = []
+                    stale_l3_candidates: Set[str] = set()
+                    active_l3_paths: Set[str] = set()
                     total_l3 = len(hashed_candidates)
 
                     for i in range(0, total_l3, chunk_size):
@@ -1112,14 +1139,14 @@ class CacheManager:
                             continue
                         placeholders = ",".join("?" for _ in unique_hashes)
                         cursor = conn.execute(
-                            f"SELECT size, prefix_hash, mtime, duration, embedding FROM cache_videos WHERE prefix_hash IN ({placeholders}) AND prefix_hash IS NOT NULL",
+                            f"SELECT path, size, prefix_hash, mtime, duration, embedding FROM cache_videos WHERE prefix_hash IN ({placeholders}) AND prefix_hash IS NOT NULL",
                             unique_hashes
                         )
-                        match_map: Dict[Tuple[int, str], List[Tuple[float, float, bytes]]] = defaultdict(list)
-                        for r_size, r_phash, r_mtime, dur, emb_blob in cursor.fetchall():
+                        match_map: Dict[Tuple[int, str], List[Tuple[str, float, float, bytes]]] = defaultdict(list)
+                        for r_path, r_size, r_phash, r_mtime, dur, emb_blob in cursor.fetchall():
                             is_valid_tombstone = (dur == -1.0 and len(emb_blob) == 0)
                             if is_valid_tombstone or expected_bytes is None or len(emb_blob) == expected_bytes:
-                                match_map[(r_size, r_phash)].append((r_mtime, dur, emb_blob))
+                                match_map[(r_size, r_phash)].append((r_path, r_mtime, dur, emb_blob))
 
                         for rec in chunk:
                             candidates_row = match_map.get((rec.size, rec.prefix_hash))  # type: ignore[arg-type]
@@ -1127,16 +1154,20 @@ class CacheManager:
                                 continue
                             is_dav = rec.ext == ".dav" or str(rec.path).lower().endswith(".dav")
                             matched_entry = None
-                            for r_mtime, dur, emb_blob in candidates_row:
+                            for r_path, r_mtime, dur, emb_blob in candidates_row:
                                 # Pre-allocated CCTV .dav files require mtime proximity to avoid empty-container collisions
                                 if is_dav and abs(rec.mtime - r_mtime) > 2.0:
                                     continue
-                                matched_entry = (dur, emb_blob)
+                                matched_entry = (r_path, dur, emb_blob)
                                 break
 
                             if matched_entry is not None:
-                                dur, emb_blob = matched_entry
-                                results[str(rec.path)] = (dur, emb_blob)
+                                src_path, dur, emb_blob = matched_entry
+                                new_path_str = str(rec.path)
+                                results[new_path_str] = (dur, emb_blob)
+                                active_l3_paths.add(new_path_str)
+                                if src_path != new_path_str:
+                                    stale_l3_candidates.add(src_path)
                                 l3_matched.append((rec, dur, emb_blob))
 
                         done_l3 = min(i + chunk_size, total_l3)
@@ -1162,6 +1193,7 @@ class CacheManager:
                                 file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_videos.file_id END,
                                 prefix_hash=excluded.prefix_hash;
                         """, l3_upserts)
+                        self._cleanup_dead_paths(conn, "cache_videos", stale_l3_candidates, active_l3_paths)
         tracker.finish()
         return results
 
@@ -1193,6 +1225,157 @@ class CacheManager:
     # -------------------------------------------------------------------------
     # 4. Statistics and Maintenance
     # -------------------------------------------------------------------------
+
+    def remove_paths(self, paths: Iterable[Union[Path, str]]) -> None:
+        """Delete orphaned cache entries for removed files across all cache tables."""
+        unique_paths = list(dict.fromkeys(str(p) for p in paths))
+        if not unique_paths:
+            return
+        chunk_size = 900
+        with self._get_connection() as conn:
+            for i in range(0, len(unique_paths), chunk_size):
+                chunk = unique_paths[i:i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                for table in self._ALL_CACHE_TABLES:
+                    conn.execute(f"DELETE FROM {table} WHERE path IN ({placeholders});", chunk)
+
+    def relocate_paths(self, moves: Sequence[Tuple[Union[Path, str], Union[Path, str]]]) -> None:
+        """Update cached paths in-place across all tables when files are moved (no BLOB rewrite)."""
+        if not moves:
+            return
+        updates: List[Tuple[str, int, int, str]] = []
+        for src, dst in moves:
+            src_str = str(src)
+            dst_path = Path(dst)
+            dst_str = str(dst_path)
+            if src_str == dst_str:
+                continue
+            vol_id, f_id = 0, 0
+            _, supports_fid = get_volume_capabilities(dst_path)
+            if supports_fid:
+                try:
+                    st = os.stat(dst_path, follow_symlinks=False)
+                    vol_id = getattr(st, "st_dev", 0) or 0
+                    f_id = getattr(st, "st_ino", 0) or 0
+                except OSError:
+                    pass
+            updates.append((dst_str, vol_id, f_id, src_str))
+
+        if not updates:
+            return
+        with self._get_connection() as conn:
+            for table in self._ALL_CACHE_TABLES:
+                conn.executemany(
+                    f"UPDATE OR REPLACE {table} SET path = ?, volume_id = ?, file_id = ? WHERE path = ?;",
+                    updates,
+                )
+
+    def prune_scanned_roots(
+        self,
+        scan_paths: Sequence[ScanPath],
+        excluded_paths: Sequence[Path],
+        active_records: Sequence[FileRecord],
+        mode: ScanMode,
+        vacuum_threshold: float = 0.25,
+    ) -> int:
+        """
+        Prune orphaned cache rows under scanned root folders for the active mode only.
+        Respects excluded folders, verifies each root is currently mounted, and runs
+        a conditional VACUUM when freed pages exceed vacuum_threshold.
+        """
+        table_map = {
+            ScanMode.EXACT: "cache_exact",
+            ScanMode.IMAGES: "cache_images",
+            ScanMode.VIDEOS: "cache_videos",
+        }
+        table = table_map.get(mode)
+        if not table or not scan_paths:
+            return 0
+
+        root_prefixes: List[str] = []
+        for sp in scan_paths:
+            try:
+                resolved = sp.path.resolve()
+                if not resolved.is_dir():
+                    continue
+                prefix = str(resolved).rstrip("\\/") + "\\"
+                root_prefixes.append(prefix)
+            except OSError:
+                continue
+
+        if not root_prefixes:
+            return 0
+
+        active_norm = {
+            os.path.normcase(os.path.normpath(str(r.path)))
+            for r in active_records
+        }
+        excl_exact: Set[str] = set()
+        excl_prefixes: List[str] = []
+        for ep in excluded_paths:
+            try:
+                ep_norm = os.path.normcase(os.path.normpath(str(ep.resolve()))).rstrip("\\/")
+            except OSError:
+                ep_norm = os.path.normcase(os.path.normpath(str(ep))).rstrip("\\/")
+            if ep_norm:
+                excl_exact.add(ep_norm)
+                excl_prefixes.append(ep_norm + "\\")
+
+        dead_paths: List[str] = []
+        should_vacuum = False
+
+        with self._get_connection() as conn:
+            seen_candidates: Set[str] = set()
+            for prefix in root_prefixes:
+                prefix_norm = os.path.normcase(prefix)
+                like_pat = (
+                    prefix.replace("!", "!!")
+                    .replace("%", "!%")
+                    .replace("_", "!_")
+                    + "%"
+                )
+                cur = conn.execute(
+                    f"SELECT path FROM {table} WHERE path LIKE ? ESCAPE '!';",
+                    (like_pat,),
+                )
+                for (db_path_str,) in cur.fetchall():
+                    if db_path_str in seen_candidates:
+                        continue
+                    norm_p = os.path.normcase(os.path.normpath(db_path_str))
+                    if not norm_p.startswith(prefix_norm):
+                        continue
+                    if norm_p in active_norm:
+                        continue
+                    if norm_p in excl_exact or any(norm_p.startswith(ep) for ep in excl_prefixes):
+                        continue
+                    seen_candidates.add(db_path_str)
+                    dead_paths.append(db_path_str)
+
+            if dead_paths:
+                chunk_size = 900
+                for i in range(0, len(dead_paths), chunk_size):
+                    chunk = dead_paths[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    conn.execute(f"DELETE FROM {table} WHERE path IN ({placeholders});", chunk)
+
+                page_count = conn.execute("PRAGMA page_count;").fetchone()[0]
+                freelist_count = conn.execute("PRAGMA freelist_count;").fetchone()[0]
+                if (
+                    page_count > 0
+                    and freelist_count >= 16
+                    and (freelist_count / page_count) >= vacuum_threshold
+                ):
+                    should_vacuum = True
+
+        if should_vacuum:
+            v_conn = sqlite3.connect(str(self.db_path), timeout=60.0)
+            try:
+                v_conn.isolation_level = None
+                v_conn.execute("VACUUM;")
+            finally:
+                v_conn.close()
+
+        return len(dead_paths)
 
     def get_stats(self) -> Dict[str, Any]:
         """Retorna contagem de registros em cache e tamanho do banco em MB."""
