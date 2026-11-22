@@ -67,7 +67,8 @@ def crawl_directories(
     excluded_paths: List[Path],
     mode: ScanMode,
     progress_callback: Optional[Callable[[str, int, int], None]] = None,
-    stop_check: Optional[Callable[[], bool]] = None
+    stop_check: Optional[Callable[[], bool]] = None,
+    folder_counts_out: Optional[Dict[str, int]] = None,
 ) -> List[FileRecord]:
     """
     Crawls all included directories, marking the 'is_reference' flag
@@ -178,9 +179,14 @@ def crawl_directories(
             return records
         root_dir = sp.path.resolve()
         if not root_dir.exists():
+            if folder_counts_out is not None:
+                folder_counts_out[os.path.normpath(str(sp.path))] = 0
             continue
 
+        before_count = len(records)
         _crawl_folder(root_dir, sp.is_reference)
+        if folder_counts_out is not None and not (stop_check and stop_check()):
+            folder_counts_out[os.path.normpath(str(sp.path))] = len(records) - before_count
 
     if stop_check and stop_check():
         return records

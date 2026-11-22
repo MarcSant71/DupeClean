@@ -5,7 +5,7 @@ and Reference Folder (Ref) toggle button.
 
 import os
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QGroupBox, QTableWidget,
@@ -118,12 +118,14 @@ class FolderPanel(QWidget):
         inc_group = QGroupBox("Folders to Scan (Drag && Drop folders here)")
         inc_layout = QVBoxLayout(inc_group)
 
-        self.table_included = DropTableWidget(0, 2)
-        self.table_included.setHorizontalHeaderLabels(["Ref", "Folder Path"])
+        self.table_included = DropTableWidget(0, 3)
+        self.table_included.setHorizontalHeaderLabels(["Ref", "Folder Path", "Files"])
         self.table_included.verticalHeader().setVisible(False)
         self.table_included.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.table_included.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table_included.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         self.table_included.setColumnWidth(0, 50)
+        self.table_included.setColumnWidth(2, 80)
         self.table_included.paths_dropped.connect(self._add_multiple_included_paths)
         self.table_included.itemSelectionChanged.connect(self._update_buttons_state)
         self.table_included.model().rowsInserted.connect(self._on_included_rows_inserted)
@@ -219,6 +221,34 @@ class FolderPanel(QWidget):
         path_item = QTableWidgetItem(path_str)
         path_item.setFlags(path_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.table_included.setItem(row, 1, path_item)
+
+        # File count item (populated after Stage 1 scan discovery)
+        count_item = QTableWidgetItem("—")
+        count_item.setFlags(count_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        count_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.table_included.setItem(row, 2, count_item)
+
+    def reset_folder_counts(self):
+        """Reset displayed file counts to placeholder before a new scan or mode change."""
+        for row in range(self.table_included.rowCount()):
+            item = self.table_included.item(row, 2)
+            if item:
+                item.setText("—")
+
+    def set_folder_counts(self, counts: Dict[str, int]):
+        """Populate the Files column with exact per-folder counts from Stage 1 discovery."""
+        norm_counts = {
+            os.path.normcase(os.path.normpath(k)): v
+            for k, v in counts.items()
+        }
+        for row in range(self.table_included.rowCount()):
+            path_item = self.table_included.item(row, 1)
+            count_item = self.table_included.item(row, 2)
+            if not path_item or not count_item:
+                continue
+            key = os.path.normcase(os.path.normpath(path_item.text()))
+            if key in norm_counts:
+                count_item.setText(f"{norm_counts[key]:,}")
 
     def _update_buttons_state(self, *args):
         has_inc = self.table_included.rowCount() > 0

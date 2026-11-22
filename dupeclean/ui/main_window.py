@@ -30,7 +30,7 @@ from dupeclean.ui.results_table import ResultsWidget, format_size
 from dupeclean.ui.preview_panel import PreviewPanel
 from dupeclean.ui.progress_bar import SmoothProgressBar
 from dupeclean.ui.help_dialog import HelpDialog
-from dupeclean.worker import ScanWorker, FileActionWorker, CacheClearWorker
+from dupeclean.worker import ScanWorker, FileActionWorker, CacheClearWorker, CacheMaintenanceWorker
 
 
 class ModeItemDelegate(QStyledItemDelegate):
@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         self.gpu_info = gpu_info
         self.worker: ScanWorker = None
         self.file_worker: Optional[FileActionWorker] = None
+        self._maintenance_worker: Optional[CacheMaintenanceWorker] = None
         self.current_mode = ScanMode.EXACT
         self._was_cancelled: bool = False
         self._is_busy: bool = False
@@ -587,6 +588,7 @@ class MainWindow(QMainWindow):
             return
 
         self.current_mode = new_mode
+        self.folder_panel.reset_folder_counts()
 
         # Exibe o controle de sensibilidade (slider) apenas para modos visuais
         self.container_slider.setVisible(self.current_mode in (ScanMode.IMAGES, ScanMode.VIDEOS))
@@ -769,6 +771,7 @@ class MainWindow(QMainWindow):
         """When all scan sources are removed, clear the duplicate grid, close preview, and reset status."""
         if self.worker and self.worker.isRunning():
             return
+        self._stop_maintenance_worker()
 
         self.results_widget.clear()
         if hasattr(self, "preview_panel"):
@@ -798,9 +801,37 @@ class MainWindow(QMainWindow):
         self.cache_stack.setCurrentIndex(1)
         self.btn_cache_no.setFocus()
 
+    def _stop_maintenance_worker(self):
+        """Abort any background post-scan cache pruning before starting a new scan, clear, or closing."""
+        mw = getattr(self, "_maintenance_worker", None)
+        if mw and mw.isRunning():
+            mw.requestInterruption()
+            mw.wait(2000)
+        self._maintenance_worker = None
+
+    def _start_maintenance_worker(self, worker: Optional[ScanWorker]):
+        """Start post-scan orphan pruning and WAL checkpoint in background without locking UI controls."""
+        if not worker:
+            return
+        records = getattr(worker, "last_scanned_records", None)
+        if records is None:
+            return
+        self._stop_maintenance_worker()
+        mw = CacheMaintenanceWorker(
+            scan_paths=worker.scan_paths,
+            excluded_paths=worker.excluded_paths,
+            records=records,
+            mode=worker.mode,
+            parent=self,
+        )
+        mw.finished.connect(lambda: setattr(self, "_maintenance_worker", None) if self._maintenance_worker is mw else None)
+        self._maintenance_worker = mw
+        mw.start()
+
     def _execute_inline_cache_clear(self):
         if getattr(self, "cache_worker", None) and self.cache_worker.isRunning():
             return
+        self._stop_maintenance_worker()
         self.btn_cache_yes.setEnabled(False)
         self.btn_cache_no.setEnabled(False)
 
@@ -834,6 +865,7 @@ class MainWindow(QMainWindow):
         threshold = self.slider_sim.value() / 100.0
 
         self._set_scanning_state(True)
+        self.folder_panel.reset_folder_counts()
         self.results_widget.clear()
         self.preview_panel.clear()
         self.preview_panel.setVisible(False)
@@ -857,6 +889,7 @@ class MainWindow(QMainWindow):
             similarity_threshold=threshold
         )
         self.worker.progress_stage.connect(self._on_stage_progress)
+        self.worker.folder_counts_ready.connect(self.folder_panel.set_folder_counts)
         self.worker.scan_finished.connect(self._on_scan_finished)
         self.worker.scan_error.connect(self._on_scan_error)
         self.worker.finished.connect(self._finalize_scan_ui)
@@ -877,6 +910,8 @@ class MainWindow(QMainWindow):
         """Ensures immediate termination of all background processes and threads upon closing the window."""
         if hasattr(self, "preview_panel"):
             self.preview_panel._worker.stop()
+
+        self._stop_maintenance_worker()
 
         if getattr(self, "cache_worker", None) and self.cache_worker.isRunning():
             self.cache_worker.wait(1000)
@@ -956,7 +991,9 @@ class MainWindow(QMainWindow):
             self._is_scan_mounting = False
 
         # Finish scan state only after data is fully assembled
+        scan_worker = self.worker
         self._set_scanning_state(False)
+        self._start_maintenance_worker(scan_worker)
 
         # Ensure 100% on both bars upon scan completion for clean visual closure
         self.progress_current.setRange(0, 100)
@@ -969,14 +1006,14 @@ class MainWindow(QMainWindow):
 
         total_files = sum(len(g.files) for g in groups)
         total_reclaim = sum(g.reclaimable_bytes for g in groups)
-        reclaim_mb = round(total_reclaim / (1024 * 1024), 2)
+        reclaim_str = format_size(total_reclaim)
 
         if groups:
             group_word = "group" if len(groups) == 1 else "groups"
             file_word = "file" if total_files == 1 else "files"
             self.lbl_status.setText(
                 f"Scan completed! Found {len(groups)} duplicate {group_word} "
-                f"({total_files} {file_word}). Estimated space to free: {reclaim_mb} MB."
+                f"({total_files} {file_word}). Estimated space to free: {reclaim_str}."
             )
         else:
             self.lbl_status.setText("Scan completed. No duplicates found with current filters.")

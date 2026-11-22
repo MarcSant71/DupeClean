@@ -9,7 +9,7 @@ import send2trash
 import torch
 from PySide6.QtCore import QThread, Signal
 
-from dupeclean.core.models import ScanPath, ScanMode, DuplicateGroup, format_size
+from dupeclean.core.models import FileRecord, ScanPath, ScanMode, DuplicateGroup, format_size
 from dupeclean.core.scanner import crawl_directories
 from dupeclean.core.hasher_exact import find_exact_duplicates
 from dupeclean.core.hasher_image import extract_image_embeddings
@@ -23,6 +23,7 @@ class ScanWorker(QThread):
     
     progress_status = Signal(str, "qint64", "qint64")                    # (message, current_item, total_items)
     progress_stage = Signal(str, "qint64", "qint64", int, int)           # (message, current_item, total_items, stage_num, total_stages)
+    folder_counts_ready = Signal(dict)                                   # ({folder_path: file_count})
     scan_finished = Signal(list)                               # (List[DuplicateGroup])
     scan_error = Signal(str)
 
@@ -39,6 +40,7 @@ class ScanWorker(QThread):
         self.excluded_paths = excluded_paths
         self.mode = mode
         self.similarity_threshold = similarity_threshold
+        self.last_scanned_records: List[FileRecord] = []
 
     def run(self):
         try:
@@ -52,26 +54,24 @@ class ScanWorker(QThread):
             def _crawl_cb(msg: str, count: int, tot: int):
                 self.progress_stage.emit(msg, count, 0, 1, total_stages)
 
+            folder_counts = {}
             records = crawl_directories(
                 scan_paths=self.scan_paths,
                 excluded_paths=self.excluded_paths,
                 mode=self.mode,
                 progress_callback=_crawl_cb,
-                stop_check=self.isInterruptionRequested
+                stop_check=self.isInterruptionRequested,
+                folder_counts_out=folder_counts,
             )
 
             if self.isInterruptionRequested():
                 return
 
+            self.last_scanned_records = records
+            self.folder_counts_ready.emit(folder_counts)
+
             if not records:
                 self.scan_finished.emit([])
-                if not self.isInterruptionRequested():
-                    try:
-                        cache.prune_scanned_roots(
-                            self.scan_paths, self.excluded_paths, [], self.mode
-                        )
-                    except Exception:
-                        pass
                 return
 
             cache.save_folder_counts(self.scan_paths, len(records))
@@ -162,12 +162,6 @@ class ScanWorker(QThread):
             if not self.isInterruptionRequested():
                 groups = filter_reference_groups(groups)
                 self.scan_finished.emit(groups)
-                try:
-                    cache.prune_scanned_roots(
-                        self.scan_paths, self.excluded_paths, records, self.mode
-                    )
-                except Exception:
-                    pass
 
         except Exception as e:
             try:
@@ -180,12 +174,6 @@ class ScanWorker(QThread):
             except Exception:
                 pass
             self.scan_error.emit(f"Error during scan: {str(e)}")
-        finally:
-            if not self.isInterruptionRequested():
-                try:
-                    cache.checkpoint()
-                except Exception:
-                    pass
 
 
 class FileActionWorker(QThread):
@@ -265,6 +253,41 @@ class FileActionWorker(QThread):
                 pass
 
         self.finished_action.emit(deleted_set, errors)
+
+
+class CacheMaintenanceWorker(QThread):
+    """Run post-scan orphan pruning and WAL checkpoint asynchronously without blocking the UI."""
+
+    def __init__(
+        self,
+        scan_paths: List[ScanPath],
+        excluded_paths: List[Path],
+        records: List[FileRecord],
+        mode: ScanMode,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.scan_paths = scan_paths
+        self.excluded_paths = excluded_paths
+        self.records = records
+        self.mode = mode
+
+    def run(self):
+        try:
+            if self.isInterruptionRequested():
+                return
+            cache = CacheManager()
+            cache.prune_scanned_roots(
+                self.scan_paths,
+                self.excluded_paths,
+                self.records,
+                self.mode,
+                stop_check=self.isInterruptionRequested,
+            )
+            if not self.isInterruptionRequested():
+                cache.checkpoint()
+        except Exception:
+            pass
 
 
 class CacheClearWorker(QThread):

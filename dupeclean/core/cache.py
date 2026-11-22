@@ -1277,12 +1277,15 @@ class CacheManager:
         active_records: Sequence[FileRecord],
         mode: ScanMode,
         vacuum_threshold: float = 0.25,
+        stop_check: Optional[Callable[[], bool]] = None,
     ) -> int:
         """
         Prune orphaned cache rows under scanned root folders for the active mode only.
         Respects excluded folders, verifies each root is currently mounted, and runs
         a conditional VACUUM when freed pages exceed vacuum_threshold.
         """
+        if stop_check and stop_check():
+            return 0
         table_map = {
             ScanMode.EXACT: "cache_exact",
             ScanMode.IMAGES: "cache_images",
@@ -1306,20 +1309,19 @@ class CacheManager:
         if not root_prefixes:
             return 0
 
-        active_norm = {
-            os.path.normcase(os.path.normpath(str(r.path)))
-            for r in active_records
-        }
+        norm_fn = str.lower if os.name == "nt" else lambda s: s
+        active_norm = {norm_fn(str(r.path)) for r in active_records}
         excl_exact: Set[str] = set()
         excl_prefixes: List[str] = []
         for ep in excluded_paths:
             try:
-                ep_norm = os.path.normcase(os.path.normpath(str(ep.resolve()))).rstrip("\\/")
+                ep_norm = norm_fn(os.path.normpath(str(ep.resolve()))).rstrip("\\/")
             except OSError:
-                ep_norm = os.path.normcase(os.path.normpath(str(ep))).rstrip("\\/")
+                ep_norm = norm_fn(os.path.normpath(str(ep))).rstrip("\\/")
             if ep_norm:
                 excl_exact.add(ep_norm)
                 excl_prefixes.append(ep_norm + "\\")
+        has_exclusions = bool(excl_exact or excl_prefixes)
 
         dead_paths: List[str] = []
         should_vacuum = False
@@ -1327,7 +1329,7 @@ class CacheManager:
         with self._get_connection() as conn:
             seen_candidates: Set[str] = set()
             for prefix in root_prefixes:
-                prefix_norm = os.path.normcase(prefix)
+                prefix_norm = norm_fn(prefix)
                 like_pat = (
                     prefix.replace("!", "!!")
                     .replace("%", "!%")
@@ -1339,35 +1341,42 @@ class CacheManager:
                     (like_pat,),
                 )
                 for (db_path_str,) in cur.fetchall():
+                    if stop_check and stop_check():
+                        return 0
                     if db_path_str in seen_candidates:
                         continue
-                    norm_p = os.path.normcase(os.path.normpath(db_path_str))
+                    norm_p = norm_fn(db_path_str)
                     if not norm_p.startswith(prefix_norm):
                         continue
                     if norm_p in active_norm:
                         continue
-                    if norm_p in excl_exact or any(norm_p.startswith(ep) for ep in excl_prefixes):
+                    if has_exclusions and (
+                        norm_p in excl_exact or any(norm_p.startswith(ep) for ep in excl_prefixes)
+                    ):
                         continue
                     seen_candidates.add(db_path_str)
                     dead_paths.append(db_path_str)
 
-            if dead_paths:
+            if dead_paths and not (stop_check and stop_check()):
                 chunk_size = 900
                 for i in range(0, len(dead_paths), chunk_size):
+                    if stop_check and stop_check():
+                        break
                     chunk = dead_paths[i:i + chunk_size]
                     placeholders = ",".join("?" for _ in chunk)
                     conn.execute(f"DELETE FROM {table} WHERE path IN ({placeholders});", chunk)
 
-                page_count = conn.execute("PRAGMA page_count;").fetchone()[0]
-                freelist_count = conn.execute("PRAGMA freelist_count;").fetchone()[0]
-                if (
-                    page_count > 0
-                    and freelist_count >= 16
-                    and (freelist_count / page_count) >= vacuum_threshold
-                ):
-                    should_vacuum = True
+                if not (stop_check and stop_check()):
+                    page_count = conn.execute("PRAGMA page_count;").fetchone()[0]
+                    freelist_count = conn.execute("PRAGMA freelist_count;").fetchone()[0]
+                    if (
+                        page_count > 0
+                        and freelist_count >= 16
+                        and (freelist_count / page_count) >= vacuum_threshold
+                    ):
+                        should_vacuum = True
 
-        if should_vacuum:
+        if should_vacuum and not (stop_check and stop_check()):
             v_conn = sqlite3.connect(str(self.db_path), timeout=60.0)
             try:
                 v_conn.isolation_level = None
