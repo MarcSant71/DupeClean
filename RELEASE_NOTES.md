@@ -1,5 +1,15 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.5.0
+- **Per-Folder File Count Column (`folder_panel.py`, `scanner.py`, `worker.py`, `main_window.py`):**
+  - Added a `Files` column to the **Folders to Scan** table (`Ref` | `Folder Path` | `Files`) showing exact per-folder file counts discovered during Stage 1 with zero extra disk I/O.
+  - Automatically resets counts when starting a new scan or switching scan modes.
+- **Human-Readable Reclaimable Space (`main_window.py`):**
+  - Updated the scan completion status summary (`Estimated space to free`) to use `format_size()`, automatically scaling from `MB` to `GB` / `TB` above 1 GB (e.g., `1.20 GB`).
+- **Non-Blocking Post-Scan Cache Maintenance (`worker.py`, `cache.py`, `main_window.py`):**
+  - Moved post-scan orphan pruning, conditional `VACUUM`, and WAL `checkpoint()` into an independent `CacheMaintenanceWorker` outside `is_busy`, eliminating 3–5 second UI stalls after scan completion while supporting safe interruption before new scans, cache clears, or exit.
+  - Optimized Windows path normalization in `prune_scanned_roots` for faster scans on large SQLite databases.
+
 ### What's New in v1.4.2
 - **Automatic Cache Orphan Pruning & Conditional VACUUM (`cache.py`, `worker.py`):**
   - Automatically removes deleted file paths (`remove_paths`) and relocates moved file paths in-place (`relocate_paths`) across all 3 cache tables (`cache_exact`, `cache_images`, `cache_videos`) right inside `FileActionWorker` after successful Trash, Delete, or Move operations.
