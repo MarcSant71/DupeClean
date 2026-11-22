@@ -1,8 +1,9 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
 ### What's New in v1.5.0
-- **Per-Folder File Count Column (`folder_panel.py`, `scanner.py`, `worker.py`, `main_window.py`):**
+- **Per-Folder File Count Column & Auto-Grouped Reference Folders (`folder_panel.py`, `scanner.py`, `worker.py`, `main_window.py`):**
   - Added a `Files` column to the **Folders to Scan** table (`Ref` | `Folder Path` | `Files`) showing exact per-folder file counts discovered during Stage 1 with zero extra disk I/O.
+  - Automatically groups `Ref`-checked folders at the top of **Folders to Scan** while preserving relative order, `Files` counts, and a clean transparent cell background.
   - Automatically resets counts when starting a new scan or switching scan modes.
 - **Human-Readable Reclaimable Space (`main_window.py`):**
   - Updated the scan completion status summary (`Estimated space to free`) to use `format_size()`, automatically scaling from `MB` to `GB` / `TB` above 1 GB (e.g., `1.20 GB`).

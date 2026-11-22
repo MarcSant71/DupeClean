@@ -5,8 +5,8 @@ and Reference Folder (Ref) toggle button.
 
 import os
 from pathlib import Path
-from typing import Dict, List
-from PySide6.QtCore import Qt, Signal
+from typing import Dict, List, Optional
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QGroupBox, QTableWidget,
     QTableWidgetItem, QPushButton, QFileDialog, QHeaderView, QListWidget, QListWidgetItem
@@ -198,11 +198,19 @@ class FolderPanel(QWidget):
             if item and item.text().lower() == path_str.lower():
                 return
 
+        self._insert_included_row(path_str, is_reference=is_reference, count_text="—")
+        if is_reference and self.table_included.rowCount() > 1:
+            self._sort_included_folders(focus_path=path_str)
+
+    def _insert_included_row(self, path_str: str, is_reference: bool = False, count_text: str = "—"):
+        """Insert a single folder row into table_included with Ref button, path, and Files count."""
         row = self.table_included.rowCount()
         self.table_included.insertRow(row)
 
         # Checkmark toggle button
         cell_widget = QWidget()
+        cell_widget.setObjectName("refCell")
+        cell_widget.setStyleSheet("QWidget#refCell { background: transparent; border: none; }")
         cell_layout = QHBoxLayout(cell_widget)
         cell_layout.setContentsMargins(0, 0, 0, 0)
         cell_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -212,7 +220,7 @@ class FolderPanel(QWidget):
         ref_btn.setCheckable(True)
         ref_btn.setChecked(is_reference)
         ref_btn.setToolTip("Mark as Reference Folder.\nFiles in this folder will NEVER be suggested for deletion.")
-        ref_btn.toggled.connect(lambda checked, b=ref_btn: b.setText("✓" if checked else ""))
+        ref_btn.toggled.connect(lambda checked, b=ref_btn, p=path_str: self._on_ref_toggled(checked, b, p))
 
         cell_layout.addWidget(ref_btn)
         self.table_included.setCellWidget(row, 0, cell_widget)
@@ -223,10 +231,60 @@ class FolderPanel(QWidget):
         self.table_included.setItem(row, 1, path_item)
 
         # File count item (populated after Stage 1 scan discovery)
-        count_item = QTableWidgetItem("—")
+        count_item = QTableWidgetItem(count_text)
         count_item.setFlags(count_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         count_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table_included.setItem(row, 2, count_item)
+
+    def _on_ref_toggled(self, checked: bool, btn: QPushButton, path_str: str):
+        btn.setText("✓" if checked else "")
+        # Defer row rebuild until after Qt finishes mouseReleaseEvent on btn
+        QTimer.singleShot(0, lambda p=path_str: self._sort_included_folders(focus_path=p))
+
+    def _sort_included_folders(self, focus_path: Optional[str] = None):
+        """Group Reference (Ref) folders at the top while preserving relative order within each group."""
+        row_count = self.table_included.rowCount()
+        if row_count <= 1:
+            return
+
+        rows_data = []
+        selected_paths = set()
+        selected_rows = {idx.row() for idx in self.table_included.selectedIndexes()}
+        for row in range(row_count):
+            path_item = self.table_included.item(row, 1)
+            count_item = self.table_included.item(row, 2)
+            cell_widget = self.table_included.cellWidget(row, 0)
+            btn = cell_widget.findChild(QPushButton) if cell_widget else None
+            if not path_item:
+                continue
+            p_str = path_item.text()
+            is_ref = btn.isChecked() if btn else False
+            cnt_str = count_item.text() if count_item else "—"
+            rows_data.append((is_ref, p_str, cnt_str))
+            if row in selected_rows:
+                selected_paths.add(p_str)
+
+        sorted_data = sorted(rows_data, key=lambda r: not r[0])
+        if sorted_data == rows_data:
+            return
+
+        model = self.table_included.model()
+        self.table_included.blockSignals(True)
+        model.blockSignals(True)
+        try:
+            self.table_included.setRowCount(0)
+            for is_ref, p_str, cnt_str in sorted_data:
+                self._insert_included_row(p_str, is_reference=is_ref, count_text=cnt_str)
+
+            target_paths = {focus_path} if focus_path else selected_paths
+            for row, (_, p_str, _) in enumerate(sorted_data):
+                if p_str in target_paths:
+                    self.table_included.selectRow(row)
+        finally:
+            model.blockSignals(False)
+            self.table_included.blockSignals(False)
+
+        self._update_buttons_state()
 
     def reset_folder_counts(self):
         """Reset displayed file counts to placeholder before a new scan or mode change."""
