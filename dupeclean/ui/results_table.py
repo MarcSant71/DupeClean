@@ -454,13 +454,14 @@ class ResultsModel(QAbstractTableModel):
 
         selected_count = 0
         selected_bytes = 0
-        chunk_size = 25000 if total_groups > 25000 else total_groups
+        show_progress = progress_callback is not None and total_groups > 25000
+        chunk_size = 25000
 
         for idx, entry in enumerate(self._entries, 1):
             c_delta, b_delta = updater(entry)
             selected_count += c_delta
             selected_bytes += b_delta
-            if progress_callback and (idx % chunk_size == 0 or idx == total_groups):
+            if show_progress and (idx % chunk_size == 0 or idx == total_groups):
                 progress_callback(idx, total_groups)
 
         self._selected_count = selected_count
@@ -960,8 +961,11 @@ class ResultsWidget(QWidget):
         if not self.groups:
             return
         app = QApplication.instance()
+        emitted_progress = False
         try:
             def _on_prog(curr: int, total: int):
+                nonlocal emitted_progress
+                emitted_progress = True
                 self.selection_progress.emit(progress_title, curr, total)
                 if app:
                     app.processEvents()
@@ -970,7 +974,8 @@ class ResultsWidget(QWidget):
             self._selected_count = count
             self._selected_bytes = total_bytes
         finally:
-            self.selection_progress.emit("", 0, 0)
+            if emitted_progress:
+                self.selection_progress.emit("", 0, 0)
             self.selection_changed.emit(self._selected_count, self._selected_bytes)
 
     def select_smart_duplicates(self):

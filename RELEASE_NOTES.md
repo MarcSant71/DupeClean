@@ -7,6 +7,9 @@ Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleratio
 - **Windows Permanent Delete Resilience & Streamlined Status Completion (`worker.py`, `main_window.py`):**
   - Hardened `_permanent_delete_file` with extended-length Windows paths (`\\?\`), trailing dot/space handling, Unicode normalization tolerance, and automatic clearing of Read-Only (`FILE_ATTRIBUTE_READONLY`) flags before deletion.
   - Replaced post-action `OK` popups on successful Trash, Move, and Delete operations with immediate status bar summaries (error warnings still surface explicitly).
+- **Stable Bottom Layout & Batch Selection Polish (`main_window.py`, `results_table.py`):**
+  - Locked `stage_widget` to a fixed 2-row height with `setRetainSizeWhenHidden(True)` on secondary stage widgets (`lbl_stage_all`, `progress_all`, `lbl_pct_all`), eliminating the 21 px vertical jump of the bottom folder panel during batch selections and file actions.
+  - Skipped flashing batch progress bars for small result sets (`<= 25,000` groups) and cleared the status bar cleanly when selection drops to zero (`"0 duplicate file(s) selected."`).
 - **Portable Root `logs/` Directory (`crash_logger.py`, `main.py`, `build.bat`, `.gitignore`):**
   - Relocated application crash logs from `data/logs/` to `<root>/logs/` cleanly separating logs from `data/` and `lib/` in standalone portable builds.
 

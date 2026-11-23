@@ -497,9 +497,12 @@ class MainWindow(QMainWindow):
         # Alias progress_bar aponta para progress_all para retrocompatibilidade
         self.progress_bar = self.progress_all
 
-        sp_stage = self.stage_widget.sizePolicy()
-        sp_stage.setRetainSizeWhenHidden(True)
-        self.stage_widget.setSizePolicy(sp_stage)
+        # Retain 2-row height across hidden/single-stage states so the bottom splitter never jumps
+        for widget in (self.stage_widget, self.lbl_stage_all, self.progress_all, self.lbl_pct_all):
+            sp = widget.sizePolicy()
+            sp.setRetainSizeWhenHidden(True)
+            widget.setSizePolicy(sp)
+        self.stage_widget.setFixedHeight(self.stage_widget.sizeHint().height())
         self.stage_widget.setVisible(False)
 
         # Row 3: Status info
@@ -723,10 +726,10 @@ class MainWindow(QMainWindow):
                 clean_title = display_title.rstrip(". :")
                 self.lbl_status.setText(f"{clean_title} ({current:,}/{total:,})...")
         else:
-            self.stage_widget.setVisible(False)
             self.lbl_stage_all.setVisible(True)
             self.progress_all.setVisible(True)
             self.lbl_pct_all.setVisible(True)
+            self.stage_widget.setVisible(False)
             self.lbl_stage_current.setText("Current Stage:")
             self.lbl_pct_current.setText("0%")
             self.progress_current.setRange(0, 100)
@@ -754,6 +757,8 @@ class MainWindow(QMainWindow):
             self.btn_move.setText("📁 Move")
             self.btn_delete_trash.setText("🗑️ Trash")
             self.btn_delete_perm.setText("❌ Delete")
+            if not getattr(self, "_is_scan_mounting", False) and self.results_widget.groups and not is_busy:
+                self.lbl_status.setText("0 duplicate file(s) selected.")
 
     @Slot(str)
     def _on_status_message(self, msg: str):
