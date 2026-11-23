@@ -1,5 +1,15 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.5.1
+- **Full-Group Deletion Safeguard & Balanced Confirmation Dialogs (`results_table.py`, `main_window.py`, `theme.py`, `main.py`):**
+  - Added detection for duplicate groups where all copies are checked (`get_fully_selected_group_count`), displaying a bold `ATTENTION:` warning whenever an action would leave zero copies behind (`Trash`, `Move`, and `Permanent Delete`).
+  - Redesigned confirmation dialogs for a cleaner, consistent layout across all actions (`NoIcon` body with balanced 16 px horizontal margins, crisp vector warning triangle in the title bar, RichText bold emphasis, `?` titles, and always-underlined `&Yes` / `&No` mnemonics on Windows via `AlwaysUnderlineShortcutStyle`).
+- **Windows Permanent Delete Resilience & Streamlined Status Completion (`worker.py`, `main_window.py`):**
+  - Hardened `_permanent_delete_file` with extended-length Windows paths (`\\?\`), trailing dot/space handling, Unicode normalization tolerance, and automatic clearing of Read-Only (`FILE_ATTRIBUTE_READONLY`) flags before deletion.
+  - Replaced post-action `OK` popups on successful Trash, Move, and Delete operations with immediate status bar summaries (error warnings still surface explicitly).
+- **Portable Root `logs/` Directory (`crash_logger.py`, `main.py`, `build.bat`, `.gitignore`):**
+  - Relocated application crash logs from `data/logs/` to `<root>/logs/` cleanly separating logs from `data/` and `lib/` in standalone portable builds.
+
 ### What's New in v1.5.0
 - **Per-Folder File Count Column & Auto-Grouped Reference Folders (`folder_panel.py`, `scanner.py`, `worker.py`, `main_window.py`):**
   - Added a `Files` column to the **Folders to Scan** table (`Ref` | `Folder Path` | `Files`) showing exact per-folder file counts discovered during Stage 1 with zero extra disk I/O.
