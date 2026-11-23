@@ -2,9 +2,11 @@
 Multithreaded worker (QThread) for asynchronous scanning without freezing the GUI.
 """
 
+import os
+import shutil
+import stat
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
-import shutil
 import send2trash
 import torch
 from PySide6.QtCore import QThread, Signal
@@ -176,6 +178,30 @@ class ScanWorker(QThread):
             self.scan_error.emit(f"Error during scan: {str(e)}")
 
 
+def _win_extended_path(path: Path) -> str:
+    """Prefix long/trailing-dot/trailing-space Windows paths with \\\\?\\ so Win32 file ops never fail."""
+    p_str = os.path.abspath(str(path))
+    if os.name == "nt" and not p_str.startswith("\\\\?\\"):
+        if p_str.startswith("\\\\"):
+            return "\\\\?\\UNC\\" + p_str[2:]
+        if len(p_str) >= 248 or p_str.endswith((" ", ".")):
+            return "\\\\?\\" + p_str
+    return p_str
+
+
+def _permanent_delete_file(path: Path) -> None:
+    """Permanently delete a file on disk, handling read-only flags, special chars, and long paths."""
+    target = _win_extended_path(path)
+    try:
+        os.unlink(target)
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        # Clear read-only attribute (common on SD cards / camera backups) and retry
+        os.chmod(target, stat.S_IWRITE)
+        os.unlink(target)
+
+
 class FileActionWorker(QThread):
     """Execute file actions (trash, permanent delete, or move) in the background without freezing the UI."""
 
@@ -220,7 +246,7 @@ class FileActionWorker(QThread):
                     deleted_set.add(path)
                     removed_paths.append(path)
                 elif self.action == "delete":
-                    path.unlink(missing_ok=True)
+                    _permanent_delete_file(path)
                     deleted_set.add(path)
                     removed_paths.append(path)
                 elif self.action == "move" and self.dest_dir:

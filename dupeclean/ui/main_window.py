@@ -4,6 +4,7 @@ Combines tool sidebar, results tree, action controls,
 similarity slider, and folder panel with Reference protection and Drag & Drop.
 """
 
+import html
 import os
 import shutil
 import time
@@ -1030,7 +1031,7 @@ class MainWindow(QMainWindow):
         msg_box.setText(
             f"A critical error occurred during the scan:\n\n"
             f"{sanitized_err}\n\n"
-            f"An error report has been saved in data/logs."
+            f"An error report has been saved in logs."
         )
         msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg_box.exec()
@@ -1044,6 +1045,84 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("Scan cancelled by user.")
             self._was_cancelled = False
 
+    @staticmethod
+    def _safe_total_size(paths: List[Path]) -> int:
+        """Sum file sizes without failing on long Windows paths or files removed concurrently."""
+        total = 0
+        for p in paths:
+            try:
+                total += os.path.getsize(str(p))
+            except OSError:
+                pass
+        return total
+
+    def _build_confirm_dialog(
+        self,
+        title: str,
+        message: str,
+    ) -> QMessageBox:
+        """Build a balanced, iconless-body confirmation dialog with a warning title icon and Yes/No shortcuts."""
+        from dupeclean.ui.theme import create_warning_icon
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setTextFormat(Qt.TextFormat.RichText)
+        msg_box.setText(message)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        msg_box.setIcon(QMessageBox.Icon.NoIcon)
+        msg_box.setWindowIcon(create_warning_icon())
+
+        # Remove QMessageBox's empty column-0 icon spacer so left/right body margins match cleanly
+        layout = msg_box.layout()
+        if layout is not None:
+            for idx in range(layout.count() - 1, -1, -1):
+                _, col, _, _ = layout.getItemPosition(idx)
+                item = layout.itemAt(idx)
+                if col == 0 and item is not None and item.widget() is None:
+                    layout.takeAt(idx)
+            label = msg_box.findChild(QLabel, "qt_msgbox_label")
+            if label is not None:
+                layout.removeWidget(label)
+                layout.addWidget(label, 0, 0, 1, 2)
+            layout.setContentsMargins(16, 14, 16, 14)
+
+        # Ensure '&Yes' and '&No' mnemonics (Alt+Y / Alt+N) are consistently set
+        for std_btn, label in (
+            (QMessageBox.StandardButton.Yes, "&Yes"),
+            (QMessageBox.StandardButton.No, "&No"),
+        ):
+            btn = msg_box.button(std_btn)
+            if btn is not None:
+                btn.setText(label)
+
+        return msg_box
+
+    def _confirm_file_action(
+        self,
+        selected: List[Path],
+        title: str,
+        prompt_template: str,
+        full_group_warning: str,
+        is_permanent: bool = False,
+    ) -> bool:
+        """Prompt confirmation for file actions, escalating warning if any group has 100% of files selected."""
+        size_str = format_size(self._safe_total_size(selected))
+        message = prompt_template.format(count=len(selected), size=size_str)
+
+        full_groups = self.results_widget.get_fully_selected_group_count()
+        if full_groups > 0:
+            group_word = "group" if full_groups == 1 else "groups"
+            message += "<br><br>" + full_group_warning.format(
+                groups=full_groups, group_word=group_word
+            )
+
+        if is_permanent:
+            message += "<br><br>This action cannot be undone!"
+
+        msg_box = self._build_confirm_dialog(title=title, message=message)
+        return msg_box.exec() == QMessageBox.StandardButton.Yes
+
     def _delete_selected_to_trash(self):
         selected = self.results_widget.get_selected_files()
         if not selected:
@@ -1054,18 +1133,13 @@ class MainWindow(QMainWindow):
             )
             return
 
-        total_bytes = sum(p.stat().st_size for p in selected if p.exists())
-        size_str = format_size(total_bytes)
-
-        confirm = QMessageBox.question(
-            self,
-            "Confirm Move to Recycle Bin",
-            f"Move {len(selected):,} selected file(s) ({size_str}) to the Windows Recycle Bin?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-
-        if confirm == QMessageBox.StandardButton.Yes:
+        if self._confirm_file_action(
+            selected,
+            "Confirm Move to Recycle Bin?",
+            "Delete {count:,} selected file(s) ({size})?",
+            "<b>ATTENTION:</b> You are about to delete <b>ALL</b> copies in {groups:,} {group_word}!",
+            is_permanent=False,
+        ):
             self._start_file_action(selected, "trash")
 
     def _move_selected_files(self):
@@ -1084,20 +1158,15 @@ class MainWindow(QMainWindow):
             return
 
         dest_path = Path(dest_dir)
-        total_bytes = sum(p.stat().st_size for p in selected if p.exists())
-        size_str = format_size(total_bytes)
-
-        confirm = QMessageBox.question(
-            self,
-            "Confirm Move Files",
-            f"Move {len(selected):,} selected file(s) ({size_str}) to:\n{dest_path}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-
-        self._start_file_action(selected, "move", dest_dir=dest_path)
+        dest_safe = html.escape(str(dest_path)).replace("{", "{{").replace("}", "}}")
+        if self._confirm_file_action(
+            selected,
+            "Confirm Move Files?",
+            f"Move {{count:,}} selected file(s) ({{size}}) to:<br>{dest_safe}?",
+            "<b>ATTENTION:</b> You are about to move <b>ALL</b> copies in {groups:,} {group_word}!",
+            is_permanent=False,
+        ):
+            self._start_file_action(selected, "move", dest_dir=dest_path)
 
     def _delete_selected_permanently(self):
         """Permanently deletes selected files from disk with strict user confirmation."""
@@ -1110,19 +1179,13 @@ class MainWindow(QMainWindow):
             )
             return
 
-        total_bytes = sum(p.stat().st_size for p in selected if p.exists())
-        size_str = format_size(total_bytes)
-
-        confirm = QMessageBox.warning(
-            self,
-            "Confirm Permanent Deletion",
-            f"WARNING: Permanently delete {len(selected):,} selected file(s) ({size_str}) from disk?\n\n"
-            "This action CANNOT be undone and will NOT use the Recycle Bin!",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-
-        if confirm == QMessageBox.StandardButton.Yes:
+        if self._confirm_file_action(
+            selected,
+            "Confirm Permanent Deletion?",
+            "Permanently delete {count:,} selected file(s) ({size})?",
+            "<b>ATTENTION:</b> You are about to delete <b>ALL</b> copies in {groups:,} {group_word}!",
+            is_permanent=True,
+        ):
             self._start_file_action(selected, "delete")
 
     def _start_file_action(self, paths: List[Path], action: str, dest_dir: Optional[Path] = None):
@@ -1163,53 +1226,22 @@ class MainWindow(QMainWindow):
         self._set_action_busy_state(False)
 
         if action == "trash":
-            if errors:
-                QMessageBox.warning(
-                    self,
-                    "Completed with Warnings",
-                    f"{len(deleted_set):,} files moved to the Recycle Bin.\n"
-                    f"{len(errors):,} errors:\n" + "\n".join(errors[:5])
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"{len(deleted_set):,} file(s) safely moved to the Windows Recycle Bin!"
-                )
-                self.lbl_status.setText(f"{len(deleted_set):,} file(s) moved to the Recycle Bin.")
-
+            status_msg = f"{len(deleted_set):,} file(s) moved to the Recycle Bin."
         elif action == "delete":
-            if errors:
-                QMessageBox.warning(
-                    self,
-                    "Completed with Warnings",
-                    f"{len(deleted_set):,} files permanently deleted.\n"
-                    f"{len(errors):,} errors:\n" + "\n".join(errors[:5])
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"{len(deleted_set):,} file(s) permanently deleted from disk."
-                )
-                self.lbl_status.setText(f"{len(deleted_set):,} file(s) permanently deleted.")
-
+            status_msg = f"{len(deleted_set):,} file(s) permanently deleted."
         elif action == "move":
             dest_name = dest_dir.name if dest_dir else "destination"
-            if errors:
-                QMessageBox.warning(
-                    self,
-                    "Completed with Warnings",
-                    f"{len(deleted_set):,} file(s) moved to '{dest_name}'.\n"
-                    f"{len(errors):,} errors:\n" + "\n".join(errors[:5])
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"{len(deleted_set):,} file(s) safely moved to:\n{dest_dir}"
-                )
-                self.lbl_status.setText(f"{len(deleted_set):,} file(s) moved to '{dest_name}'.")
+            status_msg = f"{len(deleted_set):,} file(s) moved to '{dest_name}'."
+        else:
+            status_msg = f"{len(deleted_set):,} file(s) processed."
+
+        self.lbl_status.setText(status_msg)
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Completed with Warnings",
+                f"{status_msg}\n{len(errors):,} error(s):\n" + "\n".join(errors[:5])
+            )
 
     def _export_results(self):
         """Exports duplicate results to a text report file."""

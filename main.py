@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QThread, Signal
 
 from dupeclean.core.hardware import enforce_high_performance_gpu
-from dupeclean.ui.theme import DARK_THEME_QSS, create_app_icon
+from dupeclean.ui.theme import apply_app_theme, create_app_icon
 from dupeclean.ui.splash import SplashScreen
 
 
@@ -55,7 +55,7 @@ class HardwareInitWorker(QThread):
 
 def excepthook(exc_type, exc_value, exc_tb):
     """Capture unhandled global exceptions and write a sanitized log with 7-day retention."""
-    log_file_str = "data/logs/"
+    log_file_str = "logs/"
     try:
         from dupeclean.core.crash_logger import log_critical_crash
         log_path = log_critical_crash((exc_type, exc_value, exc_tb))
@@ -97,7 +97,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setWindowIcon(create_app_icon())
-    app.setStyleSheet(DARK_THEME_QSS)
+    apply_app_theme(app)
 
     # 1. Show the Splash Screen immediately (< 50ms) with smooth animation active
     splash = SplashScreen()

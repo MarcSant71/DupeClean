@@ -2,6 +2,8 @@
 Tema Dark Moderno com paleta profissional.
 """
 
+from PySide6.QtWidgets import QProxyStyle, QStyle
+
 DARK_THEME_QSS = """
 QMainWindow, QWidget {
     background-color: #18181b;
@@ -415,4 +417,74 @@ def create_app_icon():
         painter.end()
         icon.addPixmap(pixmap)
     return icon
+
+
+class AlwaysUnderlineShortcutStyle(QProxyStyle):
+    """Ensure button shortcut mnemonics (&Yes/&No) always render underlined on Windows."""
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.StyleHint.SH_UnderlineShortcut:
+            return 1
+        return super().styleHint(hint, option, widget, returnData)
+
+
+def apply_app_theme(app):
+    """Apply the base shortcut-underline proxy style and the dark QSS theme."""
+    app.setStyle(AlwaysUnderlineShortcutStyle())
+    app.setStyleSheet(DARK_THEME_QSS)
+
+
+
+def create_warning_icon():
+    """Generate a crisp vector yellow warning triangle icon for dialog title bars."""
+    from PySide6.QtCore import Qt, QPointF, QRectF
+    from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
+
+    icon = QIcon()
+    for size in (16, 24, 32, 48):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        s = float(size)
+        triangle = QPolygonF([
+            QPointF(s * 0.50, s * 0.12),
+            QPointF(s * 0.90, s * 0.86),
+            QPointF(s * 0.10, s * 0.86),
+        ])
+        fill = QColor("#facc15")
+        painter.setBrush(fill)
+        painter.setPen(QPen(fill, max(1.5, s * 0.10), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawPolygon(triangle)
+
+        # Dark exclamation mark centered inside the triangle
+        mark_color = QColor("#18181b")
+        painter.setBrush(mark_color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        stem_w = max(1.6, s * 0.12)
+        painter.drawRoundedRect(QRectF((s - stem_w) * 0.5, s * 0.35, stem_w, s * 0.29), stem_w * 0.4, stem_w * 0.4)
+        dot_d = max(1.8, s * 0.13)
+        painter.drawEllipse(QRectF((s - dot_d) * 0.5, s * 0.70, dot_d, dot_d))
+
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
+
+
+class AlwaysUnderlineShortcutStyle(QProxyStyle):
+    """Ensure button shortcut mnemonics (&Yes/&No) always render underlined on Windows."""
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.StyleHint.SH_UnderlineShortcut:
+            return 1
+        return super().styleHint(hint, option, widget, returnData)
+
+
+def apply_app_theme(app):
+    """Apply the base shortcut-underline proxy style and the dark QSS theme."""
+    app.setStyle(AlwaysUnderlineShortcutStyle())
+    app.setStyleSheet(DARK_THEME_QSS)
+
+
 

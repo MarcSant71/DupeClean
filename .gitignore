@@ -30,6 +30,7 @@ data/
 *.sqlite3
 
 # Logs & crash reports
+logs/
 *.log
 crash.log
 

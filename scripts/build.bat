@@ -44,6 +44,9 @@ if not exist "dist\DupeClean\DupeClean.exe" (
     exit /b 1
 )
 
+if not exist "dist\DupeClean\logs" mkdir "dist\DupeClean\logs"
+if not exist "dist\DupeClean\data" mkdir "dist\DupeClean\data"
+
 :: 4. Compress portable archive using 7-Zip LZMA2
 echo.
 echo Compressing portable archive using 7-Zip LZMA2 solid mode...

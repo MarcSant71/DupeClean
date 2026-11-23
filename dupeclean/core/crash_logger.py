@@ -26,14 +26,14 @@ def get_project_root() -> Path:
 
 
 def get_logs_dir() -> Path:
-    """Return the data/logs directory for storing crash reports."""
+    """Return the logs directory at the application root (sibling of lib/ and data/)."""
     base_dir = get_project_root()
-    logs_dir = base_dir / "data" / "logs"
+    logs_dir = base_dir / "logs"
     try:
         logs_dir.mkdir(parents=True, exist_ok=True)
         return logs_dir
     except Exception:
-        appdata = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "DupeClean" / "data" / "logs"
+        appdata = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "DupeClean" / "logs"
         appdata.mkdir(parents=True, exist_ok=True)
         return appdata
 
@@ -178,7 +178,7 @@ def log_critical_crash(
     1. Formata traceback e mensagem de erro.
     2. Aplica saneamento estrito (LGPD).
     3. Run cleanup of logs older than 7 days.
-    4. Grava em data/logs/crash_YYYY-MM-DD.log.
+    4. Writes to logs/crash_YYYY-MM-DD.log.
     Retorna o Path do arquivo gravado, ou None em caso de falha.
     """
     try:

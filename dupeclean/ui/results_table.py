@@ -1087,6 +1087,13 @@ class ResultsWidget(QWidget):
         """Return paths of all checked non-reference files."""
         return [rec.path for rec in self.get_selected_records()]
 
+    def get_fully_selected_group_count(self) -> int:
+        """Return the number of groups where every file is currently checked."""
+        return sum(
+            1 for entry in self.model._entries
+            if entry.checked and all(entry.checked)
+        )
+
     def get_selected_records(self) -> List[FileRecord]:
         """Return FileRecord objects for all checked non-reference files."""
         selected: List[FileRecord] = []
