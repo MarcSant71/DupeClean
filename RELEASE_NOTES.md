@@ -1,5 +1,15 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.6.1
+- **Frozen Executable Multiprocessing Fix (`main.py`, `main_window.py`):**
+  - Added `multiprocessing.freeze_support()` before launching Qt in frozen Windows builds (`DupeClean.exe`), preventing child video worker processes from recursively spawning application windows and hanging on scans with 5+ uncached videos.
+  - Increased graceful scan worker shutdown wait on window close to allow active video worker pools to exit cleanly.
+- **Massive Multi-Terabyte Library Stability & Throughput (`cache.py`, `_video_worker.py`, `hasher_video.py`, `hasher_image.py`, `hasher_exact.py`):**
+  - Unified SQLite WAL batch persistence into a shared backpressure-safe `AsyncBatchWriter` so massive write queues flush reliably without dropping entries or stalling on close.
+  - **Similar Videos:** Submitted video decoding in bounded `512`-file windows (`chunksize <= 4`) with automatic `BrokenProcessPool` recovery, explicit `container.close()` cleanup, and dynamic `.dav` keyframe stride thinning to cap RAM usage on multi-gigabyte video streams.
+  - **Similar Images:** Switched multi-threaded image decoding from static slicing to a lock-guarded work-stealing batch cursor (`work_batch = 16`), tightened queue bounds (`512`), and lowered the streaming decode threshold to `4 MB` for smoother concurrency on large photo sets.
+  - **Duplicate Files (Exact):** Upgraded Stage 3 full-file `xxHash64` streaming buffers from `512 KB` to `2 MB` to maximize sequential SSD/NVMe RAID throughput.
+
 ### What's New in v1.6.0
 - **Cross-Codec Video Matching Accuracy (`_video_worker.py`, `hasher_video.py`, `db_schema.py`):**
   - Switched video sampling from nearest-keyframe snapping to timestamp-accurate forward decoding (`_decode_frame_near_timestamp`), eliminating false misses between sparse-GOP `.avi` transfers (VHS/DVD MPEG-4 with B-frames) and `.mp4` (H.264) re-encodes.

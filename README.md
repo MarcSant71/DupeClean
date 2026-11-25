@@ -2,14 +2,14 @@
 
 **GPU-Powered Duplicate File Finder**
 
-[![GitHub Release](https://img.shields.io/github/v/release/MarcSant71/DupeClean?color=007acc&logo=github&v=1.6.0)](https://github.com/MarcSant71/DupeClean/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/MarcSant71/DupeClean?color=007acc&logo=github&v=1.6.1)](https://github.com/MarcSant71/DupeClean/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-blue?logo=windows)](https://github.com/MarcSant71/DupeClean/releases/latest)
 [![Compute](https://img.shields.io/badge/NVIDIA-RTX%20Accelerated%20%2B%20CPU%20Fallback-76b900?logo=nvidia)](https://github.com/MarcSant71/DupeClean/releases/latest)
 
 High-precision duplicate file, image, and video finder featuring **universal CPU fallback** and full hardware acceleration on **NVIDIA GeForce RTX (30, 40, and 50 Series)** GPUs. DupeClean compares continuous 2D DCT embeddings (**768-D** for images / **3,840-D** for videos) via dense all-against-all (**N × N**) matrix multiplication for superior matching quality — and while all scan modes run on any CPU, **an NVIDIA RTX GPU is recommended for superior performance**.
 
 > 📦 **Portable Release (No Python Installation Required):**  
-> Download the pre-built standalone package [**`DupeClean-v1.6.0-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
+> Download the pre-built standalone package [**`DupeClean-v1.6.1-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest), extract with [7-Zip](https://www.7-zip.org/) or WinRAR, and run `DupeClean.exe` directly.
 
 <p align="center">
   <img src="assets/dupeclean_main_screenshot.png" alt="DupeClean GPU Duplicate Finder Interface" width="100%">
@@ -57,7 +57,7 @@ Every scan operates in **3 distinct, deterministic stages**, tailored specifical
 | :--- | :--- | :--- | :--- |
 | **Stage 1/3**<br>*(Discovery)* | **Scanning Folders**<br>Exact file-size bucket grouping | **Scanning Folders**<br>Image format indexing & spatial sort | **Scanning Folders**<br>Video container & DVR crawl |
 | **Stage 2/3**<br>*(Sieve & Signatures)* | **Calculating Partial Hashes**<br>Direct full hash &le; 256 KB; 8 KB Head+Tail sieve above | **Extracting Visual Signatures**<br>2D DCT Frequency Hash (GPU FP16) | **Extracting Video Signatures**<br>5-Keyframe Micro-Seek (PyAV + GPU) |
-| **Stage 3/3**<br>*(Verification & Math)* | **Calculating Full Hashes**<br>Parallel 512 KB streaming `xxHash64` | **Comparing Visual Similarity**<br>All-to-all Cosine Matrix (VRAM) | **Comparing Video Similarity**<br>Temporal Tensor Core Matching |
+| **Stage 3/3**<br>*(Verification & Math)* | **Calculating Full Hashes**<br>Parallel 2 MB streaming `xxHash64` | **Comparing Visual Similarity**<br>All-to-all Cosine Matrix (VRAM) | **Comparing Video Similarity**<br>Temporal Tensor Core Matching |
 | **Result Phase** | **$O(1)$ Hash Table Grouping**<br>Bit-for-bit identical clusters | **Mutual Similarity Grouping**<br>Perceptual clusters (70%–100% slider)| **Mutual Similarity Grouping**<br>Strict anti-chaining cluster isolation |
 
 ---
@@ -73,7 +73,7 @@ Every scan operates in **3 distinct, deterministic stages**, tailored specifical
   * For larger uncached candidates (`> 256 KB`) with identical sizes, reads the first 4 KB and last 4 KB to compute an instant composite `xxHash64` partial hash.
   * **Efficiency:** Eliminates double-open overhead on tiny/medium files while discarding over **90% of non-duplicate large candidates** in less than 1 millisecond per file.
 * **Stage 3/3: Calculating Full Hashes (Parallel Streaming & I/O Scaling):**
-  * For remaining larger candidates (`> 256 KB`) passing the 8 KB sieve, reads complete file contents using pre-allocated 512 KB streaming buffers (`buffering=0` with `readinto`) to avoid per-chunk allocations and Python buffering overhead.
+  * For remaining larger candidates (`> 256 KB`) passing the 8 KB sieve, reads complete file contents using pre-allocated 2 MB streaming buffers (`buffering=0` with `readinto`) to avoid per-chunk allocations and Python buffering overhead.
   * Dynamically scales concurrent reader threads to your CPU (`4` to `32` threads based on `os.cpu_count()`), saturating available disk bandwidth to compute high-speed `xxHash64` digests in minimum time.
   * **Throughput (`it/s`):** The displayed items-per-second rate varies naturally with file size and type — small files can run at thousands of `it/s`, while large videos or archives show lower `it/s` even when utilizing your drive's full read speed (HDD, SSD, or NVMe).
 * **Result Phase:** Instantaneous $O(1)$ in-memory hash table clustering. 100% bit-for-bit identical guarantee with zero GPU load.
@@ -115,7 +115,7 @@ To mathematically guarantee two files are 100% bit-for-bit identical, every byte
 * **Full Hashes (Stage 3):** Only larger files (`> 256 KB`) that match on both size and 8 KB partial hash are read end-to-end with streaming `xxHash64` for 100% verification.
 
 #### *"Why can Disk read speed hit 100% during Duplicate Files Stage 3?"*
-To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses multi-threaded 512 KB streaming buffers (`buffering=0` + `readinto`) to keep sequential storage throughput saturated so this unavoidable reading phase finishes as fast as possible.
+To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses multi-threaded 2 MB streaming buffers (`buffering=0` + `readinto`) to keep sequential storage throughput saturated so this unavoidable reading phase finishes as fast as possible.
 
 #### *"Why does my RTX GPU stay near 0% in Task Manager during Stage 2 & 3 of Image/Video scans?"*
 During Stage 2, CPU workers decode images and extract video keyframes from disk. Once a batch is ready (`256`–`1,024` images depending on VRAM, or `128` videos), the RTX GPU processes it in **fractions of a millisecond** (<0.5 ms) and immediately waits for the next disk/CPU batch. Because the GPU compute finishes so quickly, Windows Task Manager's 1-second average sampler shows near 0% until the all-to-all mass matrix multiplication in Stage 3 begins.
@@ -165,7 +165,7 @@ Traditional deduplicators are lightweight single-binary executables because they
 
 For 99% of users, **no installation, no Python, and no command line setup is required**:
 
-1. Download [**`DupeClean-v1.6.0-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
+1. Download [**`DupeClean-v1.6.1-windows-cuda.7z`**](https://github.com/MarcSant71/DupeClean/releases/latest) from the latest release.
 2. Extract the archive using [7-Zip](https://www.7-zip.org/) or WinRAR.
 3. Launch **`DupeClean.exe`** directly. Everything (Python runtime, CUDA 12 libraries, and GPU models) is pre-bundled and runs out of the box.
 
