@@ -1,5 +1,10 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.6.0
+- **Open Both Containing Folders Context Action (`results_table.py`):**
+  - Added **Open Both Containing Folders** to the results right-click context menu on both file rows and group header rows (`Group #N`) whenever a duplicate group spans **exactly 2 distinct parent folders** (hidden for 1-folder or 3+-folder groups to avoid spawning excessive Explorer windows).
+  - Opens both Windows Explorer windows side-by-side with one representative file selected in each folder (`/select,`).
+
 ### What's New in v1.5.1
 - **Full-Group Deletion Safeguard & Balanced Confirmation Dialogs (`results_table.py`, `main_window.py`, `theme.py`, `main.py`):**
   - Added detection for duplicate groups where all copies are checked (`get_fully_selected_group_count`), displaying a bold `ATTENTION:` warning whenever an action would leave zero copies behind (`Trash`, `Move`, and `Permanent Delete`).
