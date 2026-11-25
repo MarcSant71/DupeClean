@@ -1154,21 +1154,60 @@ class ResultsWidget(QWidget):
             except Exception:
                 pass
 
+    @staticmethod
+    def _two_distinct_folder_targets(entry: Optional[_GroupEntry]) -> Optional[List[Path]]:
+        """Return 1 file path per folder iff the group spans exactly 2 distinct parent folders."""
+        if entry is None or not entry.files:
+            return None
+        order = entry.display_order if entry.display_order is not None else range(len(entry.files))
+        seen: Dict[str, Path] = {}
+        for fi in order:
+            file_path = entry.files[fi].path
+            folder_key = os.path.normcase(os.path.normpath(str(file_path.parent)))
+            if folder_key not in seen:
+                seen[folder_key] = file_path
+                if len(seen) > 2:
+                    return None
+        return list(seen.values()) if len(seen) == 2 else None
+
+    def _open_both_in_explorer(self, paths: List[Path]) -> None:
+        for path in paths:
+            self._open_in_explorer(path)
+
     def _show_context_menu(self, pos):
         idx = self.tree.indexAt(pos)
         menu = QMenu(self)
 
         if idx.isValid():
-            info = self.model.file_at_row(idx.row())
+            row = idx.row()
+            info = self.model.file_at_row(row)
+            entry = info[0] if info is not None else self.model.entry_at_row(row)
+            two_folder_targets = self._two_distinct_folder_targets(entry)
+            added_group_or_file_action = False
+
             if info is not None:
                 file_rec = info[2]
                 act_open_folder = QAction("Open Containing Folder", self)
                 act_open_folder.triggered.connect(lambda: self._open_in_explorer(file_rec.path))
                 menu.addAction(act_open_folder)
+                added_group_or_file_action = True
 
+            if two_folder_targets is not None:
+                act_open_both = QAction("Open Both Containing Folders", self)
+                act_open_both.triggered.connect(
+                    lambda checked=False, targets=two_folder_targets: self._open_both_in_explorer(targets)
+                )
+                menu.addAction(act_open_both)
+                added_group_or_file_action = True
+
+            if info is not None:
+                file_rec = info[2]
                 act_open_file = QAction("Open File", self)
                 act_open_file.triggered.connect(lambda: os.startfile(str(file_rec.path)))
                 menu.addAction(act_open_file)
+                added_group_or_file_action = True
+
+            if added_group_or_file_action:
                 menu.addSeparator()
 
         act_expand_all = QAction("Expand All Groups", self)
