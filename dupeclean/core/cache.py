@@ -141,37 +141,48 @@ def compute_prefix_hash(path: Path, size: int) -> Optional[str]:
         return None
 
 
+def _migrate_legacy_db_files(src_db: Path, dst_db: Path) -> bool:
+    """Move a legacy SQLite database and any WAL/SHM/journal sidecars to dst_db if dst_db does not exist."""
+    if not src_db.exists() or dst_db.exists():
+        return False
+    shutil.move(str(src_db), str(dst_db))
+    for ext in ("-wal", "-shm", "-journal"):
+        old_aux = src_db.with_name(f"{src_db.name}{ext}")
+        if old_aux.exists():
+            shutil.move(str(old_aux), str(dst_db.with_name(f"{dst_db.name}{ext}")))
+    return True
+
+
 def get_default_cache_db_path() -> Path:
-    """Return the centralized DupeClean.db path (data/ folder), with automatic migration."""
+    """Return the centralized database.sqlite path (data/ folder), migrating legacy DB files automatically."""
     if getattr(sys, "frozen", False):
         base_dir = Path(sys.executable).parent
     else:
         base_dir = Path(__file__).resolve().parent.parent.parent  # Raiz do DupeClean
 
     data_dir = base_dir / "data"
+    old_dupeclean_db = data_dir / "DupeClean.db"
     old_cache = base_dir / "cache" / "cache.db"
 
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
-        new_db = data_dir / "DupeClean.db"
+        new_db = data_dir / "database.sqlite"
 
-        # Transparent migration of legacy cache if present
-        if old_cache.exists() and not new_db.exists():
-            shutil.move(str(old_cache), str(new_db))
-            for ext in ["-wal", "-shm"]:
-                old_aux = base_dir / "cache" / f"cache.db{ext}"
-                if old_aux.exists():
-                    shutil.move(str(old_aux), str(data_dir / f"DupeClean.db{ext}"))
-            try:
-                (base_dir / "cache").rmdir()
-            except Exception:
-                pass
+        # Transparent migration from DupeClean.db (or legacy cache/cache.db) into database.sqlite
+        if not _migrate_legacy_db_files(old_dupeclean_db, new_db):
+            if _migrate_legacy_db_files(old_cache, new_db):
+                try:
+                    (base_dir / "cache").rmdir()
+                except Exception:
+                    pass
 
         return new_db
     except Exception:
         appdata = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "DupeClean" / "data"
         appdata.mkdir(parents=True, exist_ok=True)
-        return appdata / "DupeClean.db"
+        fallback_db = appdata / "database.sqlite"
+        _migrate_legacy_db_files(appdata / "DupeClean.db", fallback_db)
+        return fallback_db
 
 
 class CacheManager:
@@ -206,7 +217,7 @@ class CacheManager:
             conn.close()
 
     def _init_db(self) -> SchemaInitResult:
-        """Validate and adapt the DupeClean.db schema to the current version via db_schema."""
+        """Validate and adapt the database.sqlite schema to the current version via db_schema."""
         return ensure_database_schema(self.db_path)
 
     # -------------------------------------------------------------------------

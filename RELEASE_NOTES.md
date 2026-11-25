@@ -10,7 +10,8 @@ Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleratio
 - **Stable Bottom Layout & Batch Selection Polish (`main_window.py`, `results_table.py`):**
   - Locked `stage_widget` to a fixed 2-row height with `setRetainSizeWhenHidden(True)` on secondary stage widgets (`lbl_stage_all`, `progress_all`, `lbl_pct_all`), eliminating the 21 px vertical jump of the bottom folder panel during batch selections and file actions.
   - Skipped flashing batch progress bars for small result sets (`<= 25,000` groups) and cleared the status bar cleanly when selection drops to zero (`"0 duplicate file(s) selected."`).
-- **Portable Root `logs/` Directory (`crash_logger.py`, `main.py`, `build.bat`, `.gitignore`):**
+- **Portable `database.sqlite` & Root `logs/` Directory (`cache.py`, `crash_logger.py`, `main.py`, `build.bat`, `.gitignore`):**
+  - Renamed the local SQLite database from `data/DupeClean.db` to `data/database.sqlite` with seamless automatic migration of existing `DupeClean.db` (and `-wal`/`-shm` sidecars) on startup.
   - Relocated application crash logs from `data/logs/` to `<root>/logs/` cleanly separating logs from `data/` and `lib/` in standalone portable builds.
 
 ### What's New in v1.5.0

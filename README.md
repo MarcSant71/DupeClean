@@ -68,7 +68,7 @@ Every scan operates in **3 distinct, deterministic stages**, tailored specifical
   * Crawls selected folders, applies exclusion rules, protects **Reference Folders** (`Ref`), and isolates files by exact byte size.
   * Files with unique file sizes are immediately eliminated without touching disk storage.
 * **Stage 2/3: Calculating Partial Hashes (256 KB Fast-Path, 8 KB Head + Tail Sieve & SQLite WAL Cache):**
-  * Consults the persistent local SQLite WAL database (`DupeClean.db`).
+  * Consults the persistent local SQLite WAL database (`database.sqlite`).
   * Small and medium uncached files (`<= 256 KB`) are read once in full (`xxHash64`), resolving immediately in Stage 2 without reopening in Stage 3.
   * For larger uncached candidates (`> 256 KB`) with identical sizes, reads the first 4 KB and last 4 KB to compute an instant composite `xxHash64` partial hash.
   * **Efficiency:** Eliminates double-open overhead on tiny/medium files while discarding over **90% of non-duplicate large candidates** in less than 1 millisecond per file.
@@ -170,7 +170,7 @@ For 99% of users, **no installation, no Python, and no command line setup is req
 3. Launch **`DupeClean.exe`** directly. Everything (Python runtime, CUDA 12 libraries, and GPU models) is pre-bundled and runs out of the box.
 
 > [!NOTE]
-> **Persistent Cache (`Clear Cache`):** DupeClean stores computed file hashes and visual embeddings in `data/DupeClean.db` so repeated scans run much faster. Use **Clear Cache** in the bottom-left sidebar to free cache disk space or force a full recomputation — your saved folder lists and preferences are always preserved. *(Note: the next scan after clearing will be slower until the cache is rebuilt).*
+> **Persistent Cache (`Clear Cache`):** DupeClean stores computed file hashes and visual embeddings in `data/database.sqlite` so repeated scans run much faster. Use **Clear Cache** in the bottom-left sidebar to free cache disk space or force a full recomputation — your saved folder lists and preferences are always preserved. *(Note: the next scan after clearing will be slower until the cache is rebuilt).*
 
 ---
 

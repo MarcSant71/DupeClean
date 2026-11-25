@@ -1,5 +1,5 @@
 """
-Validator, structural contract, and migration manager for DupeClean.db.
+Validator, structural contract, and migration manager for database.sqlite.
 Garante no startup que bancos antigos ou restaurados atendam à estrutura esperada
 by the current executable version, safely migrating or resetting the cache
 when incompatible/corrupted (preserving user settings).

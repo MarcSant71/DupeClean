@@ -726,7 +726,7 @@ class HelpDialog(QDialog):
         <div class="card">
             <h3 style="margin-top:0px; color:#38bdf8;">Persistent Cache (<code>Clear Cache</code>)</h3>
             <p>
-                DupeClean saves computed file hashes and image/video embeddings in a local SQLite database (<code>DupeClean.db</code>)
+                DupeClean saves computed file hashes and image/video embeddings in a local SQLite database (<code>database.sqlite</code>)
                 so repeated scans run much faster.
             </p>
             <p>

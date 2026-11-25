@@ -87,7 +87,7 @@ class MainWindow(QMainWindow):
         self._sync_controls_state(busy=False)
 
     def _restore_app_state(self):
-        """Restore saved folders and previous preferences from DupeClean.db."""
+        """Restore saved folders and previous preferences from database.sqlite."""
         try:
             cache = CacheManager()
             saved_folders = cache.get_setting("saved_folders")
@@ -922,7 +922,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "cache_worker", None) and self.cache_worker.isRunning():
             self.cache_worker.wait(1000)
 
-        # Persist included and excluded folders in DupeClean.db before closing
+        # Persist included and excluded folders in database.sqlite before closing
         try:
             cache = CacheManager()
             state = self.folder_panel.export_state()
