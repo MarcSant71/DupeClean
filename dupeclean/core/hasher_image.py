@@ -18,6 +18,7 @@ from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode, format_s
 from dupeclean.core.hardware import get_compute_device
 from dupeclean.core.scanner import get_volume_capabilities
 from dupeclean.core.cache import (
+    AsyncBatchWriter,
     CacheManager,
     compute_prefix_hash_from_bytes,
     compute_prefix_hash_from_stream,
@@ -29,7 +30,7 @@ LOW_FREQ_SIZE = 16
 CHANNELS = 3
 ALPHA = 1.2  # Calibrated spectral whitening: attenuates static background without amplifying compression noise
 DIM_SIZE = CHANNELS * LOW_FREQ_SIZE * LOW_FREQ_SIZE  # 768 dimensions (1,536 bytes in FP16)
-_SINGLE_READ_IMAGE_THRESHOLD = 16 * 1024 * 1024  # 16 MB
+_SINGLE_READ_IMAGE_THRESHOLD = 4 * 1024 * 1024  # 4 MB cap prevents RAM spikes across 32 concurrent workers
 
 
 def _to_opaque_rgb(img: Image.Image) -> Image.Image:
@@ -67,74 +68,6 @@ def _get_dct_matrix(n: int, device: str = "cuda", dtype=torch.float16) -> torch.
             scale = s0 if i == 0 else s
             matrix[i, j] = scale * math.cos((math.pi * i * (2 * j + 1)) / (2.0 * n))
     return torch.tensor(matrix, device=device, dtype=dtype)
-
-
-class _AsyncImageCacheWriter:
-    """
-    Asynchronous background writer for image cache persistence (SQLite WAL).
-    Completely decouples the GPU and decoding workers from the database,
-    accumulating batches in memory and committing on a dedicated thread without stalling Tensor Cores.
-    """
-    def __init__(self, cache_manager: CacheManager, batch_size: int = 1024, flush_interval: float = 0.5):
-        self.cache_manager = cache_manager
-        self.batch_size = batch_size
-        self.flush_interval = flush_interval
-        self._queue: queue.Queue = queue.Queue(maxsize=50000)
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="AsyncImageCacheWriter")
-        self._thread.start()
-
-    def add_batch(self, entries: List[Tuple[str, int, float, bytes]]):
-        for e in entries:
-            try:
-                self._queue.put_nowait(e)
-            except queue.Full:
-                try:
-                    self._queue.put(e, timeout=0.1)
-                except queue.Full:
-                    pass
-
-    def _run(self):
-        batch = []
-        last_flush = time.perf_counter()
-        while True:
-            if not batch:
-                if self._stop_event.is_set() and self._queue.empty():
-                    break
-                try:
-                    batch.append(self._queue.get(timeout=0.05))
-                except queue.Empty:
-                    continue
-
-            while len(batch) < self.batch_size:
-                try:
-                    batch.append(self._queue.get_nowait())
-                except queue.Empty:
-                    break
-
-            now = time.perf_counter()
-            if (
-                len(batch) >= self.batch_size
-                or (now - last_flush) >= self.flush_interval
-                or (self._stop_event.is_set() and self._queue.empty())
-            ):
-                try:
-                    self.cache_manager.save_image_batch(batch)
-                except Exception:
-                    pass
-                batch.clear()
-                last_flush = now
-
-        if batch:
-            try:
-                self.cache_manager.save_image_batch(batch)
-            except Exception:
-                pass
-
-    def close(self):
-        self._stop_event.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=5.0)
 
 
 def extract_image_embeddings(
@@ -241,63 +174,77 @@ def extract_image_embeddings(
     # Formato (1, 1, LOW_FREQ_SIZE, LOW_FREQ_SIZE) para broadcasting perfeito em tensores RGB [B, 3, H, W]
     spectral_weight = (u + v + 1.0).pow(ALPHA).unsqueeze(0).unsqueeze(0)
 
-    num_workers = min(32, max(4, os.cpu_count() or 4))
-    uncached_total = len(to_process)
+    num_workers = min(32, max(4, os.cpu_count() or 4), uncached_total := len(to_process))
     effective_batch = max(64, min(batch_size, 1024))
 
-    img_queue: queue.Queue = queue.Queue(maxsize=2048)
+    img_queue: queue.Queue = queue.Queue(maxsize=512)
     stop_event = threading.Event()
-    cache_writer = _AsyncImageCacheWriter(cache)
+    cache_writer = AsyncBatchWriter(
+        cache.save_image_batch,
+        batch_size=1024,
+        max_queue=50000,
+        name="AsyncImageCacheWriter",
+    )
 
-    def _worker_producer(records_slice: List[FileRecord]):
-        for rec in records_slice:
-            if stop_event.is_set() or (stop_check and stop_check()):
+    # Dynamic work-stealing batch cursor preserves directory locality while eliminating tail stragglers
+    next_idx = 0
+    idx_lock = threading.Lock()
+    work_batch = 16
+
+    def _worker_producer():
+        nonlocal next_idx
+        while not stop_event.is_set():
+            if stop_check and stop_check():
                 break
-            opened_ok = False
-            try:
-                supports_fid = get_volume_capabilities(rec.path)[1]
-                with open(rec.path, "rb") as f:
-                    opened_ok = True
-                    if supports_fid and (rec.volume_id == 0 or rec.file_id == 0):
-                        st = os.fstat(f.fileno())
-                        rec.volume_id = getattr(st, "st_dev", 0) or 0
-                        rec.file_id = getattr(st, "st_ino", 0) or 0
+            with idx_lock:
+                if next_idx >= uncached_total:
+                    return
+                start_i = next_idx
+                end_i = min(uncached_total, start_i + work_batch)
+                next_idx = end_i
 
-                    if rec.size <= _SINGLE_READ_IMAGE_THRESHOLD:
-                        raw_bytes = f.read()
-                        if rec.prefix_hash is None:
-                            rec.prefix_hash = compute_prefix_hash_from_bytes(raw_bytes)
-                        arr = _decode_image_from_stream(io.BytesIO(raw_bytes))
-                    else:
-                        if rec.prefix_hash is None:
-                            rec.prefix_hash = compute_prefix_hash_from_stream(f, rec.size)
-                            f.seek(0)
-                        arr = _decode_image_from_stream(f)
-                item = (rec, arr, False)
-            except Exception:
-                # Only write a permanent tombstone if the file opened and content decoding failed
-                item = (rec, None, opened_ok)
-
-            while not stop_event.is_set():
-                if stop_check and stop_check():
-                    break
+            for rec in to_process[start_i:end_i]:
+                if stop_event.is_set() or (stop_check and stop_check()):
+                    return
+                opened_ok = False
                 try:
-                    img_queue.put(item, timeout=0.05)
-                    break
-                except queue.Full:
-                    continue
+                    supports_fid = get_volume_capabilities(rec.path)[1]
+                    with open(rec.path, "rb") as f:
+                        opened_ok = True
+                        if supports_fid and (rec.volume_id == 0 or rec.file_id == 0):
+                            st = os.fstat(f.fileno())
+                            rec.volume_id = getattr(st, "st_dev", 0) or 0
+                            rec.file_id = getattr(st, "st_ino", 0) or 0
 
-    # Distribui os arquivos uniformemente entre as threads produtoras
-    slice_size = (uncached_total + num_workers - 1) // num_workers
+                        if rec.size <= _SINGLE_READ_IMAGE_THRESHOLD:
+                            raw_bytes = f.read()
+                            if rec.prefix_hash is None:
+                                rec.prefix_hash = compute_prefix_hash_from_bytes(raw_bytes)
+                            arr = _decode_image_from_stream(io.BytesIO(raw_bytes))
+                        else:
+                            if rec.prefix_hash is None:
+                                rec.prefix_hash = compute_prefix_hash_from_stream(f, rec.size)
+                                f.seek(0)
+                            arr = _decode_image_from_stream(f)
+                    item = (rec, arr, False)
+                except Exception:
+                    # Only write a permanent tombstone if the file opened and content decoding failed
+                    item = (rec, None, opened_ok)
+
+                while not stop_event.is_set():
+                    if stop_check and stop_check():
+                        return
+                    try:
+                        img_queue.put(item, timeout=0.05)
+                        break
+                    except queue.Full:
+                        continue
+
     worker_threads: List[threading.Thread] = []
-    for w_idx in range(num_workers):
-        start_idx = w_idx * slice_size
-        end_idx = min(start_idx + slice_size, uncached_total)
-        chunk = to_process[start_idx:end_idx]
-        if chunk:
-            t = threading.Thread(target=_worker_producer, args=(chunk,), daemon=True)
-            t.start()
-            worker_threads.append(t)
+    for _ in range(num_workers):
+        t = threading.Thread(target=_worker_producer, daemon=True)
+        t.start()
+        worker_threads.append(t)
 
     # Consumer: Feeds the GPU in contiguous blocks and delegates persistence to AsyncCacheWriter
     batch_records: List[FileRecord] = []

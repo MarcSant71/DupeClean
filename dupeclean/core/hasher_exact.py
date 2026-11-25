@@ -15,7 +15,7 @@ from collections import defaultdict
 from typing import List, Callable, Optional, Tuple, Dict, Any
 import xxhash
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode, format_size
-from dupeclean.core.cache import CacheManager
+from dupeclean.core.cache import AsyncBatchWriter, CacheManager
 from dupeclean.core.scanner import get_volume_capabilities
 
 
@@ -37,8 +37,8 @@ def _capture_fstat_ids(f, rec: FileRecord) -> None:
 PREHASH_CHUNK = 4096  # 4 KB (Head 4 KB + Tail 4 KB para arquivos > 256 KB)
 FAST_PATH_SIZE = 256 * 1024  # 256 KB (evita dupla abertura/leitura de fotos pequenas e documentos)
 
-# Streaming read buffer optimized for sustained high throughput without memory fragmentation
-STREAM_BUFFER_SIZE = 512 * 1024  # 512 KB por bloco de leitura
+# Streaming read buffer (2 MB reduces ReadFile syscalls 4x on multi-GB files at ~16 MB total RAM across 8 workers)
+STREAM_BUFFER_SIZE = 2 * 1024 * 1024
 
 
 def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Optional[Tuple[FileRecord, str, bool]]:
@@ -125,74 +125,6 @@ def _compute_full_hash(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) ->
     return _compute_full_hash_worker(rec, mv, stop_check)
 
 
-class _AsyncExactCacheWriter:
-    """
-    Asynchronous background writer for exact cache persistence (SQLite WAL).
-    Completely decouples I/O workers from the database by accumulating batches in memory
-    e commitando em uma thread dedicada sem bloquear o pipeline de leitura.
-    """
-    def __init__(self, cache_manager: CacheManager, batch_size: int = 2048, flush_interval: float = 0.5):
-        self.cache_manager = cache_manager
-        self.batch_size = batch_size
-        self.flush_interval = flush_interval
-        self._queue: queue.Queue = queue.Queue(maxsize=100000)
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="AsyncExactCacheWriter")
-        self._thread.start()
-
-    def add(self, entry: Tuple[str, int, float, Optional[str], Optional[str]]):
-        try:
-            self._queue.put_nowait(entry)
-        except queue.Full:
-            try:
-                self._queue.put(entry, timeout=0.1)
-            except queue.Full:
-                pass
-
-    def _run(self):
-        batch = []
-        last_flush = time.perf_counter()
-        while True:
-            if not batch:
-                if self._stop_event.is_set() and self._queue.empty():
-                    break
-                try:
-                    batch.append(self._queue.get(timeout=0.05))
-                except queue.Empty:
-                    continue
-
-            while len(batch) < self.batch_size:
-                try:
-                    batch.append(self._queue.get_nowait())
-                except queue.Empty:
-                    break
-
-            now = time.perf_counter()
-            if (
-                len(batch) >= self.batch_size
-                or (now - last_flush) >= self.flush_interval
-                or (self._stop_event.is_set() and self._queue.empty())
-            ):
-                try:
-                    self.cache_manager.save_exact_batch(batch)
-                except Exception:
-                    pass
-                batch.clear()
-                last_flush = now
-
-        if batch:
-            try:
-                self.cache_manager.save_exact_batch(batch)
-            except Exception:
-                pass
-
-    def close(self):
-        """Finaliza a thread e garante o flush de todos os registros pendentes."""
-        self._stop_event.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=5.0)
-
-
 def _emit_progress(cb: Optional[Callable], msg: str, curr: int, tot: int, stage_idx: int):
     """Dispara callback de progresso garantindo compatibilidade com assinaturas de 3 ou 4 argumentos."""
     if not cb:
@@ -215,7 +147,12 @@ def find_exact_duplicates(
     asynchronous cache persistence decoupled from I/O, and instant cancellation response.
     """
     cache = cache_manager or CacheManager()
-    cache_writer = _AsyncExactCacheWriter(cache)
+    cache_writer = AsyncBatchWriter(
+        cache.save_exact_batch,
+        batch_size=2048,
+        max_queue=100000,
+        name="AsyncExactCacheWriter",
+    )
 
     try:
         # -------------------------------------------------------------------------
@@ -419,6 +356,7 @@ def find_exact_duplicates(
                         last_progress_time = now
             finally:
                 stop_workers.set()
+                feeder_thread.join(timeout=0.5)
                 for t in worker_threads:
                     t.join(timeout=0.5)
 
@@ -560,6 +498,7 @@ def find_exact_duplicates(
                         last_progress_time = now
             finally:
                 stop_workers.set()
+                feeder_thread.join(timeout=0.5)
                 for t in worker_threads:
                     t.join(timeout=0.5)
 

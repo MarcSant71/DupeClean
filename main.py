@@ -3,6 +3,7 @@ Main entry point for DupeClean.
 Initializes the Hardware Gatekeeper, validates the NVIDIA RTX GPU, and launches the UI.
 """
 
+import multiprocessing
 import os
 import sys
 import traceback
@@ -194,4 +195,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # Required for PyInstaller Windows standalone builds using ProcessPoolExecutor (Similar Videos)
+    multiprocessing.freeze_support()
     main()

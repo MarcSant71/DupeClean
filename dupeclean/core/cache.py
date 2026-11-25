@@ -6,6 +6,7 @@ enabling near-instant rescans and full progress retention on cancellation.
 
 import json
 import os
+import queue
 import shutil
 import sqlite3
 import sys
@@ -25,6 +26,80 @@ from dupeclean.core.db_schema import (
     reset_database_preserving_settings,
 )
 from dupeclean.core.scanner import get_volume_capabilities
+
+
+class AsyncBatchWriter:
+    """Thread-safe asynchronous batch writer decoupling worker pipelines from SQLite WAL commits."""
+
+    def __init__(
+        self,
+        flush_fn: Callable[[List[Any]], None],
+        batch_size: int = 1024,
+        flush_interval: float = 0.5,
+        max_queue: int = 50000,
+        name: str = "AsyncCacheWriter",
+    ):
+        self._flush_fn = flush_fn
+        self.batch_size = batch_size
+        self.flush_interval = flush_interval
+        self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name=name)
+        self._thread.start()
+
+    def add(self, entry: Any) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self._queue.put(entry, timeout=0.1)
+                return
+            except queue.Full:
+                continue
+
+    def add_batch(self, entries: Iterable[Any]) -> None:
+        for entry in entries:
+            self.add(entry)
+
+    def _run(self) -> None:
+        batch: List[Any] = []
+        last_flush = time.perf_counter()
+        while True:
+            if not batch:
+                if self._stop_event.is_set() and self._queue.empty():
+                    break
+                try:
+                    batch.append(self._queue.get(timeout=0.05))
+                except queue.Empty:
+                    continue
+
+            while len(batch) < self.batch_size:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+
+            now = time.perf_counter()
+            if (
+                len(batch) >= self.batch_size
+                or (now - last_flush) >= self.flush_interval
+                or (self._stop_event.is_set() and self._queue.empty())
+            ):
+                try:
+                    self._flush_fn(batch)
+                except Exception:
+                    pass
+                batch.clear()
+                last_flush = now
+
+        if batch:
+            try:
+                self._flush_fn(batch)
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=60.0)
 
 
 class _CacheProgressTracker:

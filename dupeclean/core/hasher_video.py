@@ -4,12 +4,10 @@ Completely eliminates Python GIL contention via an isolated ProcessPoolExecutor,
 continuously feeds the GPU, and processes 2D DCT tensors directly in VRAM (FP16).
 """
 
-import sys
 import os
 import time
-import queue
-import threading
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import List, Optional, Tuple, Callable, Dict, Any
 import numpy as np
@@ -22,7 +20,7 @@ av.logging.set_level(av.logging.PANIC)
 from dupeclean.core.models import FileRecord, format_size
 from dupeclean.core.hardware import get_compute_device
 from dupeclean.core.hasher_image import _get_dct_matrix
-from dupeclean.core.cache import CacheManager, compute_prefix_hash
+from dupeclean.core.cache import AsyncBatchWriter, CacheManager, compute_prefix_hash
 from dupeclean.core.scanner import get_volume_capabilities
 from dupeclean.core._video_worker import (
     VIDEO_CHANNELS,
@@ -69,75 +67,19 @@ def extract_video_frames_and_duration(
     return dur, arr
 
 
-class _AsyncVideoCacheWriter:
-    """
-    Asynchronous background writer for video cache persistence (SQLite WAL).
-    Completely decouples video decoding and GPU from the database,
-    accumulating batches and tombstones in memory and committing in the background.
-    """
-    def __init__(self, cache_manager: CacheManager, batch_size: int = 512, flush_interval: float = 0.5):
-        self.cache_manager = cache_manager
-        self.batch_size = batch_size
-        self.flush_interval = flush_interval
-        self._queue: queue.Queue = queue.Queue(maxsize=50000)
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="AsyncVideoCacheWriter")
-        self._thread.start()
-
-    def add(self, entry: Tuple[str, int, float, float, bytes]):
-        try:
-            self._queue.put_nowait(entry)
-        except queue.Full:
+def _terminate_pool_processes(executor: Optional[ProcessPoolExecutor]) -> None:
+    """Terminate active child processes on cancellation/broken pool so Stop never hangs."""
+    if executor is None:
+        return
+    try:
+        for proc in list(getattr(executor, "_processes", {}).values()):
             try:
-                self._queue.put(entry, timeout=0.1)
-            except queue.Full:
-                pass
-
-    def add_batch(self, entries: List[Tuple[str, int, float, float, bytes]]):
-        for e in entries:
-            self.add(e)
-
-    def _run(self):
-        batch = []
-        last_flush = time.perf_counter()
-        while True:
-            if not batch:
-                if self._stop_event.is_set() and self._queue.empty():
-                    break
-                try:
-                    batch.append(self._queue.get(timeout=0.05))
-                except queue.Empty:
-                    continue
-
-            while len(batch) < self.batch_size:
-                try:
-                    batch.append(self._queue.get_nowait())
-                except queue.Empty:
-                    break
-
-            now = time.perf_counter()
-            if (
-                len(batch) >= self.batch_size
-                or (now - last_flush) >= self.flush_interval
-                or (self._stop_event.is_set() and self._queue.empty())
-            ):
-                try:
-                    self.cache_manager.save_video_batch(batch)
-                except Exception:
-                    pass
-                batch.clear()
-                last_flush = now
-
-        if batch:
-            try:
-                self.cache_manager.save_video_batch(batch)
+                if proc.is_alive():
+                    proc.terminate()
             except Exception:
                 pass
-
-    def close(self):
-        self._stop_event.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=5.0)
+    except Exception:
+        pass
 
 
 def extract_video_embeddings(
@@ -237,7 +179,12 @@ def extract_video_embeddings(
     spectral_weight[0, 0] = 0.0  # Zero DC
 
     uncached_total = len(to_process)
-    cache_writer = _AsyncVideoCacheWriter(cache)
+    cache_writer = AsyncBatchWriter(
+        cache.save_video_batch,
+        batch_size=512,
+        max_queue=50000,
+        name="AsyncVideoCacheWriter",
+    )
 
     # Fast mapping from paths to FileRecord objects
     path_to_rec = {str(r.path): r for r in to_process}
@@ -245,7 +192,7 @@ def extract_video_embeddings(
 
     # Optimal worker process count (saturates I/O without overspawning on small batches)
     num_workers = min(16, max(4, (os.cpu_count() or 4) // 2), uncached_total)
-    chunksize = max(1, min(8, uncached_total // (num_workers * 4) or 1))
+    window_size = 512
 
     processed_count = 0
     processed_bytes = cached_bytes
@@ -261,101 +208,133 @@ def extract_video_embeddings(
             stage_total,
         )
 
+    def _flush_gpu_batch() -> None:
+        if not batch_frames:
+            return
+        stacked = np.stack(batch_frames)  # [B, 5, 64, 64, 3]
+        t_batch = torch.from_numpy(stacked).permute(0, 1, 4, 2, 3).to(device=device, dtype=dtype) / 255.0
+        b_size = t_batch.shape[0]
+        t_flat = t_batch.reshape(b_size * VIDEO_NUM_SAMPLES * VIDEO_CHANNELS, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE)
+        dct_batch = torch.matmul(dct_mat, torch.matmul(t_flat, dct_mat_t))
+        low_freq = dct_batch[:, :VIDEO_LOW_FREQ_SIZE, :VIDEO_LOW_FREQ_SIZE].clone()
+        low_freq = low_freq * spectral_weight.unsqueeze(0)
+
+        flat = low_freq.reshape(b_size, -1)  # [B, 3840]
+        norms = torch.norm(flat, p=2, dim=1, keepdim=True).clamp(min=1e-6)
+        normalized = flat / norms  # [B, 3840]
+
+        embeddings_list.append(normalized)
+        valid_records.extend(batch_records)
+
+        norm_cpu_np = normalized.to(dtype=torch.float16).cpu().numpy()
+        for b_i, b_rec in enumerate(batch_records):
+            cache_writer.add((
+                str(b_rec.path),
+                b_rec.size,
+                b_rec.mtime,
+                batch_durations[b_i],
+                norm_cpu_np[b_i:b_i + 1].tobytes(),
+                b_rec.volume_id,
+                b_rec.file_id,
+                b_rec.prefix_hash,
+            ))
+
+        batch_records.clear()
+        batch_frames.clear()
+        batch_durations.clear()
+
+    def _handle_decoded_result(res) -> None:
+        nonlocal processed_count, processed_bytes, last_progress_time
+        processed_count += 1
+        current_total_done = cached_count + processed_count
+
+        if res is not None:
+            p_str, duration, frames_arr, vol_id, f_id, p_hash = res
+            rec = path_to_rec.get(p_str)
+            if rec is not None:
+                processed_bytes += rec.size
+                if vol_id and rec.volume_id == 0:
+                    rec.volume_id = vol_id
+                if f_id and rec.file_id == 0:
+                    rec.file_id = f_id
+                if p_hash and rec.prefix_hash is None:
+                    rec.prefix_hash = p_hash
+                expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
+                if frames_arr is None or duration == -1.0 or getattr(frames_arr, "shape", None) != expected_shape:
+                    # Persist tombstone in SQLite so corrupted files are never reprocessed
+                    cache_writer.add((
+                        str(rec.path),
+                        rec.size,
+                        rec.mtime,
+                        -1.0,
+                        b"",
+                        rec.volume_id,
+                        rec.file_id,
+                        rec.prefix_hash,
+                    ))
+                else:
+                    rec.duration = duration
+                    batch_records.append(rec)
+                    batch_frames.append(frames_arr)
+                    batch_durations.append(duration)
+
+        now = time.time()
+        if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
+            last_progress_time = now
+            progress_callback(
+                f"Processing videos of {current_total_done:,}/{total:,} files ({format_size(processed_bytes)} / {format_size(total_bytes)})...",
+                total + processed_count,
+                stage_total,
+            )
+
+        if len(batch_records) >= 128 or processed_count == uncached_total:
+            _flush_gpu_batch()
+
     executor: Optional[ProcessPoolExecutor] = None
+    cancelled = False
     try:
-        if uncached_total <= 4:
-            result_iter = (_worker_decode_path(p_str) for p_str in path_list)
-        else:
-            executor = ProcessPoolExecutor(max_workers=num_workers)
-            result_iter = executor.map(_worker_decode_path, path_list, chunksize=chunksize)
-
         with torch.inference_mode():
-            for res in result_iter:
-                if stop_check and stop_check():
-                    break
-
-                processed_count += 1
-                current_total_done = cached_count + processed_count
-
-                if res is not None:
-                    p_str, duration, frames_arr, vol_id, f_id, p_hash = res
-                    rec = path_to_rec.get(p_str)
-                    if rec is not None:
-                        processed_bytes += rec.size
-                        if vol_id and rec.volume_id == 0:
-                            rec.volume_id = vol_id
-                        if f_id and rec.file_id == 0:
-                            rec.file_id = f_id
-                        if p_hash and rec.prefix_hash is None:
-                            rec.prefix_hash = p_hash
-                        expected_shape = (VIDEO_NUM_SAMPLES, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE, VIDEO_CHANNELS)
-                        if frames_arr is None or duration == -1.0 or getattr(frames_arr, "shape", None) != expected_shape:
-                            # Persist tombstone in SQLite so corrupted files are never reprocessed
-                            cache_writer.add((
-                                str(rec.path),
-                                rec.size,
-                                rec.mtime,
-                                -1.0,
-                                b"",
-                                rec.volume_id,
-                                rec.file_id,
-                                rec.prefix_hash
-                            ))
-                        else:
-                            rec.duration = duration
-                            batch_records.append(rec)
-                            batch_frames.append(frames_arr)
-                            batch_durations.append(duration)
-
-                now = time.time()
-                if progress_callback and (now - last_progress_time >= 0.08 or processed_count == uncached_total):
-                    last_progress_time = now
-                    progress_callback(
-                        f"Processing videos of {current_total_done:,}/{total:,} files ({format_size(processed_bytes)} / {format_size(total_bytes)})...",
-                        total + processed_count,
-                        stage_total,
-                    )
-
-                # Process in GPU batches (128 items per batch)
-                target_batch = 128
-                if len(batch_records) >= target_batch or processed_count == uncached_total:
-                    if batch_frames:
-                        stacked = np.stack(batch_frames)  # [B, 5, 64, 64, 3]
-                        t_batch = torch.from_numpy(stacked).permute(0, 1, 4, 2, 3).to(device=device, dtype=dtype) / 255.0  # [B, 5, 3, 64, 64]
-                        B = t_batch.shape[0]
-                        t_flat = t_batch.reshape(B * VIDEO_NUM_SAMPLES * VIDEO_CHANNELS, VIDEO_IMG_SIZE, VIDEO_IMG_SIZE)
-                        dct_batch = torch.matmul(dct_mat, torch.matmul(t_flat, dct_mat_t))
-                        low_freq = dct_batch[:, :VIDEO_LOW_FREQ_SIZE, :VIDEO_LOW_FREQ_SIZE].clone()
-                        low_freq = low_freq * spectral_weight.unsqueeze(0)
-
-                        flat = low_freq.reshape(B, -1)  # [B, 3840]
-                        norms = torch.norm(flat, p=2, dim=1, keepdim=True).clamp(min=1e-6)
-                        normalized = flat / norms  # [B, 3840]
-
-                        embeddings_list.append(normalized)
-                        valid_records.extend(batch_records)
-
-                        norm_cpu_np = normalized.to(dtype=torch.float16).cpu().numpy()
-                        for b_i, b_rec in enumerate(batch_records):
-                            b_dur = batch_durations[b_i]
-                            cache_writer.add((
-                                str(b_rec.path),
-                                b_rec.size,
-                                b_rec.mtime,
-                                b_dur,
-                                norm_cpu_np[b_i:b_i + 1].tobytes(),
-                                b_rec.volume_id,
-                                b_rec.file_id,
-                                b_rec.prefix_hash
-                            ))
-
-                        batch_records.clear()
-                        batch_frames.clear()
-                        batch_durations.clear()
+            if uncached_total <= 4:
+                for p_str in path_list:
+                    if stop_check and stop_check():
+                        cancelled = True
+                        break
+                    _handle_decoded_result(_worker_decode_path(p_str))
+            else:
+                executor = ProcessPoolExecutor(max_workers=num_workers)
+                # Bounded submission windows prevent queuing 100k+ futures at once and speed up Stop
+                for win_start in range(0, uncached_total, window_size):
+                    if stop_check and stop_check():
+                        cancelled = True
+                        break
+                    win_paths = path_list[win_start:win_start + window_size]
+                    chunksize = max(1, min(4, len(win_paths) // (num_workers * 2) or 1))
+                    try:
+                        for res in executor.map(_worker_decode_path, win_paths, chunksize=chunksize):
+                            if stop_check and stop_check():
+                                cancelled = True
+                                break
+                            _handle_decoded_result(res)
+                    except BrokenProcessPool:
+                        # Isolate worker crash cleanly and recreate pool for subsequent windows
+                        _terminate_pool_processes(executor)
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        executor = ProcessPoolExecutor(max_workers=num_workers)
+                        processed_count += max(0, (win_start + len(win_paths)) - processed_count)
+                        _flush_gpu_batch()
+                        continue
+                    if cancelled:
+                        break
+            if not cancelled:
+                _flush_gpu_batch()
 
     finally:
         if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
+            if cancelled:
+                _terminate_pool_processes(executor)
+                executor.shutdown(wait=False, cancel_futures=True)
+            else:
+                executor.shutdown(wait=True, cancel_futures=True)
         cache_writer.close()
 
     if not embeddings_list:

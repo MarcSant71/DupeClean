@@ -136,7 +136,6 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
 
     try:
         if not container.streams.video:
-            container.close()
             return path_str, -1.0, None, vol_id, f_id, p_hash
 
         stream = container.streams.video[0]
@@ -178,10 +177,18 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
 
         # 2. Strategy B: Temporal Extraction of 5 Distinct Keyframes (for .dav and continuous streams)
         else:
+            # Thin packet retention dynamically so multi-GB .dav files never accumulate GBs of packets in RAM
             kf_packets = []
-            for pkt in container.demux():
-                if pkt.stream == stream and pkt.is_keyframe and pkt.size > 0:
-                    kf_packets.append(pkt)
+            stride = 1
+            seen_kf = 0
+            for pkt in container.demux(stream):
+                if pkt.is_keyframe and pkt.size > 0:
+                    if seen_kf % stride == 0:
+                        kf_packets.append(pkt)
+                        if len(kf_packets) > 512:
+                            kf_packets = kf_packets[::2]
+                            stride *= 2
+                    seen_kf += 1
 
             num_kf = len(kf_packets)
             if num_kf > 0:
@@ -192,8 +199,6 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
                     decoded_list = pkt.decode()
                     if decoded_list:
                         frames.append(_frame_to_sample_array(decoded_list[0]))
-
-        container.close()
 
         if not frames:
             return path_str, -1.0, None, vol_id, f_id, p_hash
@@ -209,8 +214,9 @@ def _worker_decode_path(path_str: str) -> Tuple[str, float, Optional[np.ndarray]
         return path_str, dur, arr, vol_id, f_id, p_hash
 
     except Exception:
+        return path_str, -1.0, None, vol_id, f_id, p_hash
+    finally:
         try:
             container.close()
         except Exception:
             pass
-        return path_str, -1.0, None, vol_id, f_id, p_hash

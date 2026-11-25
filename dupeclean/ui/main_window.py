@@ -937,9 +937,9 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             self.lbl_status.setText("Shutting down...")
             self.worker.requestInterruption()
-            if not self.worker.wait(400):
+            if not self.worker.wait(2000):
                 self.worker.terminate()
-                self.worker.wait(200)
+                self.worker.wait(400)
 
         event.accept()
         app = QApplication.instance()
