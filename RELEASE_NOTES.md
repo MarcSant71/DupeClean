@@ -1,6 +1,10 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
 ### What's New in v1.6.0
+- **Cross-Codec Video Matching Accuracy (`_video_worker.py`, `hasher_video.py`, `db_schema.py`):**
+  - Switched video sampling from nearest-keyframe snapping to timestamp-accurate forward decoding (`_decode_frame_near_timestamp`), eliminating false misses between sparse-GOP `.avi` transfers (VHS/DVD MPEG-4 with B-frames) and `.mp4` (H.264) re-encodes.
+  - Enabled multi-frame static black-bar detection/cropping (`crop_letterbox` union across sampled frames) and recalibrated video spectral whitening (`VIDEO_ALPHA = 1.0`).
+  - Bumped SQLite schema to `v3` (`_migrate_2_to_3`) to invalidate only `cache_videos` for re-extraction while preserving `cache_exact`, `cache_images`, and `app_settings`, showing `"Upgrading database..."` on the splash screen only when a migration runs.
 - **Open Both Containing Folders Context Action (`results_table.py`):**
   - Added **Open Both Containing Folders** to the results right-click context menu on both file rows and group header rows (`Group #N`) whenever a duplicate group spans **exactly 2 distinct parent folders** (hidden for 1-folder or 3+-folder groups to avoid spawning excessive Explorer windows).
   - Opens both Windows Explorer windows side-by-side with one representative file selected in each folder (`/select,`).

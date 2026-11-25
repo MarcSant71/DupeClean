@@ -191,9 +191,13 @@ class CacheManager:
     Configured with WAL mode, mmap I/O, safe transactional commit/rollback, and strict connection closing.
     """
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(
+        self,
+        db_path: Optional[Path] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
+    ):
         self.db_path = db_path or get_default_cache_db_path()
-        self.schema_result: SchemaInitResult = self._init_db()
+        self.schema_result: SchemaInitResult = self._init_db(status_callback=status_callback)
 
     @contextmanager
     def _get_connection(self):
@@ -216,9 +220,9 @@ class CacheManager:
         finally:
             conn.close()
 
-    def _init_db(self) -> SchemaInitResult:
+    def _init_db(self, status_callback: Optional[Callable[[str], None]] = None) -> SchemaInitResult:
         """Validate and adapt the database.sqlite schema to the current version via db_schema."""
-        return ensure_database_schema(self.db_path)
+        return ensure_database_schema(self.db_path, progress_callback=status_callback)
 
     # -------------------------------------------------------------------------
     # 0. Application Settings and State Management (app_settings)

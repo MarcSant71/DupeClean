@@ -40,7 +40,9 @@ class HardwareInitWorker(QThread):
             from dupeclean.core.cache import CacheManager
             from dupeclean.core.db_schema import FutureSchemaError
             try:
-                cache = CacheManager()
+                cache = CacheManager(
+                    status_callback=lambda msg: self.progress_update.emit(82, msg)
+                )
                 db_outcome = ("ok", cache.schema_result)
             except FutureSchemaError as fse:
                 db_outcome = ("future", fse)

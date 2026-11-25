@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 # Expected structural contract for the current executable: {table: (pk_column, {columns})}
 EXPECTED_TABLES: Dict[str, Tuple[str, Set[str]]] = {
@@ -258,9 +258,15 @@ def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM cache_images;")
 
 
+def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
+    """Invalidate only cache_videos after timestamp-exact seek, letterbox crop, and VIDEO_ALPHA=1.0 update."""
+    conn.execute("DELETE FROM cache_videos;")
+
+
 MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _migrate_0_to_1,
     1: _migrate_1_to_2,
+    2: _migrate_2_to_3,
 }
 
 
@@ -354,11 +360,14 @@ def reset_database_preserving_settings(db_path: Path, reason: str = "reset") -> 
     )
 
 
-def ensure_database_schema(db_path: Path) -> SchemaInitResult:
+def ensure_database_schema(
+    db_path: Path,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> SchemaInitResult:
     """
     Validate at startup whether the .db file matches the current executable schema.
     - If empty/missing: create at the current version.
-    - If older compatible version: apply migrations and update user_version silently.
+    - If older compatible version: notify optional progress_callback, migrate, and update user_version silently.
     - If future version (> CURRENT_SCHEMA_VERSION): raise FutureSchemaError without modifying the file.
     - If corrupted or structurally incompatible: preserve app_settings and recreate cleanly.
     """
@@ -415,6 +424,8 @@ def ensure_database_schema(db_path: Path) -> SchemaInitResult:
             raise ValueError(f"Schema marked v{known_from_version} failed validation: {detail}")
 
         # 3. Older version (0 <= db_ver < CURRENT_SCHEMA_VERSION): check integrity and migrate
+        if progress_callback is not None:
+            progress_callback("Upgrading database...")
         qc = conn.execute("PRAGMA quick_check(1);").fetchone()
         if not qc or qc[0] != "ok":
             raise sqlite3.DatabaseError(f"Integrity check failed: {qc}")

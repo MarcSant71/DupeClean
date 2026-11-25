@@ -31,7 +31,11 @@ from dupeclean.core._video_worker import (
     VIDEO_LOW_FREQ_SIZE,
     VIDEO_NUM_SAMPLES,
     _worker_decode_path,
+    crop_letterbox,
 )
+
+# Calibrated spectral whitening for video re-encodes (balances structural detail vs MPEG-4/H.264 noise)
+VIDEO_ALPHA = 1.0
 
 
 def get_video_duration(path: Path) -> Optional[float]:
@@ -49,28 +53,6 @@ def get_video_duration(path: Path) -> Optional[float]:
         return dur
     except Exception:
         return None
-
-
-def crop_letterbox(frames: np.ndarray, threshold: int = 25) -> np.ndarray:
-    """
-    Detecta e recorta barras pretas (letterbox / pillarbox) antes do hashing.
-    Prevents aspect ratio from generating spurious harmonics in the 2D DCT.
-    """
-    cropped_list = []
-    for f in frames:
-        row_means = f.mean(axis=1)
-        col_means = f.mean(axis=0)
-        valid_rows = np.where(row_means > threshold)[0]
-        valid_cols = np.where(col_means > threshold)[0]
-        if len(valid_rows) >= 16 and len(valid_cols) >= 16 and (len(valid_rows) < VIDEO_IMG_SIZE or len(valid_cols) < VIDEO_IMG_SIZE):
-            top, bottom = valid_rows[0], valid_rows[-1] + 1
-            left, right = valid_cols[0], valid_cols[-1] + 1
-            cropped = f[top:bottom, left:right]
-            pil_img = Image.fromarray(cropped).resize((VIDEO_IMG_SIZE, VIDEO_IMG_SIZE), Image.Resampling.BILINEAR)
-            cropped_list.append(np.asarray(pil_img, dtype=np.uint8))
-        else:
-            cropped_list.append(f)
-    return np.array(cropped_list)
 
 
 def extract_video_frames_and_duration(
@@ -251,7 +233,7 @@ def extract_video_embeddings(
 
     u = torch.arange(VIDEO_LOW_FREQ_SIZE, device=device, dtype=dtype).unsqueeze(1)
     v = torch.arange(VIDEO_LOW_FREQ_SIZE, device=device, dtype=dtype).unsqueeze(0)
-    spectral_weight = (u + v + 1.0).pow(2.0)
+    spectral_weight = (u + v + 1.0).pow(VIDEO_ALPHA)
     spectral_weight[0, 0] = 0.0  # Zero DC
 
     uncached_total = len(to_process)
