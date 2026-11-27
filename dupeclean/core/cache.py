@@ -12,7 +12,7 @@ import sqlite3
 import sys
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
@@ -25,7 +25,7 @@ from dupeclean.core.db_schema import (
     ensure_database_schema,
     reset_database_preserving_settings,
 )
-from dupeclean.core.scanner import get_volume_capabilities
+from dupeclean.core.scanner import get_volume_capabilities, is_solid_state_drive
 
 
 class AsyncBatchWriter:
@@ -38,66 +38,99 @@ class AsyncBatchWriter:
         flush_interval: float = 0.5,
         max_queue: int = 50000,
         name: str = "AsyncCacheWriter",
+        session_context: Optional[Callable[[], Any]] = None,
     ):
         self._flush_fn = flush_fn
+        self._session_context = session_context
         self.batch_size = batch_size
         self.flush_interval = flush_interval
-        self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
+        self._max_queue = max_queue
+        self._buf: deque = deque()
+        self._cond = threading.Condition()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name=name)
         self._thread.start()
 
     def add(self, entry: Any) -> None:
-        while not self._stop_event.is_set():
-            try:
-                self._queue.put(entry, timeout=0.1)
+        with self._cond:
+            while len(self._buf) >= self._max_queue and not self._stop_event.is_set():
+                self._cond.wait(timeout=0.05)
+            if self._stop_event.is_set():
                 return
-            except queue.Full:
-                continue
+            self._buf.append(entry)
+            if len(self._buf) == 1 or len(self._buf) >= self.batch_size:
+                self._cond.notify()
 
     def add_batch(self, entries: Iterable[Any]) -> None:
-        for entry in entries:
-            self.add(entry)
+        items = entries if isinstance(entries, (list, tuple)) else list(entries)
+        if not items:
+            return
+        with self._cond:
+            while len(self._buf) >= self._max_queue and not self._stop_event.is_set():
+                self._cond.wait(timeout=0.05)
+            if self._stop_event.is_set():
+                return
+            self._buf.extend(items)
+            self._cond.notify()
 
-    def _run(self) -> None:
+    def _run_loop(self, flush_cb: Callable[[List[Any]], None]) -> None:
         batch: List[Any] = []
         last_flush = time.perf_counter()
         while True:
-            if not batch:
-                if self._stop_event.is_set() and self._queue.empty():
-                    break
-                try:
-                    batch.append(self._queue.get(timeout=0.05))
-                except queue.Empty:
-                    continue
+            with self._cond:
+                while not self._buf and not self._stop_event.is_set():
+                    if batch:
+                        remaining = self.flush_interval - (time.perf_counter() - last_flush)
+                        if remaining <= 0:
+                            break
+                        self._cond.wait(timeout=min(0.05, remaining))
+                    else:
+                        self._cond.wait(timeout=0.05)
 
-            while len(batch) < self.batch_size:
-                try:
-                    batch.append(self._queue.get_nowait())
-                except queue.Empty:
+                while self._buf and len(batch) < self.batch_size:
+                    batch.append(self._buf.popleft())
+
+                if len(self._buf) < self._max_queue:
+                    self._cond.notify_all()
+
+                done = self._stop_event.is_set() and not self._buf
+
+            if not batch:
+                if done:
                     break
+                continue
 
             now = time.perf_counter()
-            if (
-                len(batch) >= self.batch_size
-                or (now - last_flush) >= self.flush_interval
-                or (self._stop_event.is_set() and self._queue.empty())
-            ):
+            if len(batch) >= self.batch_size or (now - last_flush) >= self.flush_interval or done:
                 try:
-                    self._flush_fn(batch)
+                    flush_cb(batch)
                 except Exception:
                     pass
                 batch.clear()
                 last_flush = now
+                if done:
+                    break
 
         if batch:
             try:
-                self._flush_fn(batch)
+                flush_cb(batch)
             except Exception:
                 pass
 
+    def _run(self) -> None:
+        if self._session_context is not None:
+            try:
+                with self._session_context() as session_flush:
+                    self._run_loop(session_flush)
+                return
+            except Exception:
+                pass
+        self._run_loop(self._flush_fn)
+
     def close(self) -> None:
-        self._stop_event.set()
+        with self._cond:
+            self._stop_event.set()
+            self._cond.notify_all()
         if self._thread.is_alive():
             self._thread.join(timeout=60.0)
 
@@ -204,16 +237,104 @@ def compute_prefix_hash_from_stream(f, size: int) -> str:
     return h.hexdigest()
 
 
+def _open_random_binary(path: Path, size: int):
+    """
+    Open a file for small random-access reads (Head 4KB + Tail 4KB).
+    Uses os.O_RANDOM on Windows so the Cache Manager does not trigger 64-256KB
+    speculative read-ahead (critical on HDDs and iSCSI/network storage).
+    """
+    buffering = 4096 if size > 8192 else 8192
+    if hasattr(os, "O_RANDOM"):
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | os.O_RANDOM
+        fd = os.open(os.fspath(path), flags)
+        try:
+            return os.fdopen(fd, "rb", buffering=buffering)
+        except Exception:
+            os.close(fd)
+            raise
+    return open(path, "rb", buffering=buffering)
+
+
 def compute_prefix_hash(path: Path, size: int) -> Optional[str]:
     """
     Compute the fast signature (Head 4KB + Tail 4KB or <=8KB total) via xxHash64.
     Used for Tier 3 (L3 Content Sieve) on exFAT/FAT32 volumes or cross-drive copies.
     """
     try:
-        with open(path, "rb") as f:
+        with _open_random_binary(path, size) as f:
             return compute_prefix_hash_from_stream(f, size)
     except (OSError, PermissionError):
         return None
+
+
+def _compute_prefix_hash_and_fstat(rec: FileRecord) -> None:
+    """
+    Compute prefix_hash and, on NTFS/ReFS volumes, capture (volume_id, file_id)
+    from the same open handle via os.fstat() to eliminate a second metadata pass.
+    """
+    try:
+        with _open_random_binary(rec.path, rec.size) as f:
+            rec.prefix_hash = compute_prefix_hash_from_stream(f, rec.size)
+            if (rec.volume_id == 0 or rec.file_id == 0) and get_volume_capabilities(rec.path)[1]:
+                try:
+                    st = os.fstat(f.fileno())
+                    rec.volume_id = getattr(st, "st_dev", 0) or 0
+                    rec.file_id = getattr(st, "st_ino", 0) or 0
+                except OSError:
+                    pass
+    except (OSError, PermissionError):
+        rec.prefix_hash = None
+
+
+def _get_drive_volume_id(path: Path, drive_vol_cache: Dict[str, int]) -> int:
+    """
+    Return st_dev for a Windows drive letter in 1 syscall per drive (cached).
+    Returns 0 for UNC/non-Windows/inaccessible roots so callers fail safe.
+    """
+    if os.name != "nt":
+        return 0
+    drive = os.path.splitdrive(str(path))[0]
+    if len(drive) != 2 or drive[1] != ":":
+        return 0
+    key = drive.upper()
+    vol_id = drive_vol_cache.get(key)
+    if vol_id is None:
+        try:
+            vol_id = getattr(os.stat(key + "\\"), "st_dev", 0) or 0
+        except OSError:
+            vol_id = 0
+        drive_vol_cache[key] = vol_id
+    return vol_id
+
+
+def _select_cache_io_workers(records: Sequence[FileRecord]) -> int:
+    """
+    Choose thread concurrency based on underlying storage medium:
+    - Local single-spindle mechanical HDD (seek penalty): 4 workers to avoid head thrashing
+    - SSD / NVMe: up to 16 workers
+    - iSCSI / network / unknown (high RTT RAID/NAS): up to 12 workers to keep queue depth full
+    """
+    cpu = os.cpu_count() or 4
+    seen_drives: Set[str] = set()
+    saw_ssd = False
+    saw_unknown = False
+    for r in records:
+        drive = os.path.splitdrive(str(r.path))[0].upper()
+        if drive in seen_drives:
+            continue
+        seen_drives.add(drive)
+        ssd = is_solid_state_drive(r.path)
+        if ssd is False:
+            return 4
+        if ssd is True:
+            saw_ssd = True
+        else:
+            saw_unknown = True
+        if len(seen_drives) >= 8:
+            break
+    if saw_ssd and not saw_unknown:
+        return min(16, max(4, cpu))
+    return min(12, max(6, cpu // 2))
 
 
 def _migrate_legacy_db_files(src_db: Path, dst_db: Path) -> bool:
@@ -274,19 +395,24 @@ class CacheManager:
         self.db_path = db_path or get_default_cache_db_path()
         self.schema_result: SchemaInitResult = self._init_db(status_callback=status_callback)
 
+    def _open_configured_connection(self) -> sqlite3.Connection:
+        """Open and configure a SQLite WAL connection with high-throughput pragmas."""
+        conn = sqlite3.connect(str(self.db_path), timeout=60.0)
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA busy_timeout = 60000;")  # 60 segundos de espera para locks
+        conn.execute("PRAGMA cache_size = -64000;")   # 64 MB RAM page cache (eliminates repeated I/O)
+        conn.execute("PRAGMA temp_store = MEMORY;")   # Temporary structures in RAM
+        conn.execute("PRAGMA mmap_size = 268435456;") # 256 MB zero-copy memory mapping
+        return conn
+
     @contextmanager
     def _get_connection(self):
         """
         Gerenciador de contexto que garante commit em sucesso, rollback em erro
         and mandatory connection closing to eliminate lock leaks on Windows.
         """
-        conn = sqlite3.connect(str(self.db_path), timeout=60.0)
+        conn = self._open_configured_connection()
         try:
-            conn.execute("PRAGMA synchronous = NORMAL;")
-            conn.execute("PRAGMA busy_timeout = 60000;")  # 60 segundos de espera para locks
-            conn.execute("PRAGMA cache_size = -64000;")   # 64 MB RAM page cache (eliminates repeated I/O)
-            conn.execute("PRAGMA temp_store = MEMORY;")   # Temporary structures in RAM
-            conn.execute("PRAGMA mmap_size = 268435456;") # 256 MB zero-copy memory mapping
             yield conn
             conn.commit()
         except Exception:
@@ -294,6 +420,95 @@ class CacheManager:
             raise
         finally:
             conn.close()
+
+    def create_batch_writer(
+        self,
+        kind: str,
+        batch_size: int = 1024,
+        flush_interval: float = 0.5,
+        max_queue: int = 50000,
+        name: str = "AsyncCacheWriter",
+    ) -> AsyncBatchWriter:
+        """
+        Create an AsyncBatchWriter that keeps a single SQLite WAL connection warm across
+        batches (preserving the 64 MB page cache and avoiding per-batch PRAGMA churn),
+        committing after every batch and closing cleanly on writer.close().
+        """
+        if kind == "exact":
+            sql = """
+                INSERT INTO cache_exact (path, size, mtime, prefix_hash, full_hash, volume_id, file_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    size=excluded.size,
+                    mtime=excluded.mtime,
+                    prefix_hash=COALESCE(excluded.prefix_hash, cache_exact.prefix_hash),
+                    full_hash=COALESCE(excluded.full_hash, cache_exact.full_hash),
+                    volume_id=CASE WHEN excluded.volume_id != 0 THEN excluded.volume_id ELSE cache_exact.volume_id END,
+                    file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_exact.file_id END;
+            """
+            fallback_fn = self.save_exact_batch
+            def _norm(entries: List[Tuple]) -> List[Tuple]:
+                return [e[:7] if len(e) >= 7 else (e[0], e[1], e[2], e[3], e[4], 0, 0) for e in entries]
+        elif kind == "images":
+            sql = """
+                INSERT INTO cache_images (path, size, mtime, embedding, volume_id, file_id, prefix_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    size=excluded.size,
+                    mtime=excluded.mtime,
+                    embedding=excluded.embedding,
+                    volume_id=CASE WHEN excluded.volume_id != 0 THEN excluded.volume_id ELSE cache_images.volume_id END,
+                    file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_images.file_id END,
+                    prefix_hash=COALESCE(excluded.prefix_hash, cache_images.prefix_hash);
+            """
+            fallback_fn = self.save_image_batch
+            def _norm(entries: List[Tuple]) -> List[Tuple]:
+                return [e[:7] if len(e) >= 7 else (e[0], e[1], e[2], e[3], 0, 0, None) for e in entries]
+        elif kind == "videos":
+            sql = """
+                INSERT INTO cache_videos (path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    size=excluded.size,
+                    mtime=excluded.mtime,
+                    duration=excluded.duration,
+                    embedding=excluded.embedding,
+                    volume_id=CASE WHEN excluded.volume_id != 0 THEN excluded.volume_id ELSE cache_videos.volume_id END,
+                    file_id=CASE WHEN excluded.file_id != 0 THEN excluded.file_id ELSE cache_videos.file_id END,
+                    prefix_hash=COALESCE(excluded.prefix_hash, cache_videos.prefix_hash);
+            """
+            fallback_fn = self.save_video_batch
+            def _norm(entries: List[Tuple]) -> List[Tuple]:
+                return [e[:8] if len(e) >= 8 else (e[0], e[1], e[2], e[3], e[4], 0, 0, None) for e in entries]
+        else:
+            raise ValueError(f"Unknown cache writer kind: {kind}")
+
+        @contextmanager
+        def _session():
+            conn = self._open_configured_connection()
+            try:
+                def _flush(entries: List[Tuple]) -> None:
+                    if not entries:
+                        return
+                    norm_entries = _norm(entries)
+                    try:
+                        conn.executemany(sql, norm_entries)
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        raise
+                yield _flush
+            finally:
+                conn.close()
+
+        return AsyncBatchWriter(
+            fallback_fn,
+            batch_size=batch_size,
+            flush_interval=flush_interval,
+            max_queue=max_queue,
+            name=name,
+            session_context=_session,
+        )
 
     def _init_db(self, status_callback: Optional[Callable[[str], None]] = None) -> SchemaInitResult:
         """Validate and adapt the database.sqlite schema to the current version via db_schema."""
@@ -349,24 +564,29 @@ class CacheManager:
         if not missing_paths and total_estimate > 0:
             return total_estimate
 
-        # 2. Fallback: Consulta contagem nos caches existentes via LIKE em SQLite (<1ms)
+        # 2. Fallback: Indexed prefix range count in SQLite (O(log N + K) covering PK index SEARCH)
         table = "cache_images" if mode == ScanMode.IMAGES else ("cache_videos" if mode == ScanMode.VIDEOS else "cache_exact")
 
         try:
             with self._get_connection() as conn:
                 for sp in missing_paths:
-                    prefix = str(sp.path.resolve()).rstrip("\\/") + "\\%"
-                    cursor = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE path LIKE ?;", (prefix,))
+                    low, high = self._prefix_range_bounds(str(sp.path.resolve()).rstrip("\\/") + "\\")
+                    cursor = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE path >= ? AND path < ?;", (low, high))
                     count = cursor.fetchone()[0]
                     if count == 0:
                         alt_table = "cache_exact" if table != "cache_exact" else "cache_images"
-                        cursor = conn.execute(f"SELECT COUNT(*) FROM {alt_table} WHERE path LIKE ?;", (prefix,))
+                        cursor = conn.execute(f"SELECT COUNT(*) FROM {alt_table} WHERE path >= ? AND path < ?;", (low, high))
                         count = cursor.fetchone()[0]
                     total_estimate += count
         except Exception:
             pass
 
         return total_estimate
+
+    @staticmethod
+    def _prefix_range_bounds(prefix: str) -> Tuple[str, str]:
+        """Return half-open [low, high) string bounds enabling O(log N + K) PK index SEARCH instead of LIKE SCAN."""
+        return prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1)
 
     def save_folder_counts(self, scan_paths: List[ScanPath], total_count: int):
         """Save the last observed file count for scanned folders."""
@@ -416,6 +636,8 @@ class CacheManager:
                 _stat_record_file_id(r)
             return
 
+        # Sort by directory path to preserve spatial/MFT locality on HDDs and iSCSI
+        to_stat.sort(key=lambda r: str(r.path))
         chunk_size = 2000
         chunks = [to_stat[i:i + chunk_size] for i in range(0, len(to_stat), chunk_size)]
         total_stat = len(to_stat)
@@ -427,7 +649,7 @@ class CacheManager:
                 _stat_record_file_id(rec)
             return len(batch)
 
-        workers = min(16, max(4, os.cpu_count() or 4))
+        workers = _select_cache_io_workers(to_stat)
         done = 0
         s_frac, e_frac = progress_range
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -449,7 +671,7 @@ class CacheManager:
         progress_range: Tuple[float, float] = (0.91, 0.97),
         progress_label: str = "Checking cache signatures",
     ) -> None:
-        """Calcula prefix_hash (Head 4KB + Tail 4KB) em paralelo para candidatos do L3."""
+        """Compute prefix_hash (Head 4KB + Tail 4KB) and NTFS fstat in parallel for L3 candidates."""
         to_hash = [r for r in records if r.prefix_hash is None]
         if not to_hash or (stop_check and stop_check()):
             return
@@ -457,7 +679,7 @@ class CacheManager:
         def _hash_one(rec: FileRecord) -> None:
             if stop_check and stop_check():
                 return
-            rec.prefix_hash = compute_prefix_hash(rec.path, rec.size)
+            _compute_prefix_hash_and_fstat(rec)
 
         if len(to_hash) <= 32:
             for r in to_hash:
@@ -466,6 +688,8 @@ class CacheManager:
                 _hash_one(r)
             return
 
+        # Sort by directory path to preserve spatial locality on HDDs and iSCSI
+        to_hash.sort(key=lambda r: str(r.path))
         chunk_size = 512
         chunks = [to_hash[i:i + chunk_size] for i in range(0, len(to_hash), chunk_size)]
         total_hash = len(to_hash)
@@ -477,7 +701,7 @@ class CacheManager:
                 _hash_one(rec)
             return len(batch)
 
-        workers = min(16, max(4, os.cpu_count() or 4))
+        workers = _select_cache_io_workers(to_hash)
         done = 0
         s_frac, e_frac = progress_range
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -563,14 +787,49 @@ class CacheManager:
         stop_check: Optional[Callable[[], bool]] = None,
         tracker: Optional[_CacheProgressTracker] = None,
     ) -> List[FileRecord]:
-        """Select L1 misses eligible for NTFS/ReFS with size present in DB and collect File ID."""
+        """Select L1 misses eligible for NTFS/ReFS on volumes present in DB and collect File ID."""
         if not uncached or (stop_check and stop_check()):
             return []
-        if not self._table_has_rows(conn, table, "file_id != 0"):
+        # Covering scan of partial index idx_*_fileid: skip entire drives absent from SQLite
+        known_volumes = {
+            row[0]
+            for row in conn.execute(
+                f"SELECT DISTINCT volume_id FROM {table} WHERE file_id != 0;"
+            ).fetchall()
+            if row[0]
+        }
+        if not known_volumes:
             return []
-        # Filtra primeiro por tamanhos conhecidos em SQLite antes de consultar get_volume_capabilities
+
+        drive_vol_cache: Dict[str, int] = {}
+        drive_eligible_cache: Dict[str, bool] = {}
+        vol_eligible: List[FileRecord] = []
+        for r in uncached:
+            if r.volume_id > 0 and r.file_id > 0:
+                if r.volume_id in known_volumes:
+                    vol_eligible.append(r)
+                continue
+            drive = os.path.splitdrive(str(r.path))[0].upper()
+            if drive:
+                eligible = drive_eligible_cache.get(drive)
+                if eligible is None:
+                    if not get_volume_capabilities(r.path)[1]:
+                        eligible = False
+                    else:
+                        drive_vol = _get_drive_volume_id(r.path, drive_vol_cache)
+                        eligible = (drive_vol == 0) or (drive_vol in known_volumes)
+                    drive_eligible_cache[drive] = eligible
+                if eligible:
+                    vol_eligible.append(r)
+            elif get_volume_capabilities(r.path)[1]:
+                vol_eligible.append(r)
+
+        if not vol_eligible or (stop_check and stop_check()):
+            return []
+
+        # Filter by sizes present in SQLite before issuing per-file os.stat() calls
         known_sizes = self._prefilter_known_sizes(
-            conn, table, uncached, "file_id != 0",
+            conn, table, vol_eligible, "file_id != 0",
             tracker=tracker,
             progress_range=(0.55, 0.65),
             progress_label=tracker.base_label if tracker else "Checking cache",
@@ -578,10 +837,7 @@ class CacheManager:
         )
         if not known_sizes or (stop_check and stop_check()):
             return []
-        candidates = [
-            r for r in uncached
-            if r.size in known_sizes and ((r.volume_id > 0 and r.file_id > 0) or get_volume_capabilities(r.path)[1])
-        ]
+        candidates = [r for r in vol_eligible if r.size in known_sizes]
         if not candidates or (stop_check and stop_check()):
             return []
         self._populate_file_ids_parallel(
@@ -592,7 +848,10 @@ class CacheManager:
             progress_range=(0.65, 0.80),
             progress_label="Checking cache file IDs",
         )
-        return [r for r in candidates if r.volume_id > 0 and r.file_id > 0]
+        return [
+            r for r in candidates
+            if r.volume_id > 0 and r.file_id > 0 and r.volume_id in known_volumes
+        ]
 
     _ALL_CACHE_TABLES = ("cache_exact", "cache_images", "cache_videos")
 
@@ -685,6 +944,16 @@ class CacheManager:
         tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking cache")
 
         with self._get_connection() as conn:
+            # Cold-start fast-path: skip hundreds of IN-queries when cache table is empty
+            if not self._table_has_rows(conn, "cache_exact"):
+                tracker.emit_range(
+                    f"Checking cache ({total_recs:,}/{total_recs:,})...",
+                    0.0, 0.50, total_recs, total_recs,
+                    force=True,
+                )
+                tracker.finish()
+                return results
+
             # 1. Tier 1 (L1 - In-place Path): Fast direct path lookup
             for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
@@ -844,6 +1113,16 @@ class CacheManager:
         tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking cache")
 
         with self._get_connection() as conn:
+            # Cold-start fast-path: skip hundreds of IN-queries when cache table is empty
+            if not self._table_has_rows(conn, "cache_images"):
+                tracker.emit_range(
+                    f"Checking cache ({total_recs:,}/{total_recs:,})...",
+                    0.0, 0.50, total_recs, total_recs,
+                    force=True,
+                )
+                tracker.finish()
+                return results
+
             # 1. Tier 1 (L1 - In-place Path): Fast direct path lookup
             for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
@@ -1031,6 +1310,163 @@ class CacheManager:
         tracker.finish()
         return results
 
+    def get_image_cache_l1_and_indexes(
+        self,
+        records: List[FileRecord],
+        expected_bytes: Optional[int] = None,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+    ) -> Tuple[
+        Dict[str, bytes],
+        Dict[Tuple[int, int], Tuple[str, int, float, bytes, Optional[str]]],
+        Dict[Tuple[int, str], Tuple[str, bytes]],
+        Set[int],
+        Set[int],
+    ]:
+        """
+        Zero-disk-I/O Stage-2 cache lookup for the unified streaming image pipeline:
+        1. L1 direct path lookup in SQLite (path + size + mtime).
+        2. Preload lightweight in-memory L2 (volume_id, file_id) and L3 (size, prefix_hash)
+           lookup indexes ONLY for sizes present in L1 misses — with ZERO per-file os.stat()
+           and ZERO file open() calls during Stage 2.
+        L2 and L3 checks then execute inline inside Stage 3's single open handle per file.
+        """
+        l1_results: Dict[str, bytes] = {}
+        l2_index: Dict[Tuple[int, int], Tuple[str, int, float, bytes, Optional[str]]] = {}
+        l3_index: Dict[Tuple[int, str], Tuple[str, bytes]] = {}
+        l3_known_sizes: Set[int] = set()
+        l2_known_volumes: Set[int] = set()
+
+        if not records:
+            return l1_results, l2_index, l3_index, l3_known_sizes, l2_known_volumes
+
+        chunk_size = 900
+        total_recs = len(records)
+        tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking cache")
+
+        with self._get_connection() as conn:
+            if not self._table_has_rows(conn, "cache_images"):
+                tracker.finish()
+                return l1_results, l2_index, l3_index, l3_known_sizes, l2_known_volumes
+
+            # 1. Tier 1 (L1): Direct path lookup (pure SQLite PK lookup, zero file I/O)
+            for i in range(0, total_recs, chunk_size):
+                if stop_check and stop_check():
+                    return l1_results, l2_index, l3_index, l3_known_sizes, l2_known_volumes
+                chunk = records[i:i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                paths = [str(r.path) for r in chunk]
+                cursor = conn.execute(
+                    f"SELECT path, size, mtime, embedding, volume_id, file_id, prefix_hash FROM cache_images WHERE path IN ({placeholders})",
+                    paths,
+                )
+                record_map = {str(r.path): r for r in chunk}
+                for c_path, c_size, c_mtime, emb_blob, c_vol_id, c_f_id, c_prefix in cursor.fetchall():
+                    rec = record_map.get(c_path)
+                    if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
+                        is_tombstone = len(emb_blob) == 0
+                        if is_tombstone or expected_bytes is None or len(emb_blob) == expected_bytes:
+                            l1_results[c_path] = emb_blob
+                            if c_prefix:
+                                rec.prefix_hash = c_prefix
+                                l3_index.setdefault((c_size, c_prefix), (c_path, emb_blob))
+                                l3_known_sizes.add(c_size)
+                            if c_vol_id > 0 and c_f_id > 0:
+                                rec.volume_id = c_vol_id
+                                rec.file_id = c_f_id
+
+                done = min(i + chunk_size, total_recs)
+                if done == total_recs or i % 2700 == 0:
+                    tracker.emit_range(
+                        f"Checking cache ({done:,}/{total_recs:,})...",
+                        0.0, 0.75, done, total_recs,
+                        force=(done == total_recs),
+                    )
+
+            # 2. Preload in-memory L2 & L3 lookup indexes for L1 misses (pure SQLite, zero file I/O)
+            misses = [r for r in records if str(r.path) not in l1_results]
+            if misses and not (stop_check and stop_check()):
+                db_volumes = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT DISTINCT volume_id FROM cache_images WHERE file_id != 0;"
+                    ).fetchall()
+                    if row[0]
+                }
+                drive_vol_cache: Dict[str, int] = {}
+                active_l2_vols: Set[int] = set()
+                if db_volumes:
+                    seen_drives: Set[str] = set()
+                    has_unknown_vol = False
+                    for r in misses:
+                        drv = os.path.splitdrive(str(r.path))[0].upper()
+                        if drv in seen_drives:
+                            continue
+                        seen_drives.add(drv)
+                        if not get_volume_capabilities(r.path)[1]:
+                            continue
+                        d_vol = _get_drive_volume_id(r.path, drive_vol_cache)
+                        if d_vol == 0:
+                            has_unknown_vol = True
+                        elif d_vol in db_volumes:
+                            active_l2_vols.add(d_vol)
+                    if has_unknown_vol:
+                        active_l2_vols = set(db_volumes)
+
+                miss_sizes = list({r.size for r in misses})
+                total_sizes = len(miss_sizes)
+                # Cap preloaded index rows to ~250k (~375 MB max RAM) for low-RAM systems
+                max_preload_rows = 250_000
+                loaded_rows = 0
+
+                for i in range(0, total_sizes, chunk_size):
+                    if stop_check and stop_check() or loaded_rows >= max_preload_rows:
+                        break
+                    chunk_s = miss_sizes[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk_s)
+                    cursor = conn.execute(
+                        f"SELECT path, size, mtime, volume_id, file_id, prefix_hash, embedding "
+                        f"FROM cache_images WHERE size IN ({placeholders});",
+                        chunk_s,
+                    )
+                    for c_path, c_size, c_mtime, c_vol_id, c_f_id, c_prefix, emb_blob in cursor.fetchall():
+                        is_tombstone = len(emb_blob) == 0
+                        if not is_tombstone and expected_bytes is not None and len(emb_blob) != expected_bytes:
+                            continue
+                        used = False
+                        if c_f_id != 0 and c_vol_id in active_l2_vols:
+                            if (c_vol_id, c_f_id) not in l2_index:
+                                l2_index[(c_vol_id, c_f_id)] = (c_path, c_size, c_mtime, emb_blob, c_prefix)
+                                l2_known_volumes.add(c_vol_id)
+                                used = True
+                        if c_prefix:
+                            if (c_size, c_prefix) not in l3_index:
+                                l3_index[(c_size, c_prefix)] = (c_path, emb_blob)
+                                l3_known_sizes.add(c_size)
+                                used = True
+                        if used:
+                            loaded_rows += 1
+                            if loaded_rows >= max_preload_rows:
+                                break
+
+                    done_s = min(i + chunk_size, total_sizes)
+                    if total_sizes > 1800 and (done_s == total_sizes or i % 2700 == 0):
+                        tracker.emit_range(
+                            f"Checking cache index ({done_s:,}/{total_sizes:,})...",
+                            0.75, 0.99, done_s, total_sizes,
+                            force=(done_s == total_sizes),
+                        )
+
+        tracker.finish()
+        return l1_results, l2_index, l3_index, l3_known_sizes, l2_known_volumes
+
+    def cleanup_stale_paths(self, table: str, stale_candidates: Set[str], active_paths: Set[str]) -> None:
+        """Remove dead/moved source paths from a cache table after inline L2/L3 relocations."""
+        if not stale_candidates:
+            return
+        with self._get_connection() as conn:
+            self._cleanup_dead_paths(conn, table, stale_candidates, active_paths)
+
     def save_image_batch(self, entries: List[Tuple]):
         """Salva lote de embeddings de imagem no cache."""
         if not entries:
@@ -1085,6 +1521,16 @@ class CacheManager:
         tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking video cache")
 
         with self._get_connection() as conn:
+            # Cold-start fast-path: skip hundreds of IN-queries when cache table is empty
+            if not self._table_has_rows(conn, "cache_videos"):
+                tracker.emit_range(
+                    f"Checking video cache ({total_recs:,}/{total_recs:,})...",
+                    0.0, 0.50, total_recs, total_recs,
+                    force=True,
+                )
+                tracker.finish()
+                return results
+
             # 1. Tier 1 (L1 - In-place Path): Fast direct path lookup
             for i in range(0, total_recs, chunk_size):
                 if stop_check and stop_check():
@@ -1287,6 +1733,157 @@ class CacheManager:
         tracker.finish()
         return results
 
+    def get_video_cache_l1_and_indexes(
+        self,
+        records: List[FileRecord],
+        expected_bytes: Optional[int] = None,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+    ) -> Tuple[
+        Dict[str, Tuple[float, bytes]],
+        Dict[Tuple[int, int], Tuple[str, int, float, float, bytes, Optional[str]]],
+        Dict[Tuple[int, str], List[Tuple[str, float, float, bytes]]],
+        Set[int],
+        Set[int],
+    ]:
+        """
+        Zero-disk-I/O Stage-2 cache lookup for the unified streaming video pipeline:
+        1. L1 direct path lookup in SQLite (path + size + mtime).
+        2. Preload lightweight in-memory L2 (volume_id, file_id) and L3 (size, prefix_hash)
+           lookup indexes ONLY for sizes present in L1 misses — preserving CCTV .dav mtime
+           proximity safety with ZERO per-file os.stat() and ZERO file open() calls in Stage 2.
+        """
+        l1_results: Dict[str, Tuple[float, bytes]] = {}
+        l2_index: Dict[Tuple[int, int], Tuple[str, int, float, float, bytes, Optional[str]]] = {}
+        l3_index: Dict[Tuple[int, str], List[Tuple[str, float, float, bytes]]] = defaultdict(list)
+        l3_known_sizes: Set[int] = set()
+        l2_known_volumes: Set[int] = set()
+
+        if not records:
+            return l1_results, l2_index, l3_index, l3_known_sizes, l2_known_volumes
+
+        chunk_size = 900
+        total_recs = len(records)
+        tracker = _CacheProgressTracker(progress_callback, total_recs, "Checking video cache")
+
+        with self._get_connection() as conn:
+            if not self._table_has_rows(conn, "cache_videos"):
+                tracker.finish()
+                return l1_results, l2_index, l3_index, l3_known_sizes, l2_known_volumes
+
+            # 1. Tier 1 (L1): Direct path lookup (pure SQLite PK lookup, zero file I/O)
+            for i in range(0, total_recs, chunk_size):
+                if stop_check and stop_check():
+                    return l1_results, l2_index, l3_index, l3_known_sizes, l2_known_volumes
+                chunk = records[i:i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                paths = [str(r.path) for r in chunk]
+                cursor = conn.execute(
+                    f"SELECT path, size, mtime, duration, embedding, volume_id, file_id, prefix_hash FROM cache_videos WHERE path IN ({placeholders})",
+                    paths,
+                )
+                record_map = {str(r.path): r for r in chunk}
+                for c_path, c_size, c_mtime, dur, emb_blob, c_vol_id, c_f_id, c_prefix in cursor.fetchall():
+                    rec = record_map.get(c_path)
+                    if rec and rec.size == c_size and abs(rec.mtime - c_mtime) < 0.001:
+                        is_valid_tombstone = (dur == -1.0 and len(emb_blob) == 0)
+                        if is_valid_tombstone or expected_bytes is None or len(emb_blob) == expected_bytes:
+                            l1_results[c_path] = (dur, emb_blob)
+                            if c_prefix:
+                                rec.prefix_hash = c_prefix
+                                l3_index[(c_size, c_prefix)].append((c_path, c_mtime, dur, emb_blob))
+                                l3_known_sizes.add(c_size)
+                            if c_vol_id > 0 and c_f_id > 0:
+                                rec.volume_id = c_vol_id
+                                rec.file_id = c_f_id
+
+                done = min(i + chunk_size, total_recs)
+                if done == total_recs or i % 2700 == 0:
+                    tracker.emit_range(
+                        f"Checking video cache ({done:,}/{total_recs:,})...",
+                        0.0, 0.75, done, total_recs,
+                        force=(done == total_recs),
+                    )
+
+            # 2. Preload in-memory L2 & L3 lookup indexes for L1 misses (pure SQLite, zero file I/O)
+            misses = [r for r in records if str(r.path) not in l1_results]
+            if misses and not (stop_check and stop_check()):
+                db_volumes = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT DISTINCT volume_id FROM cache_videos WHERE file_id != 0;"
+                    ).fetchall()
+                    if row[0]
+                }
+                drive_vol_cache: Dict[str, int] = {}
+                active_l2_vols: Set[int] = set()
+                if db_volumes:
+                    seen_drives: Set[str] = set()
+                    has_unknown_vol = False
+                    for r in misses:
+                        drv = os.path.splitdrive(str(r.path))[0].upper()
+                        if drv in seen_drives:
+                            continue
+                        seen_drives.add(drv)
+                        if not get_volume_capabilities(r.path)[1]:
+                            continue
+                        d_vol = _get_drive_volume_id(r.path, drive_vol_cache)
+                        if d_vol == 0:
+                            has_unknown_vol = True
+                        elif d_vol in db_volumes:
+                            active_l2_vols.add(d_vol)
+                    if has_unknown_vol:
+                        active_l2_vols = set(db_volumes)
+
+                miss_sizes = list({r.size for r in misses})
+                total_sizes = len(miss_sizes)
+                # Cap preloaded index rows to ~120k (~920 MB max RAM for 7.68 KB video embeddings)
+                max_preload_rows = 120_000
+                loaded_rows = 0
+
+                for i in range(0, total_sizes, chunk_size):
+                    if (stop_check and stop_check()) or loaded_rows >= max_preload_rows:
+                        break
+                    chunk_s = miss_sizes[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk_s)
+                    cursor = conn.execute(
+                        f"SELECT path, size, mtime, duration, volume_id, file_id, prefix_hash, embedding "
+                        f"FROM cache_videos WHERE size IN ({placeholders});",
+                        chunk_s,
+                    )
+                    for c_path, c_size, c_mtime, dur, c_vol_id, c_f_id, c_prefix, emb_blob in cursor.fetchall():
+                        is_valid_tombstone = (dur == -1.0 and len(emb_blob) == 0)
+                        if not is_valid_tombstone and expected_bytes is not None and len(emb_blob) != expected_bytes:
+                            continue
+                        used = False
+                        if c_f_id != 0 and c_vol_id in active_l2_vols:
+                            if (c_vol_id, c_f_id) not in l2_index:
+                                l2_index[(c_vol_id, c_f_id)] = (c_path, c_size, c_mtime, dur, emb_blob, c_prefix)
+                                l2_known_volumes.add(c_vol_id)
+                                used = True
+                        if c_prefix:
+                            key = (c_size, c_prefix)
+                            # Keep up to 4 entries per (size, prefix_hash) so .dav mtime checks stay accurate
+                            if len(l3_index[key]) < 4:
+                                l3_index[key].append((c_path, c_mtime, dur, emb_blob))
+                                l3_known_sizes.add(c_size)
+                                used = True
+                        if used:
+                            loaded_rows += 1
+                            if loaded_rows >= max_preload_rows:
+                                break
+
+                    done_s = min(i + chunk_size, total_sizes)
+                    if total_sizes > 1800 and (done_s == total_sizes or i % 2700 == 0):
+                        tracker.emit_range(
+                            f"Checking video cache index ({done_s:,}/{total_sizes:,})...",
+                            0.75, 0.99, done_s, total_sizes,
+                            force=(done_s == total_sizes),
+                        )
+
+        tracker.finish()
+        return l1_results, l2_index, l3_index, l3_known_sizes, l2_known_volumes
+
     def save_video_batch(self, entries: List[Tuple]):
         """Save batch of decoded videos to cache."""
         if not entries:
@@ -1420,15 +2017,10 @@ class CacheManager:
             seen_candidates: Set[str] = set()
             for prefix in root_prefixes:
                 prefix_norm = norm_fn(prefix)
-                like_pat = (
-                    prefix.replace("!", "!!")
-                    .replace("%", "!%")
-                    .replace("_", "!_")
-                    + "%"
-                )
+                low, high = self._prefix_range_bounds(prefix)
                 cur = conn.execute(
-                    f"SELECT path FROM {table} WHERE path LIKE ? ESCAPE '!';",
-                    (like_pat,),
+                    f"SELECT path FROM {table} WHERE path >= ? AND path < ?;",
+                    (low, high),
                 )
                 for (db_path_str,) in cur.fetchall():
                     if stop_check and stop_check():
@@ -1488,9 +2080,10 @@ class CacheManager:
         return stats
 
     def checkpoint(self):
-        """Executa checkpoint manual do WAL para truncar o arquivo de log."""
+        """Executa PRAGMA optimize e checkpoint manual do WAL para manter estatísticas e truncar o log."""
         try:
             with self._get_connection() as conn:
+                conn.execute("PRAGMA optimize;")
                 conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
         except Exception:
             pass

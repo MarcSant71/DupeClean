@@ -16,7 +16,64 @@ from typing import List, Callable, Optional, Tuple, Dict, Any
 import xxhash
 from dupeclean.core.models import FileRecord, DuplicateGroup, ScanMode, format_size
 from dupeclean.core.cache import AsyncBatchWriter, CacheManager
-from dupeclean.core.scanner import get_volume_capabilities
+from dupeclean.core.conversion_logger import log_conversion_error
+from dupeclean.core.scanner import get_storage_kind, get_volume_capabilities
+
+_EXACT_STORAGE_PRIORITY = {"ssd": 0, "unknown": 1, "iscsi": 2, "network": 2, "hdd": 3}
+
+
+def _open_sequential_unbuffered(path):
+    """Open file unbuffered with Windows O_SEQUENTIAL hint for maximum sequential read-ahead."""
+    o_seq = getattr(os, "O_SEQUENTIAL", 0)
+    o_bin = getattr(os, "O_BINARY", 0)
+    if o_seq:
+        try:
+            fd = os.open(str(path), os.O_RDONLY | o_bin | o_seq)
+            return os.fdopen(fd, "rb", buffering=0)
+        except OSError:
+            pass
+    return open(path, "rb", buffering=0)
+
+
+def _drive_worker_cap(kind: str, stage: str, cpu: int) -> int:
+    """Return optimal per-drive concurrency cap based on physical storage kind."""
+    if kind == "hdd":
+        return 4 if stage == "header" else 2
+    if kind == "ssd":
+        return min(16, max(4, cpu)) if stage == "header" else min(8, max(4, cpu // 2))
+    # iSCSI / SMB network / unknown: hide network RTT without thrashing RAID LUNs
+    return min(12, max(4, cpu // 2)) if stage == "header" else min(6, max(2, cpu // 4))
+
+
+def _build_drive_io_plan(
+    records: List[FileRecord], stage: str
+) -> Tuple[int, Dict[str, threading.Semaphore], Dict[str, int]]:
+    """
+    Build per-drive concurrency semaphores and storage-tier sort priorities so mixed-drive scans
+    (SSD + iSCSI/HDD) saturate fast SSDs first without throttling them to HDD concurrency.
+    """
+    cpu = os.cpu_count() or 4
+    drive_sems: Dict[str, threading.Semaphore] = {}
+    drive_prio: Dict[str, int] = {}
+    max_cap = 1
+    for r in records:
+        drv = os.path.splitdrive(str(r.path))[0].upper()
+        if drv in drive_sems:
+            continue
+        kind = get_storage_kind(r.path)
+        cap = _drive_worker_cap(kind, stage, cpu)
+        drive_sems[drv] = threading.Semaphore(cap)
+        drive_prio[drv] = _EXACT_STORAGE_PRIORITY.get(kind, 1)
+        if cap > max_cap:
+            max_cap = cap
+    pool_workers = min(max_cap, max(1, len(records)))
+    return pool_workers, drive_sems, drive_prio
+
+
+def _select_io_workers(records: List[FileRecord], stage: str) -> int:
+    """Adapt I/O thread concurrency to storage type (SSD/NVMe vs iSCSI/network vs mechanical HDD)."""
+    pool_workers, _, _ = _build_drive_io_plan(records, stage)
+    return pool_workers
 
 
 def _capture_fstat_ids(f, rec: FileRecord) -> None:
@@ -78,7 +135,8 @@ def _read_signature(args: Tuple[FileRecord, Optional[Callable[[], bool]]]) -> Op
                     hasher.update(tail)
                 h = hasher.hexdigest()
                 return rec, h, False
-    except (OSError, PermissionError):
+    except (OSError, PermissionError) as exc:
+        log_conversion_error("EXACT", "READ", rec.path, f"{type(exc).__name__}: {exc}")
         return None
 
 
@@ -97,7 +155,7 @@ def _compute_full_hash_worker(
     try:
         hasher = xxhash.xxh64()
         buf_len = len(mv)
-        with open(rec.path, "rb", buffering=0) as f:
+        with _open_sequential_unbuffered(rec.path) as f:
             _capture_fstat_ids(f, rec)
             while True:
                 if stop_check and stop_check():
@@ -114,7 +172,8 @@ def _compute_full_hash_worker(
         h = hasher.hexdigest()
         rec.hash_value = h
         return rec, h
-    except (OSError, PermissionError):
+    except (OSError, PermissionError) as exc:
+        log_conversion_error("EXACT", "READ", rec.path, f"{type(exc).__name__}: {exc}")
         return None
 
 
@@ -147,8 +206,8 @@ def find_exact_duplicates(
     asynchronous cache persistence decoupled from I/O, and instant cancellation response.
     """
     cache = cache_manager or CacheManager()
-    cache_writer = AsyncBatchWriter(
-        cache.save_exact_batch,
+    cache_writer = cache.create_batch_writer(
+        "exact",
         batch_size=2048,
         max_queue=100000,
         name="AsyncExactCacheWriter",
@@ -250,12 +309,15 @@ def find_exact_duplicates(
                     2,
                 )
 
-            # Spatial optimization (Directory Locality): sorting by full path string groups files
-            # by directory without allocating temporary Path.parent objects
-            to_header_check.sort(key=lambda r: str(r.path))
+            # Sort fastest drives FIRST (SSD -> iSCSI/network -> HDD) + directory locality within each drive
+            header_workers, header_drive_sems, header_drive_prio = _build_drive_io_plan(to_header_check, "header")
+            to_header_check.sort(
+                key=lambda r: (
+                    header_drive_prio.get(os.path.splitdrive(str(r.path))[0].upper(), 1),
+                    str(r.path),
+                )
+            )
 
-            header_workers = min(16, max(4, os.cpu_count() or 4))
-            header_workers = min(header_workers, len(to_header_check))
             header_processed = cache_hits_prefix
             header_processed_bytes = cached_header_bytes
             last_progress_time = time.perf_counter()
@@ -274,8 +336,15 @@ def find_exact_duplicates(
                         continue
                     if rec is None:
                         break
+                    drv_sem = header_drive_sems.get(os.path.splitdrive(str(rec.path))[0].upper())
                     try:
-                        res = _read_signature((rec, stop_check))
+                        if drv_sem is not None:
+                            drv_sem.acquire()
+                        try:
+                            res = _read_signature((rec, stop_check))
+                        finally:
+                            if drv_sem is not None:
+                                drv_sem.release()
                     except Exception:
                         res = None
 
@@ -390,11 +459,15 @@ def find_exact_duplicates(
                     to_deep_check.append(rec)
 
         if to_deep_check and not (stop_check and stop_check()):
-            # Spatial optimization for sequential reading of large contiguous blocks
-            to_deep_check.sort(key=lambda r: str(r.path))
+            # Sort fastest drives FIRST (SSD -> iSCSI/network -> HDD) + directory locality for sequential reads
+            deep_workers, deep_drive_sems, deep_drive_prio = _build_drive_io_plan(to_deep_check, "deep")
+            to_deep_check.sort(
+                key=lambda r: (
+                    deep_drive_prio.get(os.path.splitdrive(str(r.path))[0].upper(), 1),
+                    str(r.path),
+                )
+            )
 
-            deep_workers = min(8, max(4, (os.cpu_count() or 4) // 2))
-            deep_workers = min(deep_workers, len(to_deep_check))
             deep_processed = deep_cached_count
             deep_processed_bytes = deep_cached_bytes
             last_progress_time = time.perf_counter()
@@ -422,8 +495,15 @@ def find_exact_duplicates(
                         continue
                     if rec is None:
                         break
+                    drv_sem = deep_drive_sems.get(os.path.splitdrive(str(rec.path))[0].upper())
                     try:
-                        res = _compute_full_hash_worker(rec, mv, stop_check)
+                        if drv_sem is not None:
+                            drv_sem.acquire()
+                        try:
+                            res = _compute_full_hash_worker(rec, mv, stop_check)
+                        finally:
+                            if drv_sem is not None:
+                                drv_sem.release()
                     except Exception:
                         res = None
 

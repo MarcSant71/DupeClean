@@ -592,6 +592,17 @@ class HelpDialog(QDialog):
             &bull; <b>Full Hashes (Stage 3):</b> Only larger files (&gt; 256 KB) whose 8 KB partial hashes match are streamed in full via <code>xxHash64</code> for absolute verification.
         </div>
         <div class="callout">
+            <b>What does the live <code>items/s</code> rate on the Stage status line indicate?</b><br>
+            During file discovery, cache checks, and signature extraction (Stages 1&ndash;3), DupeClean displays a live
+            <b>4-second sliding-window throughput rate</b> (<code>items/s</code>) directly on the status line. Because
+            cold scans are primarily bound by storage I/O and media decoding, this rate naturally reflects the underlying
+            storage hardware and file characteristics:<br>
+            &bull; <b>Local NVMe / SSD:</b> Highest throughput &mdash; typically hundreds to thousands of items/s (photos and small files).<br>
+            &bull; <b>Mechanical HDD / External USB:</b> Moderate throughput &mdash; limited by disk seek latency and sequential bandwidth.<br>
+            &bull; <b>NAS / iSCSI / Network Shares (SMB):</b> Lower throughput &mdash; affected by network round-trip latency (~5&ndash;15 ms per file open) and link speed.<br>
+            &bull; <b>Media &amp; File Size:</b> Large multi-gigabyte videos or archives naturally show lower <code>items/s</code> even while saturating your storage bandwidth. In mixed-drive scans, faster local SSDs are scanned first, so the rate updates automatically as processing moves to slower drives.
+        </div>
+        <div class="callout">
             <b>Why is my Disk read speed at 100% (~1–3+ GB/s) during Duplicate Files Stage 3?</b><br>
             To guarantee with 100% mathematical certainty that two files are identical bit-for-bit, their raw bytes must be streamed from physical storage into memory. DupeClean uses multi-threaded 512 KB streaming buffers (<code>buffering=0</code> + <code>readinto</code>) to keep your drive reading at full sequential speed so this phase finishes as fast as possible.
         </div>

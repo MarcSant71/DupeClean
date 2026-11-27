@@ -11,11 +11,15 @@ import re
 import platform
 import traceback
 import ctypes
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, Union
 
 from dupeclean import __version__
+
+_CRASH_LOG_LOCK = threading.Lock()
+_MAX_CRASH_LOG_BYTES = 5 * 1024 * 1024  # 5 MB rotation threshold
 
 
 def get_project_root() -> Path:
@@ -174,12 +178,11 @@ def log_critical_crash(
     context: Optional[Dict[str, str]] = None
 ) -> Optional[Path]:
     """
-    Official entry point for recording critical crashes:
-    1. Formata traceback e mensagem de erro.
-    2. Aplica saneamento estrito (LGPD).
-    3. Run cleanup of logs older than 7 days.
-    4. Writes to logs/crash_YYYY-MM-DD.log.
-    Retorna o Path do arquivo gravado, ou None em caso de falha.
+    Official entry point for recording critical application crashes:
+    1. Formats exception and traceback.
+    2. Applies strict LGPD sanitization.
+    3. Cleans legacy dated crash_*.log files older than 7 days and rotates crash.log at 5 MB.
+    4. Writes to `logs/crash.log` using the unified `[YYYY-MM-DD HH:MM:SS] [CRASH  ]: ...` format.
     """
     try:
         logs_dir = get_logs_dir()
@@ -200,54 +203,42 @@ def log_critical_crash(
             exc_class_name = "UnknownException"
             exc_message = str(exc)
 
-        # Coleta telemetria e sanitiza
         telemetry = get_system_telemetry()
-        sanitized_tb = sanitize_text(raw_tb)
-        sanitized_msg = sanitize_text(exc_message)
+        sanitized_tb = sanitize_text(raw_tb).rstrip()
+        sanitized_msg = " ".join(sanitize_text(exc_message).splitlines()).strip()
 
-        now = datetime.now()
-        date_str = now.strftime("%Y-%m-%d")
-        timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_path = logs_dir / "crash.log"
 
-        log_path = logs_dir / f"crash_{date_str}.log"
-
-        lines = [
-            "=" * 80,
-            f"CRITICAL ERROR REPORT - {timestamp_str} (Local Time)",
-            "=" * 80,
-            "Environment & Hardware:",
-            f"  • DupeClean Version : {telemetry.get('dupeclean_version', 'Unknown')}",
-            f"  • Operating System  : {telemetry.get('os', 'Unknown')}",
-            f"  • Python Runtime    : {telemetry.get('python', 'Unknown')}",
-            f"  • System RAM        : Total: {telemetry.get('ram_total_gb', 'N/A')} GB | Available: {telemetry.get('ram_avail_gb', 'N/A')} GB",
+        meta_parts = [
+            f"DupeClean {telemetry.get('dupeclean_version', 'Unknown')}",
+            f"{telemetry.get('os', 'Unknown')}",
+            f"Python {telemetry.get('python', 'Unknown')}",
+            f"RAM {telemetry.get('ram_avail_gb', 'N/A')}/{telemetry.get('ram_total_gb', 'N/A')} GB",
         ]
-
         if telemetry.get("cuda_available"):
-            lines.extend([
-                f"  • GPU Model         : {telemetry.get('gpu_name', 'Unknown')}",
-                f"  • PyTorch / CUDA    : {telemetry.get('pytorch_version', 'N/A')} | CUDA {telemetry.get('cuda_version', 'N/A')}",
-                f"  • GPU VRAM (GB)     : Total: {telemetry.get('vram_total_gb', 'N/A')} | Allocated: {telemetry.get('vram_allocated_gb', 'N/A')} | Reserved: {telemetry.get('vram_reserved_gb', 'N/A')}",
-            ])
-
+            meta_parts.append(
+                f"GPU {telemetry.get('gpu_name', 'Unknown')} "
+                f"(VRAM {telemetry.get('vram_allocated_gb', 'N/A')}/{telemetry.get('vram_total_gb', 'N/A')} GB, "
+                f"CUDA {telemetry.get('cuda_version', 'N/A')})"
+            )
         if context:
-            lines.append("Execution Context:")
             for k, v in context.items():
-                lines.append(f"  • {k}: {sanitize_text(str(v))}")
+                meta_parts.append(f"{k}: {sanitize_text(str(v))}")
 
-        lines.extend([
-            "",
-            "Exception Details:",
-            f"  • Class   : {exc_class_name}",
-            f"  • Message : {sanitized_msg}",
-            "",
-            "Sanitized Stack Trace (LGPD Compliant):",
-            sanitized_tb.rstrip(),
-            "=" * 80,
-            "\n"
-        ])
+        header_line = f"{timestamp_str} - {' | '.join(meta_parts)} - {exc_class_name}: {sanitized_msg}"
+        tb_lines = [f"  {ln}" for ln in sanitized_tb.splitlines()] if sanitized_tb else []
+        entry = "\n".join([header_line] + tb_lines) + "\n"
 
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+        with _CRASH_LOG_LOCK:
+            try:
+                if log_path.exists() and log_path.stat().st_size >= _MAX_CRASH_LOG_BYTES:
+                    backup = log_path.with_name(f"{log_path.name}.1")
+                    os.replace(str(log_path), str(backup))
+            except OSError:
+                pass
+            with open(log_path, "a", encoding="utf-8", errors="replace") as f:
+                f.write(entry)
 
         return log_path
     except Exception:

@@ -6,7 +6,7 @@ in-process PyTorch binding directly to CUDA device 0.
 """
 
 import os
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 
 
 def enforce_high_performance_gpu():
@@ -123,11 +123,63 @@ def check_gpu_compatibility() -> Tuple[bool, str, Dict[str, Any]]:
     return True, "", info
 
 
+def get_system_ram_gb() -> float:
+    """Return total physical system RAM in GiB (Windows GlobalMemoryStatusEx, /proc/meminfo fallback)."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = _MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return stat.ullTotalPhys / (1024 ** 3)
+        elif os.path.exists("/proc/meminfo"):
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        return kb / (1024 ** 2)
+    except Exception:
+        pass
+    return 16.0
+
+
+def _compute_pyav_recycle_per_worker(ram_gb: float) -> int:
+    """
+    Scale PyAV CPU worker process recycle cadence to system RAM so long-running
+    FFmpeg/libavcodec child processes never accumulate C-heap fragmentation:
+    - >= 32 GB RAM: 300 videos/worker
+    - 16-32 GB RAM: 200 videos/worker
+    - < 16 GB RAM:  120 videos/worker
+    """
+    if ram_gb >= 31.0:
+        return 300
+    if ram_gb >= 15.0:
+        return 200
+    return 120
+
+
 def get_optimal_gpu_budgets() -> Dict[str, Any]:
     """
-    Dynamically computes memory budgets and batch sizes
-    baseando-se no dispositivo ativo (GPU RTX em VRAM ou fallback em CPU).
+    Dynamically computes memory budgets, batch sizes, and worker-process recycle cadences
+    baseando-se no dispositivo ativo (GPU RTX em VRAM ou fallback em CPU) e na RAM do sistema.
     """
+    ram_gb = get_system_ram_gb()
+    pyav_recycle_per_worker = _compute_pyav_recycle_per_worker(ram_gb)
+
     try:
         import torch
         device, _ = get_compute_device()
@@ -135,6 +187,9 @@ def get_optimal_gpu_budgets() -> Dict[str, Any]:
             return {
                 "target_chunk_bytes": 128 * 1024 * 1024,
                 "image_batch_size": 128,
+                "neural_batch_size": 32,
+                "cuvid_workers": 0,
+                "pyav_recycle_per_worker": pyav_recycle_per_worker,
                 "vram_total_gb": 0.0,
                 "vram_free_gb": 0.0,
                 "gpu_name": "CPU",
@@ -152,17 +207,26 @@ def get_optimal_gpu_budgets() -> Dict[str, Any]:
             min(int(free_bytes * 0.25), 2 * 1024 * 1024 * 1024)
         )
 
-        # Dynamic image extraction batch scaling by total VRAM
-        if total_gb >= 24.0:
+        # Dynamic image, neural batch, and FFmpeg 8 CUVID worker scaling by total VRAM tier
+        if total_gb >= 20.0:
             image_batch_size = 1024
+            neural_batch_size = 256
+            cuvid_workers = 12
         elif total_gb >= 11.5:
             image_batch_size = 512
+            neural_batch_size = 128
+            cuvid_workers = 8
         else:
             image_batch_size = 256
+            neural_batch_size = 64
+            cuvid_workers = 6
 
         return {
             "target_chunk_bytes": target_chunk_bytes,
             "image_batch_size": image_batch_size,
+            "neural_batch_size": neural_batch_size,
+            "cuvid_workers": cuvid_workers,
+            "pyav_recycle_per_worker": pyav_recycle_per_worker,
             "vram_total_gb": round(total_gb, 2),
             "vram_free_gb": round(free_gb, 2),
             "gpu_name": torch.cuda.get_device_name(0),
@@ -171,7 +235,28 @@ def get_optimal_gpu_budgets() -> Dict[str, Any]:
         return {
             "target_chunk_bytes": 256 * 1024 * 1024,
             "image_batch_size": 256,
+            "neural_batch_size": 64,
+            "cuvid_workers": 6,
+            "pyav_recycle_per_worker": pyav_recycle_per_worker,
             "vram_total_gb": 8.0,
             "vram_free_gb": 4.0,
             "gpu_name": "NVIDIA RTX",
         }
+
+
+def choose_embedding_storage_device(num_items: int, dim_size: int, compute_device: str, dtype) -> str:
+    """
+    Keep accumulated embeddings on CUDA VRAM when they fit safely (< 35% of free VRAM,
+    leaving headroom for torch.cat and neural inference); otherwise spill FP16 chunks
+    to CPU RAM so 8-12 GB RTX GPUs never OOM on multi-million-file libraries.
+    """
+    if compute_device != "cuda" or num_items <= 0:
+        return "cpu"
+    try:
+        import torch
+        free_bytes, _ = torch.cuda.mem_get_info(0)
+        elem_bytes = 2 if dtype == torch.float16 else 4
+        est_bytes = num_items * dim_size * elem_bytes
+        return "cuda" if est_bytes <= int(free_bytes * 0.35) else "cpu"
+    except Exception:
+        return "cuda"

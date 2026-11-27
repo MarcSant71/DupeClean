@@ -20,7 +20,10 @@ from PySide6.QtWidgets import (
 
 from dupeclean.core.models import FileRecord
 from dupeclean.core.scanner import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from dupeclean.core.hasher_image import ensure_heif_registered
 from dupeclean.ui.results_table import format_size
+
+ensure_heif_registered()
 
 
 class AspectRatioPixmapLabel(QLabel):

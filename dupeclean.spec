@@ -7,6 +7,8 @@ from pathlib import Path
 block_cipher = None
 
 # Hidden imports required by dynamic loaders
+import importlib.util as _ilu
+
 hiddenimports = [
     'torch',
     'xxhash',
@@ -20,11 +22,15 @@ hiddenimports = [
     'PIL.ImageOps',
     'sqlite3',
 ]
+if _ilu.find_spec('pillow_heif') is not None:
+    hiddenimports.append('pillow_heif')
 
 # Data files
 datas = [
     ('assets/icon.ico', 'assets'),
 ]
+if Path('models/dinov2_vits14_fp16.pt').is_file():
+    datas.append(('models/dinov2_vits14_fp16.pt', 'models'))
 
 binaries = []
 

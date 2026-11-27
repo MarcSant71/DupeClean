@@ -4,12 +4,13 @@ Combines tool sidebar, results tree, action controls,
 similarity slider, and folder panel with Reference protection and Drag & Drop.
 """
 
+from collections import deque
 import html
 import os
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Deque, Dict, Any, List, Optional, Tuple
 import send2trash
 
 from PySide6.QtCore import Qt, Slot, QTimer, QSize, QUrl, QRectF
@@ -58,6 +59,70 @@ class ModeItemDelegate(QStyledItemDelegate):
             painter.restore()
 
 
+class StageRateTracker:
+    """Sliding-window items/sec tracker for scan stages (O(1) per UI tick, zero scan overhead)."""
+
+    def __init__(self, window_seconds: float = 4.0, min_elapsed: float = 0.5):
+        self.window_seconds = window_seconds
+        self.min_elapsed = min_elapsed
+        self._stage_key: Optional[Tuple[int, str]] = None
+        self._samples: Deque[Tuple[float, int]] = deque()
+
+    def reset(self) -> None:
+        self._stage_key = None
+        self._samples.clear()
+
+    @staticmethod
+    def _phase_key(msg: str) -> str:
+        parts = msg.strip().lower().split()
+        return " ".join(parts[:2]) if parts else ""
+
+    def update(
+        self,
+        stage_num: int,
+        msg: str,
+        current: int,
+        now: Optional[float] = None,
+    ) -> Optional[float]:
+        """Record a progress tick and return sliding-window items/sec, or None during warmup/Stage 4."""
+        # Stage 4 (matrix similarity clustering) tracks block comparisons rather than individual files
+        if stage_num <= 0 or stage_num > 3 or current < 0:
+            self.reset()
+            return None
+
+        t = time.perf_counter() if now is None else float(now)
+        key = (stage_num, self._phase_key(msg))
+
+        if key != self._stage_key or not self._samples or current < self._samples[-1][1]:
+            self._stage_key = key
+            self._samples.clear()
+            self._samples.append((t, current))
+            return None
+
+        if t > self._samples[-1][0] or current > self._samples[-1][1]:
+            self._samples.append((t, current))
+
+        # Keep the newest sample at or before (t - window_seconds) so the window never collapses on brief pauses
+        cutoff = t - self.window_seconds
+        while len(self._samples) > 2 and self._samples[1][0] <= cutoff:
+            self._samples.popleft()
+
+        oldest_t, oldest_c = self._samples[0]
+        dt = t - oldest_t
+        dc = current - oldest_c
+        if dt < self.min_elapsed or dc <= 0:
+            return None
+        return dc / dt
+
+    @staticmethod
+    def format_rate(rate: float) -> str:
+        if rate >= 10.0:
+            return f"{int(round(rate)):,} items/s"
+        if rate >= 0.1:
+            return f"{rate:.1f} items/s"
+        return f"{rate:.2f} items/s"
+
+
 class MainWindow(QMainWindow):
     """Janela principal do aplicativo DupeClean."""
 
@@ -77,6 +142,7 @@ class MainWindow(QMainWindow):
         self._was_cancelled: bool = False
         self._is_busy: bool = False
         self._sidebar_collapsed: bool = False
+        self._stage_rate_tracker = StageRateTracker()
 
         self.setWindowIcon(self._create_app_icon())
         self.setWindowTitle(f"DupeClean - GPU-Powered Duplicate File Finder - v{__version__}")
@@ -202,7 +268,7 @@ class MainWindow(QMainWindow):
 
         item_videos = QListWidgetItem("🎬 Similar Videos")
         item_videos.setData(Qt.ItemDataRole.UserRole, ScanMode.VIDEOS)
-        item_videos.setToolTip("Finds similar videos using dedicated NVDEC hardware decoding.")
+        item_videos.setToolTip("Finds similar videos using GPU-accelerated decoding and temporal matching.")
         item_videos.setSizeHint(QSize(230, 40))
 
         self.sidebar_modes.addItem(item_exact)
@@ -877,6 +943,7 @@ class MainWindow(QMainWindow):
         self.preview_panel.setVisible(False)
         self._was_cancelled = False
         self._is_scan_mounting = False
+        self._stage_rate_tracker.reset()
         self.current_stage_num = 1
         self.total_stages = 3 if self.current_mode == ScanMode.EXACT else 4
         display_total_stages = self.total_stages + 1
@@ -953,7 +1020,9 @@ class MainWindow(QMainWindow):
 
         # Include the final results assembly stage for full consistency with the All Stages bar
         display_total_stages = total_stages + 1 if total_stages > 0 else total_stages
-        self.lbl_status.setText(f"Stage {stage_num}/{display_total_stages}: {msg}")
+        rate = self._stage_rate_tracker.update(stage_num, msg, current)
+        rate_suffix = f" ~ {StageRateTracker.format_rate(rate)}" if rate is not None else ""
+        self.lbl_status.setText(f"Stage {stage_num}/{display_total_stages}: {msg}{rate_suffix}")
 
         # 1. Current Stage Progress
         if total > 0:

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 # Expected structural contract for the current executable: {table: (pk_column, {columns})}
 EXPECTED_TABLES: Dict[str, Tuple[str, Set[str]]] = {
@@ -123,10 +123,10 @@ def _create_all_tables(conn: sqlite3.Connection) -> None:
             path TEXT PRIMARY KEY,
             size INTEGER NOT NULL,
             mtime REAL NOT NULL,
-            embedding BLOB NOT NULL,
             volume_id INTEGER DEFAULT 0,
             file_id INTEGER DEFAULT 0,
-            prefix_hash TEXT
+            prefix_hash TEXT,
+            embedding BLOB NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS cache_videos (
@@ -134,10 +134,10 @@ def _create_all_tables(conn: sqlite3.Connection) -> None:
             size INTEGER NOT NULL,
             mtime REAL NOT NULL,
             duration REAL NOT NULL,
-            embedding BLOB NOT NULL,
             volume_id INTEGER DEFAULT 0,
             file_id INTEGER DEFAULT 0,
-            prefix_hash TEXT
+            prefix_hash TEXT,
+            embedding BLOB NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS app_settings (
@@ -263,10 +263,24 @@ def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM cache_videos;")
 
 
+def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
+    """
+    Recreate cache_images and cache_videos with optimal column layout (embedding BLOB last
+    so small metadata stays inline ahead of overflow pages) after upgrading visual signatures
+    to Hybrid DINOv2-ViT-S/14 + YCbCr 2D DCT and native pillow-heif HEIC decoding.
+    Preserves cache_exact and user app_settings completely.
+    """
+    conn.execute("DROP TABLE IF EXISTS cache_images;")
+    conn.execute("DROP TABLE IF EXISTS cache_videos;")
+    _create_all_tables(conn)
+    _ensure_indexes(conn)
+
+
 MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _migrate_0_to_1,
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
+    3: _migrate_3_to_4,
 }
 
 
