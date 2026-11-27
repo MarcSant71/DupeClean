@@ -1,5 +1,23 @@
 Standalone portable release for Windows x64 featuring NVIDIA RTX GPU acceleration and universal CPU fallback.
 
+### What's New in v1.7.0
+- **Hybrid DINOv2-ViT-S/14 + YCbCr 2D DCT Visual Engine & Native HEIC Support (`neural_backbone.py`, `models/dinov2_vits14_fp16.pt`, `hasher_image.py`, `preview_panel.py`):**
+  - Replaced pure low-frequency DCT embeddings with a self-contained offline hybrid **768-D** representation (**384-D DINOv2-ViT-S/14** semantic features via PyTorch `scaled_dot_product_attention` + **384-D YCbCr 2D DCT** structural texture), delivering vastly higher precision across crops, resizes, color edits, and re-encodings without external weights downloads.
+  - Added native `.heic` / `.heif` photo decoding and preview support via `pillow-heif`.
+  - Added dynamic VRAM-aware embedding placement (`choose_embedding_storage_device`) that keeps embeddings in RTX VRAM when headroom allows and automatically spills chunks to CPU FP16 RAM on massive multi-million-file libraries.
+- **Hardware-Accelerated FFmpeg 8 CUVID Video Engine & Crash-Proof CPU Rescue (`_video_worker.py`, `hasher_video.py`, `hardware.py`):**
+  - Integrated embedded FFmpeg 8 NVIDIA CUVID hardware decoders (`hevc_cuvid`, `h264_cuvid`, `av1_cuvid`, `vp9_cuvid`, `vp8_cuvid`, `vc1_cuvid`) with silicon `224x224` downscaling and B-frame/timestamp-exact fallback, accelerating multi-GB HEVC/H.264 video libraries by ~2.7x while automatically adapting concurrent workers to RTX 8 GB / 12–16 GB / 24–32 GB VRAM tiers.
+  - Multi-threaded PyAV CPU decoding automatically rescues any unsupported codec, decode error, or isolated worker process crash 1-by-1 so affected videos still enter Stage 4 similarity matching without aborting the scan.
+  - Added system-RAM-adaptive worker pool recycling and eliminated redundant disk stat/prefix reads in workers.
+- **Zero-I/O Stage-2 Cache, Mixed-Drive Concurrency & O(N) GPU Matcher (`db_schema.py`, `cache.py`, `scanner.py`, `hasher_exact.py`, `hasher_image.py`, `hasher_video.py`, `matcher.py`):**
+  - Upgraded SQLite schema to `v4` (`_migrate_3_to_4` preserves `cache_exact` and user `app_settings` cleanly while relocating `embedding` BLOBs last for compact inline metadata pages).
+  - Made Stage 2 strictly L1-only with lightweight RAM L2/L3 index preloading, resolving moved/renamed files (`os.fstat`) and duplicate 8 KB signatures (`O_RANDOM`) inline inside Stage 3 while preserving full sequential read-ahead on first copies.
+  - Added storage-tier classification (`get_storage_kind`: SSD/NVMe vs iSCSI vs HDD vs SMB network), SSD-first processing order, and per-drive concurrency semaphores across Exact, Image, and Video pipelines.
+  - Upgraded Stage 4 matching (`cluster_by_similarity`) with O(N) GPU 128-bit exact-embedding collapse, single-pass upper-triangular sparse GEMM, and automatic promotion of spilled CPU FP16 embeddings back to CUDA when free VRAM permits.
+- **Live Throughput Telemetry & Unified Diagnostic Logs (`main_window.py`, `help_dialog.py`, `conversion_logger.py`, `crash_logger.py`, `README.md`):**
+  - Added a 4-second sliding-window ` ~ X items/s` rate indicator on Stage 1–3 progress lines and documented storage-tier expectations in the in-app Help FAQ and `README.md`.
+  - Added lazy-created `logs/conversion.log` (5 MB rotation) and unified `logs/crash.log` using the clean `YYYY-MM-DD HH:MM:SS - <path> - <error>` format.
+
 ### What's New in v1.6.1
 - **Frozen Executable Multiprocessing Fix (`main.py`, `main_window.py`):**
   - Added `multiprocessing.freeze_support()` before launching Qt in frozen Windows builds (`DupeClean.exe`), preventing child video worker processes from recursively spawning application windows and hanging on scans with 5+ uncached videos.
